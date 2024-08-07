@@ -10,6 +10,8 @@ from oscillator import drift, diffusion
 from srkS10scalarnoise import srk_s10_scalar_noise_solve
 from jax import vmap, random
 
+import matplotlib
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('--alpha_mono', type=float, default=-1.0, help='Alpha value for monostable simulation')
