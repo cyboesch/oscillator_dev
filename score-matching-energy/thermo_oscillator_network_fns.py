@@ -31,27 +31,52 @@ def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity):
     return energy_self_network(x, k_lin, k_duff) + energy_coupling_network(x, c_lin, c_optomech, connectivity)
 
 
-# # MARGINALIZATION
-# def integrate_dofs(energy_fn, x_mins, x_maxs, N):
-#     # Create a list of ranges for each dimension
-#     x_ranges = [jnp.linspace(x_min, x_max, N) for x_min, x_max in zip(x_mins, x_maxs)]
-    
-#     # Create a meshgrid of all combinations
-#     meshgrid = jnp.meshgrid(*x_ranges, indexing='ij')
-    
-#     # Flatten the meshgrid to create a list of points
-#     points = jnp.stack([grid.flatten() for grid in meshgrid], axis=-1)
-    
-#     # Compute the integrand for all points
-#     integrand = vmap(energy_fn)(points)
-    
-#     # Reshape the integrand back to the original shape
-#     integrand = integrand.reshape([N] * len(x_mins))
-    
-#     # Compute the volume element
-#     dV = reduce(mul, [(x_max - x_min) / (N - 1) for x_min, x_max in zip(x_mins, x_maxs)])
-    
-#     # Perform the integration
-#     return jnp.sum(jnp.exp(-integrand)) * dV
+
+def setup_integration(marginalized_dofs, integration_limits=(-2, 2), num_integration_points=10):
+    integration_limits=(-2, 2)
+    num_integration_points=10
+    integration_grids = [jnp.linspace(integration_limits[0], integration_limits[1], num_integration_points) 
+                                for _ in marginalized_dofs]
+    marginalized_combinations = jnp.meshgrid(*integration_grids)
+    marginalized_points = jnp.stack([grid.flatten() for grid in marginalized_combinations], axis=-1)
+
+    def inegrator(fn):
+        # Combine all possible combinations of marginalized DOFs
+        integrated_vals = jnp.sum(vmap(fn)(marginalized_points)) * ((integration_limits[1] - integration_limits[0]) / num_integration_points) ** len(marginalized_dofs)
+        return integrated_vals
+    return inegrator
 
 
+def integrate_dofs(inegrator,energy_fn, marginalized_dofs, non_marginalized_dofs):
+    """
+    Integrate out marginalized DOFs from the energy function.
+    
+    Args:
+    energy_fn: The original energy function.
+    marginalized_dofs: List of indices of DOFs to be integrated out.
+    non_marginalized_dofs: List of indices of DOFs to keep.
+    integration_limits: Tuple of (lower, upper) limits for integration.
+    num_integration_points: Number of points for numerical integration.
+    
+    Returns:
+    A new energy function that depends only on non-marginalized DOFs.
+    """
+            # Create integration grid for marginalized DOFs
+
+    
+    @jit
+    def log_exp_energy_fn_marg(x_non_marginalized, *args):
+
+        
+        # Function to compute energy for each marginalized point
+        def energy_for_marginalized_point(marginalized_point):
+            # Combine non-marginalized and marginalized points
+            full_x = jnp.zeros(len(marginalized_dofs) + len(non_marginalized_dofs))
+            full_x = full_x.at[non_marginalized_dofs].set(x_non_marginalized)
+            full_x = full_x.at[marginalized_dofs].set(marginalized_point)
+            
+            return jnp.exp(-energy_fn(full_x, *args))
+        
+        return jnp.log(inegrator(energy_for_marginalized_point))
+    
+    return log_exp_energy_fn_marg
