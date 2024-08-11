@@ -54,47 +54,32 @@ def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity):
 
 
 def setup_integration(
-    dofs_to_marginalize: Array,
-    integration_limits: tuple[int, int] = (-2, 2),
+    marginalized_dofs: Array,
+    limits: tuple[int, int] = (-2, 2),
     num_integration_points: int = 10,
 ) -> Callable[[Callable], Array]:
-    """Create a function that numerically integrates out a subest of DOFs from an energy function,
-    using a uniform grid."""
 
-    # Create integration grid between limits
-    integration_grids: list[Array] = [
-        jnp.linspace(
-            integration_limits[0], integration_limits[1], num_integration_points
-        )
-        for _ in dofs_to_marginalize
-    ]
-    marginalized_combinations: list[Array] = jnp.meshgrid(*integration_grids)
-    marginalized_points: Array = jnp.stack(
-        [grid.flatten() for grid in marginalized_combinations], axis=-1
+    # Create a len(dofs_to_marginalize)-dimensional grid of indices
+    grid_indices = jnp.mgrid[(slice(0, num_integration_points),) * len(marginalized_dofs)]
+    
+    # Transform indices to points .
+    marginalized_points = limits[0] + (limits[1] - limits[0]) * grid_indices / (num_integration_points - 1)
+    
+    # Reshape to (num_points, num_dimensions)
+    marginalized_points = marginalized_points.reshape(-1, len(marginalized_dofs))
+    
+    # --- compute volume element
+    vol_elt = ((limits[1] - limits[0]) / num_integration_points) ** len(
+        marginalized_dofs
     )
 
-    def compute_integrands(fn: Callable[[Array], Array]) -> Array:
-        """Numerically integrates fn over a uniform grid."""
-        # --- compute the volume element of the integration grid.
-        const_volume_element = jnp.prod(
-            jnp.array(
-                [
-                    (integration_limits[1] - integration_limits[0])
-                    / num_integration_points
-                    for _ in dofs_to_marginalize
-                ]
-            )
-        )
+    def compute_integrands(energy_fn: Callable[[Array], Array]) -> Array:
+        ### returns contributions to the integral across marginalized DOFs
+        return vmap(energy_fn)(marginalized_points) * vol_elt
 
-        # --- sum fn over all marginalized dofs, weighted by volume
-        integrand_vals = vmap(fn)(marginalized_points) * const_volume_element
-        return integrand_vals
-
-    # return integrator
     return compute_integrands
 
 
-# def integrate_dofs(integrator, energy_fn, marginalized_dofs, non_marginalized_dofs):
 def integrate_dofs(
     compute_integrands, energy_fn, marginalized_dofs, non_marginalized_dofs
 ):
@@ -114,7 +99,7 @@ def integrate_dofs(
     # Create integration grid for marginalized DOFs
 
     @jit
-    def log_exp_energy_fn_marg(x_non_marginalized, *args):
+    def logsumexp_energy_fn_marg(x_non_marginalized, *args):
 
         def log_energy_for_marginalized_point(marginalized_point: Array) -> Array:
             # Combine non-marginalized and marginalized points
@@ -126,4 +111,4 @@ def integrate_dofs(
 
         return logsumexp(compute_integrands(log_energy_for_marginalized_point))
 
-    return log_exp_energy_fn_marg
+    return logsumexp_energy_fn_marg
