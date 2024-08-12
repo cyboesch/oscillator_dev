@@ -33,8 +33,6 @@ def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity):
 
 
 def setup_integration(marginalized_dofs, integration_limits=(-2, 2), num_integration_points=10):
-    integration_limits=(-2, 2)
-    num_integration_points=10
     integration_grids = [jnp.linspace(integration_limits[0], integration_limits[1], num_integration_points) 
                                 for _ in marginalized_dofs]
     marginalized_combinations = jnp.meshgrid(*integration_grids)
