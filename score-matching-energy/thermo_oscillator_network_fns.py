@@ -55,7 +55,7 @@ def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity):
 
 def setup_integration(
     marginalized_dofs: Array,
-    limits: tuple[int, int] = (-2, 2),
+    integration_limits: tuple[int, int] = (-2, 2),
     num_integration_points: int = 10,
 ) -> Callable[[Callable], Array]:
 
@@ -63,13 +63,13 @@ def setup_integration(
     grid_indices = jnp.mgrid[(slice(0, num_integration_points),) * len(marginalized_dofs)]
     
     # Transform indices to points .
-    marginalized_points = limits[0] + (limits[1] - limits[0]) * grid_indices / (num_integration_points - 1)
+    marginalized_points = integration_limits[0] + (integration_limits[1] - integration_limits[0]) * grid_indices / (num_integration_points - 1)
     
     # Reshape to (num_points, num_dimensions)
     marginalized_points = marginalized_points.reshape(-1, len(marginalized_dofs))
     
     # --- compute volume element
-    vol_elt = ((limits[1] - limits[0]) / num_integration_points) ** len(
+    vol_elt = ((integration_limits[1] - integration_limits[0]) / num_integration_points) ** len(
         marginalized_dofs
     )
 
