@@ -5,8 +5,8 @@ import jax.numpy as jnp
 import jax.random as jr
 import lineax as lx
 
-from jax import config
-config.update("jax_disable_jit", True)
+# from jax import config
+# config.update("jax_disable_jit", True)
 
 N = 3
 w_shape = (2*N,)
