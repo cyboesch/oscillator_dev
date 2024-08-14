@@ -119,14 +119,15 @@ plt.show()
 # marginalized_dofs = None #jnp.array([0,3])
 # non_marginalized_dofs = jnp.array([0,1])
 
-# %%
 # # Duffing params
 m = jnp.array([1.0, 1.0])
 eig_freq = jnp.array([1.0, 1.0])
 k_lin = eig_freq**2 * m
 k_duff = jnp.array([1.0, 1.0])
-c_lin = jnp.array([0.3]) * k_lin[0]
-c_optomech = jnp.array([0.0])
+# c_lin = jnp.array([0.3]) * k_lin[0]
+c_lin = jnp.array([0.0])
+# c_optomech = jnp.array([0.0])
+c_optomech = jnp.array([1.0])
 connectivity = jnp.array([[0, 1]])
 
 marginalized_dofs = None  # jnp.array([0,3])
