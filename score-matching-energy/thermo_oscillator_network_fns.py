@@ -26,7 +26,6 @@ def energy_coupling_pair(x, y, c_lin, c_optomech):
         c_lin * x * (x - y)
         + c_lin * y * (y - x)
         + c_optomech * (x**2) * y
-        + c_optomech * (y**2) * x
     )
 
 
