@@ -1,7 +1,7 @@
 from typing import Callable
 import jax
 
-jax.config.update("jax_platform_name", "cpu")
+# jax.config.update("jax_platform_name", "cpu")
 from jax import Array
 
 import jax.numpy as jnp
@@ -100,7 +100,7 @@ def integrate_dofs(
     @jit
     def logsumexp_energy_fn_marg(x_non_marginalized, *args):
 
-        def log_energy_for_marginalized_point(marginalized_point: Array) -> Array:
+        def energy_for_marginalized_point(marginalized_point: Array) -> Array:
             # Combine non-marginalized and marginalized points
             full_x = jnp.zeros(len(marginalized_dofs) + len(non_marginalized_dofs))
             full_x = full_x.at[non_marginalized_dofs].set(x_non_marginalized)
@@ -108,6 +108,6 @@ def integrate_dofs(
 
             return -energy_fn(full_x, *args)
 
-        return logsumexp(compute_integrands(log_energy_for_marginalized_point))
+        return logsumexp(compute_integrands(energy_for_marginalized_point))
 
     return logsumexp_energy_fn_marg
