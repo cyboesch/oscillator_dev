@@ -46,10 +46,10 @@ def energy_coupling_network(x, c_lin, c_optomech, connectivity):
 
 
 @jit
-def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity):
-    return energy_self_network(x, k_lin, k_duff) + energy_coupling_network(
+def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity,k_b=1.,T=1.):
+    return (energy_self_network(x, k_lin, k_duff) + energy_coupling_network(
         x, c_lin, c_optomech, connectivity
-    )
+    ))/(2*k_b*T)
 
 
 def setup_integration(
