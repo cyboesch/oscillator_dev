@@ -1,3 +1,4 @@
+# %%
 import matplotlib.pyplot as plt
 import diffrax
 from diffrax import ControlTerm, MultiTerm, ODETerm
@@ -11,14 +12,63 @@ import jax.numpy as jnp
 import jax.random as jr
 import diffrax
 import lineax as lx
+import jax
+from typing import Union
+import dataclasses
+import jax.tree_util as jtu
+from diffrax import AbstractBrownianPath, AbstractTerm, VirtualBrownianTree
+import diffrax
+from jax import Array
+from jaxtyping import PRNGKeyArray, PyTree, Shaped
+
+@dataclasses.dataclass(frozen=True)
+class SDE:
+    """
+    This class helps keep all the SDE boilerplate code from diffrax out-of-view and organized.
+    
+    It is from diffrax/test/helpers.py.
+    """
+    get_terms: Callable[[AbstractBrownianPath], AbstractTerm]
+    args: PyTree
+    y0: PyTree[Array]
+    t0: float
+    t1: float
+    w_shape: tuple[int, ...]
+
+    def get_dtype(self):
+        return jnp.result_type(*jtu.tree_leaves(self.y0))
+
+    def get_bm(
+        self,
+        bm_key: PRNGKeyArray,
+        levy_area: type[Union[diffrax.BrownianIncrement, diffrax.SpaceTimeLevyArea]],
+        tol: float,
+    ):
+        shp_dtype = jax.ShapeDtypeStruct(self.w_shape, dtype=self.get_dtype())
+        return VirtualBrownianTree(self.t0, self.t1, tol, shp_dtype, bm_key, levy_area)
 
 
-def sample(energ_fn: Callable, y0: jnp.ndarray, params: tuple, consts: tuple, sample_params: dict):
+#%%
+def get_sde(t0, t1, dtype, key, noise_dim):
+    driftkey, diffusionkey, ykey = jr.split(key, 3)
+    drift_onet = None 
+    ## TODO: make oscillator network data str
+    diffusion_onet = None
+    args = (drift_onet, diffusion_onet, noise_dim)
+    y0 = jr.normal(ykey, (3,), dtype=dtype)
+
+    def get_terms(bm):
+        return MultiTerm(ODETerm(drift), ControlTerm(diffusion, bm))
+
+    return SDE(get_terms, args, y0, t0, t1, (noise_dim,))
+
+
+def sample(energy_fn: Callable, y0: jnp.ndarray, params: tuple, consts: tuple, sample_params: dict, kBT: float):
     N = y0.shape[0] // 2  # (x1, x2)
     w_shape = (2 * N,)  # state is (x1, x2, p1, p2)
     
     U_fn: Callable[[jnp.ndarray, tuple[float, float]], jnp.ndarray] = (
-        lambda x, params: energ_fn(x, *params, *consts)
+        lambda x, params: energy_fn(x, *params, *consts)
     )
     grad_x_U_fn = grad(U_fn)
 
