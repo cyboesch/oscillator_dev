@@ -19,8 +19,6 @@ include = ["thermoai/*"]
 license = "LICENSE"
 readme = "README.md"
 dependencies = [
-    "jax==0.4.28",
-    "jaxlib==0.4.28",
     "numpy>=1.26.4",
     "scipy>=1.13.0",
     "equinox>=0.11.4",
