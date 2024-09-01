@@ -23,3 +23,4 @@ For CUDA support on LPC, install the appropriate version of JAX and JAXLIB:
 ```bash
 python -m pip install -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html jax==0.4.28 jaxlib==0.4.28+cuda12.cudnn89
 ```
+i

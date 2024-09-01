@@ -1,189 +1,306 @@
 # %%
 import diffrax
+from matplotlib import gridspec
 import matplotlib.pyplot as plt
 from diffrax import ControlTerm, MultiTerm, ODETerm
 from jax import grad, vmap
+import jax
 import jax.numpy as jnp
 import jax.random as jr
 import lineax as lx
 import numpy as np
 from scipy import stats
 
-# from jax import config
-# config.update("jax_disable_jit", True)
-dim = 1
-beta = 1
-M = 1
-B = jnp.sqrt(4 * M)  # from 1
-gamma = 0.5
+from jax import jit, devices, config
+
+config.update("jax_enable_x64", True)
+
+
+from thermoai.distributions import sample_1d_mog
+
+cpu_devices = devices("cpu")
+
+
+init_seed = 0
+
+init_config = {
+    "N": 10000,
+    "rng": jr.PRNGKey(init_seed),
+}
+
+sde_config = {
+    "beta": 1.0,
+    "M": 1.0,
+    "Gamma": 1.0, #jnp.sqrt(4 * 1),  # -- from M
+    "gamma": 1.0,
+    "state_dim": 1,
+}
+
+
+MoG_1D_params = {
+    "p1": 0.5,  # p2 = 1 - p1
+    "mu1": -1.0,
+    "mu2": 1.0,
+    "stddev1": 0.5,
+    "stddev2": 0.5,
+}
+
+
+normal_params = {
+    "p1": 1.0,  # p2 = 1 - p1
+    "mu1": 0.0,
+    "mu2": 0.0,  # Not used
+    "stddev1": jnp.sqrt(sde_config["gamma"] * sde_config["M"]),
+    "stddev2": 0.0,  # Not used
+}
+
+
+# Sample from the MoG and the normal distribution.
+def sample_x0_p0(key):
+    x_key, p_key = jr.split(key, 2)
+    x = sample_1d_mog(**MoG_1D_params, key=x_key)
+    p = sample_1d_mog(**normal_params, key=p_key)
+    return jnp.array([x, p])  # (2,)
+
+
+init_x0s_p0s = jax.device_put(
+    vmap(sample_x0_p0)(jr.split(init_config["rng"], init_config["N"])), cpu_devices[0]
+)  # (n_samples, 2)
+
+
 # %%
-key = jr.PRNGKey(0)
-weights = 0.5 * jnp.array([1.0, 1.0])
-mean = jnp.array([-1.0, 1.0])
-normals = 1.0 * jr.normal(key, shape=(1000, 2))
-samples = jnp.array([normals * mean[0] * weights[0], normals * mean[1] * weights[1]])
-print(samples.shape)
+# Create the plot
+fig = plt.figure(figsize=(8, 8))
+gs = gridspec.GridSpec(3, 3)
 
-# estimate the pdf of the samples in 1d
-# %%
-print(samples)
+# Main scatter plot
+ax_main = fig.add_subplot(gs[1:, :2])
+ax_main.scatter(init_x0s_p0s[:, 0], init_x0s_p0s[:, 1], alpha=0.5, s=1)
+ax_main.set_xlabel("x")
+ax_main.set_ylabel("p")
 
-# Create single Gaussian 1D samples
-key = jr.PRNGKey(0)
-n_samples = 10000
-mean = 0.0
-std = jnp.sqrt(gamma * M)
+# Top marginal plot (for x)
+ax_top = fig.add_subplot(gs[0, :2], sharex=ax_main)
+ax_top.hist(init_x0s_p0s[:, 0], bins=50, density=True, alpha=0.6)
+ax_top.set_ylabel("Density")
+ax_top.set_title("MoG Distribution (x)")
+ax_top.tick_params(labelbottom=False)
 
-# Draw initial conditions
-n_initial_conditions = 1000
+# Right marginal plot (for p)
+ax_right = fig.add_subplot(gs[1:, 2], sharey=ax_main)
+ax_right.hist(
+    init_x0s_p0s[:, 1], bins=50, density=True, alpha=0.6, orientation="horizontal"
+)
 
-# Generate samples from a single normal distribution
-samples = jr.normal(key, (n_samples,)) * std + mean
+ax_right.set_xlabel("Density")
+ax_right.set_title("Normal Distribution (p)", rotation=270, x=1.1, y=0.5)
+ax_right.tick_params(labelleft=False)
 
-# Plot the density
-plt.figure(figsize=(10, 6))
-kde = stats.gaussian_kde(samples)
-x_range = np.linspace(samples.min(), samples.max(), 1000)
-plt.plot(x_range, kde(x_range), label="KDE")
-plt.hist(samples, bins=50, density=True, alpha=0.6, label="Histogram")
-plt.title("Single Gaussian 1D Distribution")
-plt.xlabel("Value")
-plt.ylabel("Density")
-plt.legend()
+# 2D contour plot
+ax_contour = fig.add_subplot(gs[1:, :2], sharex=ax_main, sharey=ax_main)
+x = init_x0s_p0s[:, 0]
+y = init_x0s_p0s[:, 1]
+xmin, xmax = x.min(), x.max()
+ymin, ymax = y.min(), y.max()
+xx, yy = np.mgrid[xmin:xmax:100j, ymin:ymax:100j]
+positions = np.vstack([xx.ravel(), yy.ravel()])
+values = np.vstack([x, y])
+kernel = stats.gaussian_kde(values)
+f = np.reshape(kernel(positions).T, xx.shape)
+ax_contour.contourf(xx, yy, f, cmap="jet", alpha=0.5)
+ax_contour.set_xlabel("x")
+ax_contour.set_ylabel("p")
+
+# Adjust layout and display
+plt.tight_layout()
 plt.show()
 
 # %%
-# do same for bimodal
-
-# Create bimodal 1D samples
-key = jr.PRNGKey(1)  # Using a different key to avoid overwriting previous samples
-n_samples_bimodal = 10000
-weights_bimodal = jnp.array([0.5, 0.5])
-means_bimodal = jnp.array([-1.0, 1.0])
-stds_bimodal = jnp.array([0.5, 0.5])
-
-# Generate samples from two normal distributions
-samples1_bimodal = (
-    jr.normal(key, (n_samples_bimodal // 2,)) * stds_bimodal[0] + means_bimodal[0]
-)
-samples2_bimodal = (
-    jr.normal(jr.split(key)[1], (n_samples_bimodal // 2,)) * stds_bimodal[1]
-    + means_bimodal[1]
-)
-
-# Combine samples
-samples_bimodal = jnp.concatenate([samples1_bimodal, samples2_bimodal])
-
-# Plot the density for bimodal distribution
-plt.figure(figsize=(10, 6))
-kde_bimodal = stats.gaussian_kde(samples_bimodal)
-x_range_bimodal = np.linspace(samples_bimodal.min(), samples_bimodal.max(), 1000)
-plt.plot(x_range_bimodal, kde_bimodal(x_range_bimodal), label="KDE")
-plt.hist(samples_bimodal, bins=50, density=True, alpha=0.6, label="Histogram")
-plt.title("Bimodal 1D Distribution")
-plt.xlabel("Value")
-plt.ylabel("Density")
-plt.legend()
-plt.show()
-
-# %%
-
-# %%
-
-# x0 from bimodal distribution
-key_x0 = jr.PRNGKey(2)
-samples1_x0 = (
-    jr.normal(key_x0, (n_initial_conditions // 2,)) * stds_bimodal[0] + means_bimodal[0]
-)
-samples2_x0 = (
-    jr.normal(jr.split(key_x0)[1], (n_initial_conditions // 2,)) * stds_bimodal[1]
-    + means_bimodal[1]
-)
-x0_samples = jnp.concatenate([samples1_x0, samples2_x0])
-
-# p0 from regular (single Gaussian) distribution
-key_p0 = jr.PRNGKey(3)
-p0_samples = jr.normal(key_p0, (n_initial_conditions,)) * std + mean
-
-# Combine x0 and p0 to form initial conditions
-initial_conditions = jnp.column_stack((x0_samples, p0_samples))
-
-# Plot the initial conditions
-plt.figure(figsize=(10, 6))
-plt.scatter(x0_samples, p0_samples, alpha=0.5)
-plt.title("Initial Conditions (x0 vs p0)")
-plt.xlabel("x0 (Bimodal)")
-plt.ylabel("p0 (Gaussian)")
-plt.show()
-# %%
-# Update y0 to use one of these initial conditions (e.g., the first one)
-
-
-# %%
-
-dim = 1
-beta = 1.0
-M = 1.0
-B = jnp.sqrt(4 * M)  # from 1
-gamma = 0.5
-
-w_shape = (2 * dim,)
-mean_scale = 1.0
 
 
 def H(z):
-    x, p = z[:dim], z[dim:]
-    return (0.5 * (x**2 + p**2 * (1 / M))).squeeze()
+    x, p = z
+    return 0.5 * (x**2 + p**2 * (1 / sde_config["M"]))
 
 
-grad_z_H = grad(H)
+grad_z_H = jit(grad(H))
+
+# Plot H and its gradient
+plt.figure(figsize=(12, 4))
+x = jnp.linspace(xmin, xmax, 1000)
+y = jnp.linspace(ymin, ymax, 1000)
+xx, yy = jnp.meshgrid(x, y)
+xxyy = jnp.hstack([xx.reshape(-1, 1), yy.reshape(-1, 1)])
+zz = vmap(H)(xxyy)
+print(zz.shape)
+zz = zz.reshape(xx.shape)
+plt.subplot(1, 3, 1)
+plt.contourf(xx, yy, zz, alpha=1.0)
+plt.colorbar()
+plt.xlabel("x")
+plt.ylabel("p")
+plt.title("$H(z)$")
+
+zz = vmap(grad_z_H)(xxyy)
+zz_x = zz[:, 0].reshape(xx.shape)
+zz_p = zz[:, 1].reshape(xx.shape)
+plt.subplot(1, 3, 2)
+plt.contourf(xx, yy, zz_x, alpha=1.0)
+plt.colorbar()
+plt.title("$\\nabla_x H(z)$")
+plt.xlabel("x")
+plt.ylabel("p")
+
+plt.subplot(1, 3, 3)
+plt.contourf(xx, yy, zz_p, alpha=1.0)
+plt.colorbar()
+plt.title("$\\nabla_p H(z)$")
+plt.xlabel("x")
+plt.ylabel("p")
+
+plt.tight_layout()
+plt.show()
+
+del xxyy, xx, yy, x, y, zz, zz_x, zz_p
 
 
+# %%
 def diffusion_fn(t, state, args) -> lx.DiagonalLinearOperator:
-    return jnp.array([0, jnp.sqrt(2 * B * beta)])
+    diff = lx.DiagonalLinearOperator(
+        jnp.array(
+            [0, jnp.sqrt(2 * sde_config["Gamma"] * sde_config["beta"])]
+        )  # (2*state_dim, )
+    )
+    return jnp.array([0, 0])
 
 
 def drift_fn(t, state, args):
-    Q = jnp.array([[0, beta], [-beta, -B * beta]])
-    return Q @ grad_z_H(state)  # (2,2) @ (2,) -> (2,)
+    Q = jnp.array(
+        [
+            [0.0, sde_config["beta"]],
+            [
+                -sde_config["beta"],
+                -sde_config["Gamma"] * sde_config["beta"] * (1 / sde_config["M"]),
+            ],
+        ]
+    )
+    # return 1.0 * Q @ grad_z_H(state)  # (2,2) @ (2,) -> (2,)@
+    return jnp.array([0, 0])
 
 
 t0 = 0.0
 t1 = 1.0
 dt0 = 0.001
 
+w_shape = (2 * sde_config["state_dim"],)
+"""     t0: RealScalarLike,
+        t1: RealScalarLike,
+        tol: RealScalarLike,
+        shape: Union[tuple[int, ...], PyTree[jax.ShapeDtypeStruct]],
+        key: PRNGKeyArray,
+        levy_area: type[
+            Union[BrownianIncrement, SpaceTimeLevyArea, SpaceTimeTimeLevyArea]
+        ] = BrownianIncrement,
+        _spline: _Spline = "sqrt","""
+        
 brownian_motion = diffrax.VirtualBrownianTree(
-    t0, t1, dt0, w_shape, jr.PRNGKey(0), diffrax.BrownianIncrement
+    t0=t0,
+    t1=t1,
+    tol=2**-14,
+    shape=w_shape,
+    key=jr.PRNGKey(4),
+    levy_area=diffrax.SpaceTimeLevyArea,
 )
+
+
+ShARK = diffrax.SRA1()
+
+# %%
+ShARK.term_structure
 
 terms = MultiTerm(ODETerm(drift_fn), ControlTerm(diffusion_fn, brownian_motion))
 
 saveat = diffrax.SaveAt(steps=True)
 
 # Update the diffeqsolve function to use the new y0
-solutions = vmap(
-    lambda y0: diffrax.diffeqsolve(
-        terms,
-        solver=diffrax.SRA1(),
-        t0=t0,
-        t1=t1,
-        dt0=dt0,
-        y0=y0,
-        saveat=saveat,
-        progress_meter=diffrax.TqdmProgressMeter(),
-        max_steps=100000,
-    ),
-    in_axes=0,
-)(initial_conditions[:2])
+y0 = init_x0s_p0s[0]
 
+solutions = diffrax.diffeqsolve(
+    terms,
+    solver=ShARK,
+    t0=t0,
+    t1=t1,
+    y0=np.zeros(2),
+    saveat=saveat,
+    progress_meter=diffrax.TqdmProgressMeter(),
+    max_steps=1_000,
+)
 
-# %%
-solutions.ys[0,-1,:]
-# plot the solutions
-# %%
-solutions.ys.shape
 #%%
-plt.figure(figsize=(10, 6))
+xs = solutions.ys[:, 0]  # (n_steps,)
+ps = solutions.ys[:, 1]  # (n_steps,)
+print(ps)
+up_to_idx = xs.shape[0]
+print(jnp.nanmean(xs[:up_to_idx]))
+print(jnp.nanmean(ps[:up_to_idx]))
+# %%
+
+fig = plt.figure(figsize=(8, 8))
+gs = gridspec.GridSpec(3, 3)
+
+# Main scatter plot
+ax_main = fig.add_subplot(gs[1:, :2])
+ax_main.scatter(xs[:up_to_idx], ps[:up_to_idx], alpha=0.5, s=1)
+ax_main.set_xlabel("x")
+ax_main.set_ylabel("p")
+
+# Top marginal plot (for x)
+ax_top = fig.add_subplot(gs[0, :2], sharex=ax_main)
+ax_top.hist(xs[:up_to_idx], bins=50, density=True, alpha=0.6)
+ax_top.set_ylabel("Density")
+ax_top.set_title("MoG Distribution (x)")
+ax_top.tick_params(labelbottom=False)
+
+# Right marginal plot (for p)
+ax_right = fig.add_subplot(gs[1:, 2], sharey=ax_main)
+ax_right.hist(
+    ps[:up_to_idx], bins=50, density=True, alpha=0.6, orientation="horizontal"
+)
+ax_right.set_xlabel("Density")
+ax_right.set_title("Normal Distribution (p)", rotation=270, x=1.1, y=0.5)
+ax_right.tick_params(labelleft=False)
+# %%
+plt.subplot(1, 2, 2)
+plt.hist(ps[:1000], bins=50, density=True, alpha=0.6, label="Histogram")
+plt.title("Initial p0 Density")
+plt.xlabel("p0")
+plt.ylabel("Density")
+plt.legend()
+plt.tight_layout()
+plt.show()
+# 2D contour plot
+ax_contour = fig.add_subplot(gs[1:, :2], sharex=ax_main, sharey=ax_main)
+x = xs
+y = ps
+xmin, xmax = x.min(), x.max()
+ymin, ymax = y.min(), y.max()
+
+xx, yy = np.mgrid[xmin:xmax:100j, ymin:ymax:100j]
+positions = np.vstack([xx.ravel(), yy.ravel()])
+values = np.vstack([x, y])
+kernel = stats.gaussian_kde(values)
+f = np.reshape(kernel(positions).T, xx.shape)
+ax_contour.contourf(xx, yy, f, cmap="jet", alpha=0.5)
+ax_contour.set_xlabel("x")
+ax_contour.set_ylabel("p")
+
+# Adjust layout and display
+plt.tight_layout()
+plt.show()
+
+
+# %%
+plt.figure(figsize=(8, 8))
 plt.plot(solutions.ys[0, :, 0], solutions.ys[0, :, 1])
 plt.title("Solutions")
 plt.xlabel("t")
@@ -212,17 +329,6 @@ plt.xlabel("x0")
 plt.ylabel("Density")
 plt.legend()
 
-plt.subplot(1, 2, 2)
-kde_p0 = stats.gaussian_kde(p0_samples)
-p_range_p0 = np.linspace(p0_samples.min(), p0_samples.max(), 1000)
-plt.plot(p_range_p0, kde_p0(p_range_p0), label="KDE")
-plt.hist(p0_samples, bins=50, density=True, alpha=0.6, label="Histogram")
-plt.title("Initial p0 Density")
-plt.xlabel("p0")
-plt.ylabel("Density")
-plt.legend()
-plt.tight_layout()
-plt.show()
 
 # Plot the density of solutions
 plt.figure(figsize=(12, 5))

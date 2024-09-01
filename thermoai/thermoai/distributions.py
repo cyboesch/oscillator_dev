@@ -3,6 +3,16 @@ import jax.random as random
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
 
+def sample_1d_mog(mu1, stddev1, mu2, stddev2, p1, key):
+    """
+    Samples from a superposition of two Gaussian distributions in 2D using JAX.
+    """
+    u_rng, z_rng = random.split(key)
+    u = random.uniform(u_rng)
+    mu = jnp.where(u < p1, mu1, mu2)
+    stddev = jnp.where(u < p1, stddev1, stddev2)
+    return mu + stddev*random.normal(z_rng)
+
 def sample_from_superposition(mu1, sigma1, mu2, sigma2, p1, n_samples, key):
     """
     Samples from a superposition of two Gaussian distributions in 2D using JAX.
