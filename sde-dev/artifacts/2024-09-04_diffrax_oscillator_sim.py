@@ -1,6 +1,7 @@
 # %%
 # %%
 # %%
+from typing import Union
 import jax.numpy as jnp
 import jax.random as jrnd
 from diffrax import MultiTerm, ODETerm, ControlTerm, ItoMilstein, UnsafeBrownianPath
@@ -21,6 +22,13 @@ import numpy as np
 from scipy import stats
 
 from jax import jit, devices, config
+# Plot the results
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+sns.set_style("whitegrid")
+plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.serif"] = ["Times New Roman"] + plt.rcParams["font.serif"]
 
 config.update("jax_enable_x64", True)
 
@@ -30,14 +38,17 @@ cpu_devices = devices("cpu")
 
 from dataclasses import dataclass
 import jax.random as jr
+from cld import CriticallyDampedLangevinDynamics
+
+
 
 @dataclass
-class SDEConfig:
+class CLDConfig:
+    state_dim: int
     beta: float
     M: float
-    Gamma: float
     gamma: float
-    state_dim: int
+    Gamma: Union[float, None] = None
 
 @dataclass
 class InitConfig:
@@ -48,7 +59,7 @@ class InitConfig:
 class SimulationConfig:
     init_seed: int
     init_config: InitConfig
-    sde_config: SDEConfig
+    cld_config: CLDConfig
 
     @classmethod
     def create(cls, init_seed: int = 0):
@@ -58,17 +69,18 @@ class SimulationConfig:
                 N=10000,
                 rng=jr.PRNGKey(init_seed)
             ),
-            sde_config=SDEConfig(
+            cld_config=CLDConfig(
+                state_dim=1,
                 beta=0.1,
                 M=1.0,
-                Gamma=1.0,
                 gamma=1.0,
-                state_dim=1
             )
         )
 
 config = SimulationConfig.create()
+cld = CriticallyDampedLangevinDynamics(**config.cld_config.__dict__)
 
+#%%
 MoG_1D_params = {
     "p1": 0.5,  # p2 = 1 - p1
     "mu1": -5.0,
@@ -82,7 +94,7 @@ normal_params = {
     "p1": 1.0,  # p2 = 1 - p1
     "mu1": 0.0,
     "mu2": 0.0,  # Not used
-    "stddev1": jnp.sqrt(config.sde_config.gamma * config.sde_config.M),
+    "stddev1": jnp.sqrt(config.cld_config.gamma * config.cld_config.M),
     "stddev2": 0.0,  # Not used
 }
 
@@ -153,7 +165,7 @@ plt.show()
 
 def H(z):
     x, p = z
-    return 0.5 * (x**2 + p**2 * (1 / config.sde_config.M))
+    return 0.5 * (x**2 + p**2 * (1 / config.cld_config.M))
 
 
 grad_z_H = jit(grad(H))
@@ -198,62 +210,50 @@ del xxyy, xx, yy, x, y, zz, zz_x, zz_p
 
 
 # %%
-def diffusion(t, state, args):
-    return lx.DiagonalLinearOperator(
-        jnp.array([0, jnp.sqrt(2 * config.sde_config.Gamma * config.sde_config.beta)])
-    )
+# def diffusion(t, state, args):
+#     return lx.DiagonalLinearOperator(
+#         jnp.array([0, jnp.sqrt(2 * config.cld_config.Gamma * config.cld_config.beta)])
+#     )
 
 
-def drift(t, state, args):
-    Q = jnp.array(
-        [
-            [0.0, config.sde_config.beta],
-            [
-                -config.sde_config.beta,
-                -config.sde_config.Gamma * config.sde_config.beta * (1 / config.sde_config.M),
-            ],
-        ]
-    )
-    return 1.0 * Q @ grad_z_H(state)  # (2,2) @ (2,) -> (2,)@
+# def drift(t, state, args):
+#     Q = jnp.array(
+#         [
+#             [0.0, config.cld_config.beta],
+#             [
+#                 -config.cld_config.beta,
+#                 -config.cld_config.Gamma * config.cld_config.beta * (1 / config.cld_config.M),
+#             ],
+#         ]
+#     )
+#     return 1.0 * Q @ grad_z_H(state)  # (2,2) @ (2,) -> (2,)@
 
 
 t0 = 0.0
 t1 = 1.0
 dt0 = 0.001
 
-w_shape = (2 * config.sde_config.state_dim,)
-"""     t0: RealScalarLike,
-        t1: RealScalarLike,
-        tol: RealScalarLike,
-        shape: Union[tuple[int, ...], PyTree[jax.ShapeDtypeStruct]],
-        key: PRNGKeyArray,
-        levy_area: type[
-            Union[BrownianIncrement, SpaceTimeLevyArea, SpaceTimeTimeLevyArea]
-        ] = BrownianIncrement,
-        _spline: _Spline = "sqrt","""
-
-
 rng = jrnd.PRNGKey(4)
-bm = UnsafeBrownianPath(shape=(2 * config.sde_config.state_dim,), key=rng)
+bm = UnsafeBrownianPath(shape=(2 * cld.state_dim,), key=rng)
 
+sde_terms = cld.get_terms(bm)
 
 # Set up simulation parameters
 num_steps = 100000
 step_size = 0.1
 t_final = num_steps * step_size
 
-# Define SDE term
-sde_term = MultiTerm(ODETerm(drift), ControlTerm(diffusion, bm))
-y0 = jnp.zeros(2 * config.sde_config.state_dim)
+# # Define SDE term
+y0 = jnp.zeros(2 * cld.state_dim)
 
 # Set up solver
 solver = ItoMilstein()
-solver_state = solver.init(sde_term, t0=0.0, t1=t_final, y0=y0, args=None)
+solver_state = solver.init(sde_terms, t0=0.0, t1=t_final, y0=y0, args=None)
 
 @jit
 def ItoMilstein_step(t, y):
     next_t = t + step_size
-    next_y = solver.step(sde_term, t, next_t, y, None, solver_state, made_jump=False)[0]
+    next_y = solver.step(sde_terms, t, next_t, y, None, solver_state, made_jump=False)[0]
     return next_t, next_y
 
 @jit
@@ -272,7 +272,7 @@ def simulation_loop(init_carry):
     return jax.lax.while_loop(cond_fun, simulation_step, init_carry)
 
 # Initialize trajectory array
-trajectory = jnp.zeros((num_steps, 2 * config.sde_config.state_dim))
+trajectory = jnp.zeros((num_steps, 2 * config.cld_config.state_dim))
 
 # Run the simulation
 init_carry = (0.0, y0, trajectory, 0)
@@ -284,21 +284,11 @@ ts = jnp.linspace(0, final_t, num_steps)
 # random subsample of 10000 for plotting
 rng, subkey = jax.random.split(rng)
 idxs = jax.random.choice(subkey, jnp.arange(num_steps), (10000,), replace=False)
-ys = full_trajectory[idxs]
-ts_plot = ts[idxs]
+ys_to_plot = full_trajectory[idxs]
+ts_to_plot = ts[idxs]
 
-# %%
-ys.shape
-ys
 #%%
 
-# Plot the results
-import matplotlib.pyplot as plt
-import seaborn as sns
-
-sns.set_style("whitegrid")
-plt.rcParams["font.family"] = "serif"
-plt.rcParams["font.serif"] = ["Times New Roman"] + plt.rcParams["font.serif"]
 
 fig, axes = plt.subplots(2, 3, figsize=(20, 12))
 fig.suptitle(
@@ -322,7 +312,7 @@ sns.kdeplot(
     x=init_x0s_p0s[:, 0],
     y=init_x0s_p0s[:, 1],
     cmap="YlGnBu",
-    shade=True,
+    fill=True,
     cbar=True,
     ax=axes[0, 2],
 )
@@ -332,23 +322,23 @@ axes[0, 2].set_xlabel("X", fontsize=12)
 axes[0, 2].set_ylabel("P", fontsize=12)
 
 # Final distribution of x
-sns.histplot(ys[-1000:, 0], kde=True, color="red", alpha=0.6, ax=axes[1, 0])
+sns.histplot(ys_to_plot[-1000:, 0], kde=True, color="red", alpha=0.6, ax=axes[1, 0])
 axes[1, 0].set_title("Final Distribution of X", fontsize=14)
 axes[1, 0].set_xlabel("X", fontsize=12)
 axes[1, 0].set_ylabel("Density", fontsize=12)
 
 # Final distribution of p
-sns.histplot(ys[-1000:, 1], kde=True, color="purple", alpha=0.6, ax=axes[1, 1])
+sns.histplot(ys_to_plot[-1000:, 1], kde=True, color="purple", alpha=0.6, ax=axes[1, 1])
 axes[1, 1].set_title("Final Distribution of P", fontsize=14)
 axes[1, 1].set_xlabel("P", fontsize=12)
 axes[1, 1].set_ylabel("Density", fontsize=12)
 
 # Final joint distribution of x and p
 sns.kdeplot(
-    x=ys[-1000:, 0],
-    y=ys[-1000:, 1],
+    x=ys_to_plot[-1000:, 0],
+    y=ys_to_plot[-1000:, 1],
     cmap="YlGnBu",
-    shade=True,
+    fill=True,
     cbar=True,
     ax=axes[1, 2],
 )
@@ -364,7 +354,7 @@ plt.show()
 print(f"Final time: {ts[-1]:.2f}")
 print(f"Initial mean state: {jnp.mean(init_x0s_p0s, axis=0)}")
 print(f"Initial state standard deviation: {jnp.std(init_x0s_p0s, axis=0)}")
-print(f"Final mean state: {jnp.mean(ys[-1000:], axis=0)}")
-print(f"Final state standard deviation: {jnp.std(ys[-1000:], axis=0)}")
+print(f"Final mean state: {jnp.mean(ys_to_plot[-1000:], axis=0)}")
+print(f"Final state standard deviation: {jnp.std(ys_to_plot[-1000:], axis=0)}")
 
 # %%
