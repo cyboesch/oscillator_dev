@@ -28,22 +28,46 @@ from thermoai.distributions import sample_1d_mog
 
 cpu_devices = devices("cpu")
 
+from dataclasses import dataclass
+import jax.random as jr
 
-init_seed = 0
+@dataclass
+class SDEConfig:
+    beta: float
+    M: float
+    Gamma: float
+    gamma: float
+    state_dim: int
 
-init_config = {
-    "N": 10000,
-    "rng": jr.PRNGKey(init_seed),
-}
+@dataclass
+class InitConfig:
+    N: int
+    rng: jr.PRNGKey
 
-sde_config = {
-    "beta": 1.0,
-    "M": 1.0,
-    "Gamma": 1.0,  # jnp.sqrt(4 * 1),  # -- from M
-    "gamma": 1.0,
-    "state_dim": 1,
-}
+@dataclass
+class SimulationConfig:
+    init_seed: int
+    init_config: InitConfig
+    sde_config: SDEConfig
 
+    @classmethod
+    def create(cls, init_seed: int = 0):
+        return cls(
+            init_seed=init_seed,
+            init_config=InitConfig(
+                N=10000,
+                rng=jr.PRNGKey(init_seed)
+            ),
+            sde_config=SDEConfig(
+                beta=1.0,
+                M=1.0,
+                Gamma=1.0,
+                gamma=1.0,
+                state_dim=1
+            )
+        )
+
+config = SimulationConfig.create()
 
 MoG_1D_params = {
     "p1": 0.5,  # p2 = 1 - p1
@@ -58,7 +82,7 @@ normal_params = {
     "p1": 1.0,  # p2 = 1 - p1
     "mu1": 0.0,
     "mu2": 0.0,  # Not used
-    "stddev1": jnp.sqrt(sde_config["gamma"] * sde_config["M"]),
+    "stddev1": jnp.sqrt(config.sde_config.gamma * config.sde_config.M),
     "stddev2": 0.0,  # Not used
 }
 
@@ -73,7 +97,7 @@ def sample_x0_p0(key):
 
 # Sample initial conditions and put them on the cpu
 init_x0s_p0s = jax.device_put(
-    vmap(sample_x0_p0)(jr.split(init_config["rng"], init_config["N"])), cpu_devices[0]
+    vmap(sample_x0_p0)(jr.split(config.init_config.rng, config.init_config.N)), cpu_devices[0]
 )  # (n_samples, 2)
 
 
@@ -129,7 +153,7 @@ plt.show()
 
 def H(z):
     x, p = z
-    return 0.5 * (x**2 + p**2 * (1 / sde_config["M"]))
+    return 0.5 * (x**2 + p**2 * (1 / config.sde_config.M))
 
 
 grad_z_H = jit(grad(H))
@@ -176,17 +200,17 @@ del xxyy, xx, yy, x, y, zz, zz_x, zz_p
 # %%
 def diffusion(t, state, args):
     return lx.DiagonalLinearOperator(
-        jnp.array([0, jnp.sqrt(2 * sde_config["Gamma"] * sde_config["beta"])])
+        jnp.array([0, jnp.sqrt(2 * config.sde_config.Gamma * config.sde_config.beta)])
     )
 
 
 def drift(t, state, args):
     Q = jnp.array(
         [
-            [0.0, sde_config["beta"]],
+            [0.0, config.sde_config.beta],
             [
-                -sde_config["beta"],
-                -sde_config["Gamma"] * sde_config["beta"] * (1 / sde_config["M"]),
+                -config.sde_config.beta,
+                -config.sde_config.Gamma * config.sde_config.beta * (1 / config.sde_config.M),
             ],
         ]
     )
@@ -197,7 +221,7 @@ t0 = 0.0
 t1 = 1.0
 dt0 = 0.001
 
-w_shape = (2 * sde_config["state_dim"],)
+w_shape = (2 * config.sde_config.state_dim,)
 """     t0: RealScalarLike,
         t1: RealScalarLike,
         tol: RealScalarLike,
@@ -210,7 +234,7 @@ w_shape = (2 * sde_config["state_dim"],)
 
 
 rng = jrnd.PRNGKey(4)
-bm = UnsafeBrownianPath(shape=(2 * sde_config["state_dim"],), key=rng)
+bm = UnsafeBrownianPath(shape=(2 * config.sde_config.state_dim,), key=rng)
 
 
 # Set up simulation parameters
@@ -220,7 +244,7 @@ t_final = num_steps * step_size
 
 # Define SDE term
 sde_term = MultiTerm(ODETerm(drift), ControlTerm(diffusion, bm))
-y0 = jnp.zeros(2 * sde_config["state_dim"])
+y0 = jnp.zeros(2 * config.sde_config.state_dim)
 
 # Set up solver
 solver = ItoMilstein()
@@ -248,7 +272,7 @@ def simulation_loop(init_carry):
     return jax.lax.while_loop(cond_fun, simulation_step, init_carry)
 
 # Initialize trajectory array
-trajectory = jnp.zeros((num_steps, 2 * sde_config["state_dim"]))
+trajectory = jnp.zeros((num_steps, 2 * config.sde_config.state_dim))
 
 # Run the simulation
 init_carry = (0.0, y0, trajectory, 0)
