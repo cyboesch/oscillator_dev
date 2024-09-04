@@ -53,36 +53,32 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         v_t = (-B_t * x_0 - 2 * B_t / self.Gamma * v_0 + v_0) * exp_term
 
         return jnp.concatenate([x_t, v_t])
-
-    def covariance(self, t, Sigma_0_xx, Sigma_0_vv):
+    
+    def Sigma_xx_t(self, t):
         B_t = self.B(t)
         exp_term = jnp.exp(-4 * B_t / self.Gamma)
-        exp_term_plus = jnp.exp(4 * B_t / self.Gamma)
+        return exp_term
 
-        Sigma_xx = (
-            Sigma_0_xx
-            + exp_term_plus
-            - 1
-            + 4 * B_t / self.Gamma * (Sigma_0_xx - 1)
-            + 4 * B_t**2 / self.Gamma**2 * (Sigma_0_xx - 2)
-            + 16 * B_t**2 / self.Gamma**4 * Sigma_0_vv
-        ) * exp_term
+    def Sigma_vv_t(self, t):
+        B_t = self.B(t)
+        exp_term = jnp.exp(-4 * B_t / self.Gamma)
+        return exp_term
+    
+    def Sigma_xv_t(self, t):
+        B_t = self.B(t)
+        exp_term = jnp.exp(-4 * B_t / self.Gamma)
+        return exp_term
+    
+    def Sigma_xx_t(self, t):
+        B_t = self.B(t)
+        exp_term = jnp.exp(-4 * B_t / self.Gamma)
+        return exp_term
 
-        Sigma_xv = (
-            -B_t * Sigma_0_xx
-            + 4 * B_t / self.Gamma**2 * Sigma_0_vv
-            - 2 * B_t**2 / self.Gamma * (Sigma_0_xx - 2)
-            - 8 * B_t**2 / self.Gamma**3 * Sigma_0_vv
-        ) * exp_term
-
-        Sigma_vv = (
-            self.Gamma**2 / 4 * (exp_term_plus - 1)
-            + B_t * self.Gamma
-            + Sigma_0_vv * (1 + 4 * B_t**2 / self.Gamma**2 - 4 * B_t / self.Gamma)
-            + B_t**2 * (Sigma_0_xx - 2)
-        ) * exp_term
-
-        Sigma_t = jnp.array([[Sigma_xx, Sigma_xv], [Sigma_xv, Sigma_vv]])
+    def covariance(self, t, Sigma_0_xx, Sigma_0_vv):
+        Sigma_xx = self.Sigma_xx_t(t)
+        Sigma_vv = self.Sigma_vv_t(t)
+        Sigma_xv = self.Sigma_xv_t(t)
+        Sigma_t = jnp.array([[Sigma_xx, Sigma_xv], [Sigma_xv, Sigma_vv]]) * jnp.exp(-4 * self.B(t) / self.Gamma)
         return jnp.kron(Sigma_t, jnp.eye(self.state_dim))
 
     def get_dsm_kernel_params(self, u_0, t):
