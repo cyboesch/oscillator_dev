@@ -1,6 +1,6 @@
-#%%
 # %%
-#%%
+# %%
+# %%
 import jax.numpy as jnp
 import jax.random as jrnd
 from diffrax import MultiTerm, ODETerm, ControlTerm, ItoMilstein, UnsafeBrownianPath
@@ -39,7 +39,7 @@ init_config = {
 sde_config = {
     "beta": 1.0,
     "M": 1.0,
-    "Gamma": 1.0, #jnp.sqrt(4 * 1),  # -- from M
+    "Gamma": 1.0,  # jnp.sqrt(4 * 1),  # -- from M
     "gamma": 1.0,
     "state_dim": 1,
 }
@@ -47,8 +47,8 @@ sde_config = {
 
 MoG_1D_params = {
     "p1": 0.5,  # p2 = 1 - p1
-    "mu1": -1.0,
-    "mu2": 1.0,
+    "mu1": -5.0,
+    "mu2": 5.0,
     "stddev1": 0.5,
     "stddev2": 0.5,
 }
@@ -71,6 +71,7 @@ def sample_x0_p0(key):
     return jnp.array([x, p])  # (2,)
 
 
+# Sample initial conditions and put them on the cpu
 init_x0s_p0s = jax.device_put(
     vmap(sample_x0_p0)(jr.split(init_config["rng"], init_config["N"])), cpu_devices[0]
 )  # (n_samples, 2)
@@ -173,8 +174,10 @@ del xxyy, xx, yy, x, y, zz, zz_x, zz_p
 
 
 # %%
-def diffusion(t, state, args): 
-    return lx.DiagonalLinearOperator(jnp.array([0, jnp.sqrt(2 * sde_config["Gamma"] * sde_config["beta"])]))
+def diffusion(t, state, args):
+    return lx.DiagonalLinearOperator(
+        jnp.array([0, jnp.sqrt(2 * sde_config["Gamma"] * sde_config["beta"])])
+    )
 
 
 def drift(t, state, args):
@@ -205,9 +208,9 @@ w_shape = (2 * sde_config["state_dim"],)
         ] = BrownianIncrement,
         _spline: _Spline = "sqrt","""
 
-        
+
 rng = jrnd.PRNGKey(4)
-bm = UnsafeBrownianPath(shape=(2*sde_config["state_dim"],), key=rng)
+bm = UnsafeBrownianPath(shape=(2 * sde_config["state_dim"],), key=rng)
 
 
 # Set up simulation parameters
@@ -217,91 +220,114 @@ t_final = num_steps * step_size
 
 # Define SDE term
 sde_term = MultiTerm(ODETerm(drift), ControlTerm(diffusion, bm))
-y0 = jnp.zeros(2*sde_config["state_dim"])
+y0 = jnp.zeros(2 * sde_config["state_dim"])
 
 # Set up solver
 solver = ItoMilstein()
 solver_state = solver.init(sde_term, t0=0.0, t1=t_final, y0=y0, args=None)
-# Initialize storage for results
-solution = {"t": [0.0], "y": [y0]}
 
-# Run the simulation
-prev_t, prev_y = 0.0, y0
 @jit
 def ItoMilstein_step(t, y):
     next_t = t + step_size
-    next_y = solver.step(
-        sde_term, t, next_t, y, None, solver_state, made_jump=False
-    )[0]
+    next_y = solver.step(sde_term, t, next_t, y, None, solver_state, made_jump=False)[0]
     return next_t, next_y
 
+@jit
+def simulation_step(carry):
+    t, y, trajectory, i = carry
+    next_t, next_y = ItoMilstein_step(t, y)
+    trajectory = trajectory.at[i].set(next_y)
+    return next_t, next_y, trajectory, i + 1
 
-with tqdm(total=num_steps, desc="Simulating SDE", unit="step") as progress_bar:
-    # Run SRA1
-    while prev_t < t_final:
-        # Step the SDE
-        cur_t, cur_y = ItoMilstein_step(prev_t, prev_y)
-        
-        # Update storage
-        solution["t"].append(cur_t)
-        solution["y"].append(cur_y)
-        
-        prev_t = min(cur_t, t_final)
-        prev_y = cur_y
-        
-        progress_bar.update(1)
-# Convert lists to arrays for easier plotting
-t_array_total = jnp.array(solution["t"])
-y_array_total = jnp.array(solution["y"])
+@jit
+def simulation_loop(init_carry):
+    def cond_fun(carry):
+        t, _, _, i = carry
+        return (t < t_final) & (i < num_steps)
+
+    return jax.lax.while_loop(cond_fun, simulation_step, init_carry)
+
+# Initialize trajectory array
+trajectory = jnp.zeros((num_steps, 2 * sde_config["state_dim"]))
+
+# Run the simulation
+init_carry = (0.0, y0, trajectory, 0)
+final_t, final_y, full_trajectory, _ = simulation_loop(init_carry)
+
+# Generate time array
+ts = jnp.linspace(0, final_t, num_steps)
+
 # random subsample of 10000 for plotting
-idxs = jrnd.choice(rng, jnp.arange(len(y_array_total)), (10000,), replace=False)
-y_array = y_array_total[idxs]
-t_array = t_array_total[idxs]
+rng, subkey = jax.random.split(rng)
+idxs = jax.random.choice(subkey, jnp.arange(num_steps), (10000,), replace=False)
+ys = full_trajectory[idxs]
+ts_plot = ts[idxs]
+
+# %%
+ys.shape
+ys
 #%%
+
 # Plot the results
 import matplotlib.pyplot as plt
 import seaborn as sns
 
 sns.set_style("whitegrid")
-plt.rcParams['font.family'] = 'serif'
-plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
+plt.rcParams["font.family"] = "serif"
+plt.rcParams["font.serif"] = ["Times New Roman"] + plt.rcParams["font.serif"]
 
 fig, axes = plt.subplots(2, 3, figsize=(20, 12))
-fig.suptitle("Stochastic Oscillator System: Initial vs Final Distributions", fontsize=16)
+fig.suptitle(
+    "Stochastic Oscillator System: Initial vs Final Distributions", fontsize=16
+)
 
 # Initial distribution of x
-sns.histplot(init_x0s_p0s[:, 0], kde=True, color='blue', alpha=0.6, ax=axes[0, 0])
+sns.histplot(init_x0s_p0s[:, 0], kde=True, color="blue", alpha=0.6, ax=axes[0, 0])
 axes[0, 0].set_title("Initial Distribution of X", fontsize=14)
 axes[0, 0].set_xlabel("X", fontsize=12)
 axes[0, 0].set_ylabel("Density", fontsize=12)
 
 # Initial distribution of p
-sns.histplot(init_x0s_p0s[:, 1], kde=True, color='green', alpha=0.6, ax=axes[0, 1])
+sns.histplot(init_x0s_p0s[:, 1], kde=True, color="green", alpha=0.6, ax=axes[0, 1])
 axes[0, 1].set_title("Initial Distribution of P", fontsize=14)
 axes[0, 1].set_xlabel("P", fontsize=12)
 axes[0, 1].set_ylabel("Density", fontsize=12)
 
 # Initial joint distribution of x and p
-sns.kdeplot(x=init_x0s_p0s[:, 0], y=init_x0s_p0s[:, 1], cmap="YlGnBu", shade=True, cbar=True, ax=axes[0, 2])
+sns.kdeplot(
+    x=init_x0s_p0s[:, 0],
+    y=init_x0s_p0s[:, 1],
+    cmap="YlGnBu",
+    shade=True,
+    cbar=True,
+    ax=axes[0, 2],
+)
 # sns.scatterplot(x=init_x0s_p0s[:, 0], y=init_x0s_p0s[:, 1], color='red', alpha=0.6, s=10, ax=axes[0, 2])
 axes[0, 2].set_title("Initial Joint Distribution of X and P", fontsize=14)
 axes[0, 2].set_xlabel("X", fontsize=12)
 axes[0, 2].set_ylabel("P", fontsize=12)
 
 # Final distribution of x
-sns.histplot(y_array[-1000:, 0], kde=True, color='red', alpha=0.6, ax=axes[1, 0])
+sns.histplot(ys[-1000:, 0], kde=True, color="red", alpha=0.6, ax=axes[1, 0])
 axes[1, 0].set_title("Final Distribution of X", fontsize=14)
 axes[1, 0].set_xlabel("X", fontsize=12)
 axes[1, 0].set_ylabel("Density", fontsize=12)
 
 # Final distribution of p
-sns.histplot(y_array[-1000:, 1], kde=True, color='purple', alpha=0.6, ax=axes[1, 1])
+sns.histplot(ys[-1000:, 1], kde=True, color="purple", alpha=0.6, ax=axes[1, 1])
 axes[1, 1].set_title("Final Distribution of P", fontsize=14)
 axes[1, 1].set_xlabel("P", fontsize=12)
 axes[1, 1].set_ylabel("Density", fontsize=12)
 
 # Final joint distribution of x and p
-sns.kdeplot(x=y_array[-1000:, 0], y=y_array[-1000:, 1], cmap="YlGnBu", shade=True, cbar=True, ax=axes[1, 2])
+sns.kdeplot(
+    x=ys[-1000:, 0],
+    y=ys[-1000:, 1],
+    cmap="YlGnBu",
+    shade=True,
+    cbar=True,
+    ax=axes[1, 2],
+)
 # sns.scatterplot(x=y_array[-1000:, 0], y=y_array[-1000:, 1], color='red', alpha=0.6, s=10, ax=axes[1, 2])
 axes[1, 2].set_title("Final Joint Distribution of X and P", fontsize=14)
 axes[1, 2].set_xlabel("X", fontsize=12)
@@ -311,11 +337,10 @@ plt.tight_layout()
 plt.show()
 
 # Print some statistics
-print(f"Final time: {t_array[-1]:.2f}")
+print(f"Final time: {ts[-1]:.2f}")
 print(f"Initial mean state: {jnp.mean(init_x0s_p0s, axis=0)}")
 print(f"Initial state standard deviation: {jnp.std(init_x0s_p0s, axis=0)}")
-print(f"Final mean state: {jnp.mean(y_array[-1000:], axis=0)}")
-print(f"Final state standard deviation: {jnp.std(y_array[-1000:], axis=0)}")
+print(f"Final mean state: {jnp.mean(ys[-1000:], axis=0)}")
+print(f"Final state standard deviation: {jnp.std(ys[-1000:], axis=0)}")
 
 # %%
-
