@@ -53,7 +53,7 @@ def test_mean_shape(cld_instance):
     x_0 = np.zeros(cld_instance.state_dim)
     v_0 = np.zeros(cld_instance.state_dim)
     t = 0.5
-    mean = cld_instance.mean(x_0, v_0, t)
+    mean = cld_instance.mean(t, x_0, v_0)
     assert mean.shape == (2 * cld_instance.state_dim,)
 
 

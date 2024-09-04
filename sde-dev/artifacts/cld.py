@@ -48,7 +48,9 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
     def B(self, t):
         return self.beta * t
 
-    def mean(self, x_0, v_0, t):
+    def mean(self, t, x_0, v_0):
+        if x_0.shape != (self.state_dim,) or v_0.shape != (self.state_dim,):
+            raise ValueError("x_0 and v_0 must have shape (state_dim,)")
         B_t = self.B(t)
         exp_term = jnp.exp(-2 * B_t / self.Gamma)
 
@@ -59,30 +61,37 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
 
         return jnp.concatenate([x_t, v_t])
 
-    def Sigma_xx_t(self, t):
+    def Sigma_xx_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        """$\Sigma_t^{x x}=\Sigma_0^{x x}+e^{4 \mathcal{B}(t) \Gamma^{-1}}-1+4 \mathcal{B}(t) \Gamma^{-1}\left(\Sigma_0^{x x}-1\right)+4 \mathcal{B}^2(t) \Gamma^{-2}\left(\Sigma_0^{x x}-2\right)+16 \mathcal{B}(t)^2 \Gamma^{-4} \Sigma_0^{v v}$"""
         B_t = self.B(t)
-        exp_term = jnp.exp(-4 * B_t / self.Gamma)
-        return exp_term
+        Sigma_xx = Sigma_0_xx + jnp.exp(4 * B_t / self.Gamma) - 1 + 4 * B_t / self.Gamma * (Sigma_0_xx - 1) + 4 * B_t**2 / self.Gamma**2 * (Sigma_0_xx - 2) + 16 * B_t**2 / self.Gamma**4 * Sigma_0_vv
+        return Sigma_xx
 
-    def Sigma_vv_t(self, t):
-        B_t = self.B(t)
-        exp_term = jnp.exp(-4 * B_t / self.Gamma)
-        return exp_term
+    def Sigma_vv_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        """$\Sigma_t^{v v}=\frac{\Gamma^2}{4}\left(e^{4 \mathcal{B}(t) \Gamma^{-1}}-1\right)+\mathcal{B}(t) \Gamma+\Sigma_0^{v v}\left(1+4 \mathcal{B}(t)^2 \Gamma^{-2}-4 \mathcal{B}(t) \Gamma^{-1}\right)+\mathcal{B}(t)^2\left(\Sigma_0^{x x}-2\right)$"""
+        Sigma_vv = self.Gamma**2 / 4 * (jnp.exp(4 * self.B(t) / self.Gamma) - 1) + self.B(t) * self.Gamma + Sigma_0_vv * (1 + 4 * self.B(t)**2 / self.Gamma**2 - 4 * self.B(t) / self.Gamma) + self.B(t)**2 * (Sigma_0_xx - 2)
+        return Sigma_vv
 
-    def Sigma_xv_t(self, t):
+    def Sigma_xv_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        """$\Sigma_t^{x v}=-\mathcal{B}(t) \Sigma_0^{x x}+4 \mathcal{B}(t) \Gamma^{-2} \Sigma_0^{v v}-2 \mathcal{B}^2(t) \Gamma^{-1}\left(\Sigma_0^{x x}-2\right)-8 \mathcal{B}^2(t) \Gamma^{-3} \Sigma_0^{v v}$"""
         B_t = self.B(t)
-        exp_term = jnp.exp(-4 * B_t / self.Gamma)
-        return exp_term
+        Sigma_xv = -B_t * Sigma_0_xx + 4 * B_t / self.Gamma**2 * Sigma_0_vv - 2 * B_t**2 / self.Gamma * (Sigma_0_xx - 2) - 8 * B_t**2 / self.Gamma**3 * Sigma_0_vv
+        return Sigma_xv
 
-    def Sigma_xx_t(self, t):
-        B_t = self.B(t)
-        exp_term = jnp.exp(-4 * B_t / self.Gamma)
-        return exp_term
+    # inverses of these as Lambda_xx, Lambda_vv, Lambda_xv
+    def Lambda_xx_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        return 1 / self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv)
+
+    def Lambda_vv_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        return 1 / self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv)
+
+    def Lambda_xv_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        return 1 / self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv)
 
     def covariance(self, t, Sigma_0_xx, Sigma_0_vv):
-        Sigma_xx = self.Sigma_xx_t(t)
-        Sigma_vv = self.Sigma_vv_t(t)
-        Sigma_xv = self.Sigma_xv_t(t)
+        Sigma_xx = self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv)
+        Sigma_vv = self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv)
+        Sigma_xv = self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv)
         Sigma_t = jnp.array([[Sigma_xx, Sigma_xv], [Sigma_xv, Sigma_vv]]) * jnp.exp(
             -4 * self.B(t) / self.Gamma
         )
@@ -91,14 +100,14 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
     def get_dsm_kernel_params(self, u_0, t):
         """“when conditioning on initial data and velocity samples x0 and v0 (as in denoising score matching (DSM)), the mean and covariance matrix of the perturbation kernel p(ut|u0) can be obtained by setting μ0 = (x0, v0)>, Σ0xx = 0, and Σ0vv = 0.” ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=6ZWQTEZZ))"""
         x_0, v_0 = u_0[: self.state_dim], u_0[self.state_dim :]
-        mean = self.mean(x_0, v_0, t)
+        mean = self.mean(t, x_0, v_0)
         cov = self.covariance(t, Sigma_0_xx=0, Sigma_0_vv=0)
         return mean, cov
 
     def get_hsm_kernel_params(self, x_0, t, gamma=1.0):
         """“conditioning only on initial data samples x0 and marginalizing over the full initial velocity distribution (as in our hybrid score matching (HSM), see Sec. C), the mean and covariance matrix of the perturbation kernel p(ut|x0) can be obtained by setting μ0 = (x0, 0d)>, Σ0xx = 0, and Σ0vv = γM” ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=CW5PUPSH))"""
         v_0_hsm = jnp.zeros_like(x_0)
-        mean = self.mean(x_0, v_0_hsm, t)
+        mean = self.mean(t, x_0, v_0_hsm)
         cov = self.covariance(t, Sigma_0_xx=0, Sigma_0_vv=gamma * self.M)
         return mean, cov
 
