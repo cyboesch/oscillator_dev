@@ -2,10 +2,10 @@ import jax.numpy as jnp
 import equinox as eqx
 import diffrax
 
-
-class CriticallyDampedLangevinDiffusion(eqx.Module):
+class CriticallyDampedLangevinDynamics(eqx.Module):
     d: int
     M: float
+    M_inv: float
     Gamma: float
     gamma: float
     beta: float
@@ -15,14 +15,16 @@ class CriticallyDampedLangevinDiffusion(eqx.Module):
             raise ValueError("All parameters must be positive.")
         self.d = d
         self.M = M
+        self.M_inv = 1 / M
         self.Gamma = jnp.sqrt(4 * M)
         self.gamma = gamma
         self.beta = beta
 
+
     def drift(self, t, u, args):
         x, v = u[: self.d], u[self.d :]
-        f_x = self.beta * self.M**-1 * v
-        f_v = -self.beta * x - self.beta * self.Gamma * self.M**-1 * v
+        f_x = self.beta * self.M_inv * v
+        f_v = -self.beta * x - self.beta * self.Gamma * self.M_inv * v
         return jnp.concatenate([f_x, f_v])
 
     def diffusion(self, t, u, args):

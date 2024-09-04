@@ -3,12 +3,12 @@ import jax
 import diffrax
 import numpy as np
 import equinox as eqx
-from cld import CriticallyDampedLangevinDiffusion
+from cld import CriticallyDampedLangevinDynamics
 
 
 @pytest.fixture
 def cld_instance():
-    return CriticallyDampedLangevinDiffusion(d=10, M=1.0, beta=1.0)
+    return CriticallyDampedLangevinDynamics(d=10, M=1.0, beta=1.0)
 
 
 def test_initialization(cld_instance):
@@ -152,17 +152,17 @@ def test_compute_L_t_inv_T(cld_instance):
 
 def test_invalid_parameters():
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDiffusion(d=-1, M=1.0, beta=1.0)
+        CriticallyDampedLangevinDynamics(d=-1, M=1.0, beta=1.0)
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDiffusion(d=10, M=-1.0, beta=1.0)
+        CriticallyDampedLangevinDynamics(d=10, M=-1.0, beta=1.0)
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDiffusion(d=10, M=1.0, beta=-1.0)
+        CriticallyDampedLangevinDynamics(d=10, M=1.0, beta=-1.0)
 
 
 def test_jit_compilation():
-    cld = CriticallyDampedLangevinDiffusion(d=10, M=1.0, beta=1.0)
+    cld = CriticallyDampedLangevinDynamics(d=10, M=1.0, beta=1.0)
     jitted_cld = eqx.filter_jit(lambda: cld)()
-    assert isinstance(jitted_cld, CriticallyDampedLangevinDiffusion)
+    assert isinstance(jitted_cld, CriticallyDampedLangevinDynamics)
 
 
 if __name__ == "__main__":
