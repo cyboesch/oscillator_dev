@@ -211,8 +211,8 @@ bm = UnsafeBrownianPath(shape=(2*sde_config["state_dim"],), key=rng)
 
 
 # Set up simulation parameters
-num_steps = 10000
-step_size = 0.01
+num_steps = 100000
+step_size = 0.1
 t_final = num_steps * step_size
 
 # Define SDE term
@@ -250,50 +250,72 @@ with tqdm(total=num_steps, desc="Simulating SDE", unit="step") as progress_bar:
         prev_y = cur_y
         
         progress_bar.update(1)
-#%%
 # Convert lists to arrays for easier plotting
-t_array = jnp.array(solution["t"])
-y_array = jnp.array(solution["y"])
+t_array_total = jnp.array(solution["t"])
+y_array_total = jnp.array(solution["y"])
+# random subsample of 10000 for plotting
+idxs = jrnd.choice(rng, jnp.arange(len(y_array_total)), (10000,), replace=False)
+y_array = y_array_total[idxs]
+t_array = t_array_total[idxs]
 #%%
 # Plot the results
 import matplotlib.pyplot as plt
-fig, (ax1, ax2, ax3, ax4) = plt.subplots(1, 4, figsize=(20, 5))
+import seaborn as sns
 
-fig.suptitle("Stochastic Oscillator System with Ito Milstein Method")
+sns.set_style("whitegrid")
+plt.rcParams['font.family'] = 'serif'
+plt.rcParams['font.serif'] = ['Times New Roman'] + plt.rcParams['font.serif']
 
-# 2D trajectory plot
-ax1.plot(y_array[:, 0], y_array[:, 1], linewidth=0.5, alpha=0.9)
-ax1.set_title("2D Trajectory")
-ax1.set_xlabel("X")
-ax1.set_ylabel("Y")
+fig, axes = plt.subplots(2, 3, figsize=(20, 12))
+fig.suptitle("Stochastic Oscillator System: Initial vs Final Distributions", fontsize=16)
 
-# Time series plot
-ax2.plot(t_array, y_array[:, 0], label="X", linewidth=0.9, alpha=0.7)
-ax2.plot(t_array, y_array[:, 1], label="Y", linewidth=0.9, alpha=0.7)
-ax2.set_title("Time Series")
-ax2.set_xlabel("Time")
-ax2.set_ylabel("Value")
-ax2.legend()
+# Initial distribution of x
+sns.histplot(init_x0s_p0s[:, 0], kde=True, color='blue', alpha=0.6, ax=axes[0, 0])
+axes[0, 0].set_title("Initial Distribution of X", fontsize=14)
+axes[0, 0].set_xlabel("X", fontsize=12)
+axes[0, 0].set_ylabel("Density", fontsize=12)
+
+# Initial distribution of p
+sns.histplot(init_x0s_p0s[:, 1], kde=True, color='green', alpha=0.6, ax=axes[0, 1])
+axes[0, 1].set_title("Initial Distribution of P", fontsize=14)
+axes[0, 1].set_xlabel("P", fontsize=12)
+axes[0, 1].set_ylabel("Density", fontsize=12)
+
+# Initial joint distribution of x and p
+sns.kdeplot(x=init_x0s_p0s[:, 0], y=init_x0s_p0s[:, 1], cmap="YlGnBu", shade=True, cbar=True, ax=axes[0, 2])
+# sns.scatterplot(x=init_x0s_p0s[:, 0], y=init_x0s_p0s[:, 1], color='red', alpha=0.6, s=10, ax=axes[0, 2])
+axes[0, 2].set_title("Initial Joint Distribution of X and P", fontsize=14)
+axes[0, 2].set_xlabel("X", fontsize=12)
+axes[0, 2].set_ylabel("P", fontsize=12)
 
 # Final distribution of x
-ax3.hist(y_array[-1000:, 0], bins=50, density=True, alpha=0.7)
-ax3.set_title("Final Distribution of X")
-ax3.set_xlabel("X")
-ax3.set_ylabel("Density")
+sns.histplot(y_array[-1000:, 0], kde=True, color='red', alpha=0.6, ax=axes[1, 0])
+axes[1, 0].set_title("Final Distribution of X", fontsize=14)
+axes[1, 0].set_xlabel("X", fontsize=12)
+axes[1, 0].set_ylabel("Density", fontsize=12)
 
 # Final distribution of p
-ax4.hist(y_array[-1000:, 1], bins=50, density=True, alpha=0.7)
-ax4.set_title("Final Distribution of P")
-ax4.set_xlabel("P")
-ax4.set_ylabel("Density")
+sns.histplot(y_array[-1000:, 1], kde=True, color='purple', alpha=0.6, ax=axes[1, 1])
+axes[1, 1].set_title("Final Distribution of P", fontsize=14)
+axes[1, 1].set_xlabel("P", fontsize=12)
+axes[1, 1].set_ylabel("Density", fontsize=12)
+
+# Final joint distribution of x and p
+sns.kdeplot(x=y_array[-1000:, 0], y=y_array[-1000:, 1], cmap="YlGnBu", shade=True, cbar=True, ax=axes[1, 2])
+# sns.scatterplot(x=y_array[-1000:, 0], y=y_array[-1000:, 1], color='red', alpha=0.6, s=10, ax=axes[1, 2])
+axes[1, 2].set_title("Final Joint Distribution of X and P", fontsize=14)
+axes[1, 2].set_xlabel("X", fontsize=12)
+axes[1, 2].set_ylabel("P", fontsize=12)
 
 plt.tight_layout()
 plt.show()
 
 # Print some statistics
 print(f"Final time: {t_array[-1]:.2f}")
-print(f"Final state: {y_array[-1]}")
-print(f"Mean state: {jnp.mean(y_array, axis=0)}")
-print(f"State standard deviation: {jnp.std(y_array, axis=0)}")
+print(f"Initial mean state: {jnp.mean(init_x0s_p0s, axis=0)}")
+print(f"Initial state standard deviation: {jnp.std(init_x0s_p0s, axis=0)}")
+print(f"Final mean state: {jnp.mean(y_array[-1000:], axis=0)}")
+print(f"Final state standard deviation: {jnp.std(y_array[-1000:], axis=0)}")
+
 # %%
 
