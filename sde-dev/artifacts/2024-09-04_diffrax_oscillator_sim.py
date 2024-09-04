@@ -59,7 +59,7 @@ class SimulationConfig:
                 rng=jr.PRNGKey(init_seed)
             ),
             sde_config=SDEConfig(
-                beta=1.0,
+                beta=0.1,
                 M=1.0,
                 Gamma=1.0,
                 gamma=1.0,
