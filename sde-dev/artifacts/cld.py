@@ -3,29 +3,34 @@ import jax.numpy as jnp
 import equinox as eqx
 import diffrax
 
+
 class CriticallyDampedLangevinDynamics(eqx.Module):
     state_dim: int
     M: float
-    M_inv: float
     gamma: float
     beta: float
-    Gamma: Union[float, None] = None
+    Gamma: Union[float, None] = None  # Default to sqrt(4 * M)
 
-    def __init__(self, state_dim: int, M: float, beta: float, gamma: float, Gamma: Union[float, None] = None):
+    def __init__(
+        self,
+        state_dim: int,
+        M: float,
+        beta: float,
+        gamma: float,
+        Gamma: Union[float, None] = None,
+    ):
         if state_dim <= 0 or M <= 0 or beta <= 0:
             raise ValueError("All parameters must be positive.")
         self.state_dim = state_dim
         self.M = M
-        self.M_inv = 1 / M
         self.Gamma = Gamma if Gamma is not None else jnp.sqrt(4 * M)
         self.gamma = gamma
         self.beta = beta
 
-
     def drift(self, t, u, args):
         x, v = u[: self.state_dim], u[self.state_dim :]
-        f_x = self.beta * self.M_inv * v
-        f_v = -self.beta * x - self.beta * self.Gamma * self.M_inv * v
+        f_x = self.beta * v / self.M
+        f_v = -self.beta * x - self.beta * self.Gamma * v / self.M
         return jnp.concatenate([f_x, f_v])
 
     def diffusion(self, t, u, args):
@@ -53,7 +58,7 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         v_t = (-B_t * x_0 - 2 * B_t / self.Gamma * v_0 + v_0) * exp_term
 
         return jnp.concatenate([x_t, v_t])
-    
+
     def Sigma_xx_t(self, t):
         B_t = self.B(t)
         exp_term = jnp.exp(-4 * B_t / self.Gamma)
@@ -63,12 +68,12 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         B_t = self.B(t)
         exp_term = jnp.exp(-4 * B_t / self.Gamma)
         return exp_term
-    
+
     def Sigma_xv_t(self, t):
         B_t = self.B(t)
         exp_term = jnp.exp(-4 * B_t / self.Gamma)
         return exp_term
-    
+
     def Sigma_xx_t(self, t):
         B_t = self.B(t)
         exp_term = jnp.exp(-4 * B_t / self.Gamma)
@@ -78,7 +83,9 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         Sigma_xx = self.Sigma_xx_t(t)
         Sigma_vv = self.Sigma_vv_t(t)
         Sigma_xv = self.Sigma_xv_t(t)
-        Sigma_t = jnp.array([[Sigma_xx, Sigma_xv], [Sigma_xv, Sigma_vv]]) * jnp.exp(-4 * self.B(t) / self.Gamma)
+        Sigma_t = jnp.array([[Sigma_xx, Sigma_xv], [Sigma_xv, Sigma_vv]]) * jnp.exp(
+            -4 * self.B(t) / self.Gamma
+        )
         return jnp.kron(Sigma_t, jnp.eye(self.state_dim))
 
     def get_dsm_kernel_params(self, u_0, t):
