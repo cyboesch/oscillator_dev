@@ -8,11 +8,11 @@ from cld import CriticallyDampedLangevinDynamics
 
 @pytest.fixture
 def cld_instance():
-    return CriticallyDampedLangevinDynamics(d=10, M=1.0, beta=1.0)
+    return CriticallyDampedLangevinDynamics(state_dim=10, M=1.0, gamma=1.0, beta=1.0)
 
 
 def test_initialization(cld_instance):
-    assert cld_instance.d == 10
+    assert cld_instance.state_dim == 10
     assert cld_instance.M == 1.0
     assert cld_instance.beta == 1.0
     assert cld_instance.gamma == 1.0
@@ -25,21 +25,21 @@ def test_critical_damping_condition(cld_instance):
 
 def test_drift_shape(cld_instance):
     t = 0.5
-    u = np.zeros(2 * cld_instance.d)
+    u = np.zeros(2 * cld_instance.state_dim)
     drift = cld_instance.drift(t, u, None)
-    assert drift.shape == (2 * cld_instance.d,)
+    assert drift.shape == (2 * cld_instance.state_dim,)
 
 
 def test_diffusion_shape(cld_instance):
     t = 0.5
-    u = np.zeros(2 * cld_instance.d)
+    u = np.zeros(2 * cld_instance.state_dim)
     diffusion = cld_instance.diffusion(t, u, None)
-    assert diffusion.shape == (2 * cld_instance.d, 2 * cld_instance.d)
+    assert diffusion.shape == (2 * cld_instance.state_dim, 2 * cld_instance.state_dim)
 
 
 def test_get_terms(cld_instance):
     rng = jax.random.PRNGKey(0)
-    bm = diffrax.UnsafeBrownianPath(shape=(cld_instance.d,), key=rng)
+    bm = diffrax.UnsafeBrownianPath(shape=(cld_instance.state_dim,), key=rng)
     sde_terms = cld_instance.get_terms(bm)
     assert isinstance(sde_terms, diffrax.MultiTerm)
 
@@ -50,89 +50,89 @@ def test_B_function(cld_instance):
 
 
 def test_mean_shape(cld_instance):
-    x_0 = np.zeros(cld_instance.d)
-    v_0 = np.zeros(cld_instance.d)
+    x_0 = np.zeros(cld_instance.state_dim)
+    v_0 = np.zeros(cld_instance.state_dim)
     t = 0.5
     mean = cld_instance.mean(x_0, v_0, t)
-    assert mean.shape == (2 * cld_instance.d,)
+    assert mean.shape == (2 * cld_instance.state_dim,)
 
 
 def test_covariance_shape(cld_instance):
     t = 0.5
     cov = cld_instance.covariance(t, Sigma_0_xx=0, Sigma_0_vv=0)
-    assert cov.shape == (2 * cld_instance.d, 2 * cld_instance.d)
+    assert cov.shape == (2 * cld_instance.state_dim, 2 * cld_instance.state_dim)
 
 
 def test_get_dsm_kernel_params(cld_instance):
-    u_0 = np.zeros(2 * cld_instance.d)
+    u_0 = np.zeros(2 * cld_instance.state_dim)
     t = 0.5
     mean, cov = cld_instance.get_dsm_kernel_params(u_0, t)
-    assert mean.shape == (2 * cld_instance.d,)
-    assert cov.shape == (2 * cld_instance.d, 2 * cld_instance.d)
+    assert mean.shape == (2 * cld_instance.state_dim,)
+    assert cov.shape == (2 * cld_instance.state_dim, 2 * cld_instance.state_dim)
 
 
 def test_get_hsm_kernel_params(cld_instance):
-    x_0 = np.zeros(cld_instance.d)
+    x_0 = np.zeros(cld_instance.state_dim)
     t = 0.5
     mean, cov = cld_instance.get_hsm_kernel_params(x_0, t)
-    assert mean.shape == (2 * cld_instance.d,)
-    assert cov.shape == (2 * cld_instance.d, 2 * cld_instance.d)
+    assert mean.shape == (2 * cld_instance.state_dim,)
+    assert cov.shape == (2 * cld_instance.state_dim, 2 * cld_instance.state_dim)
 
 
 def test_compute_grad_u_t_log_p_t(cld_instance):
     Sigma_t = np.eye(2)
-    epsilon_2d = np.random.normal(size=(2 * cld_instance.d,))
+    epsilon_2d = np.random.normal(size=(2 * cld_instance.state_dim,))
     grad = cld_instance.compute_grad_u_t_log_p_t(Sigma_t, epsilon_2d)
-    assert grad.shape == (2 * cld_instance.d,)
+    assert grad.shape == (2 * cld_instance.state_dim,)
     assert np.all(np.isfinite(grad))
 
 
 def test_compute_grad_v_t_log_p_t(cld_instance):
     Sigma_t = np.eye(2)
-    epsilon_d = np.random.normal(size=(cld_instance.d,))
+    epsilon_d = np.random.normal(size=(cld_instance.state_dim,))
     grad = cld_instance.compute_grad_v_t_log_p_t(Sigma_t, epsilon_d)
-    assert grad.shape == (cld_instance.d,)
+    assert grad.shape == (cld_instance.state_dim,)
     assert np.all(np.isfinite(grad))
 
 
 def test_compute_dsm_grad_u_t_log_p_t(cld_instance):
-    u_0 = np.ones(2 * cld_instance.d)
+    u_0 = np.ones(2 * cld_instance.state_dim)
     t = 0.5
     epsilon_2d = jax.random.normal(
-        key=jax.random.PRNGKey(0), shape=(2 * cld_instance.d,)
+        key=jax.random.PRNGKey(0), shape=(2 * cld_instance.state_dim,)
     )
     grad = cld_instance.compute_dsm_grad_u_t_log_p_t(u_0, t, epsilon_2d)
-    assert grad.shape == (2 * cld_instance.d,)
+    assert grad.shape == (2 * cld_instance.state_dim,)
     assert np.all(np.isfinite(grad))
 
 
 def test_compute_hsm_grad_u_t_log_p_t(cld_instance):
-    x_0 = np.ones(cld_instance.d)
+    x_0 = np.ones(cld_instance.state_dim)
     t = 0.5
     epsilon_2d = jax.random.normal(
-        key=jax.random.PRNGKey(0), shape=(2 * cld_instance.d,)
+        key=jax.random.PRNGKey(0), shape=(2 * cld_instance.state_dim,)
     )
     grad = cld_instance.compute_hsm_grad_u_t_log_p_t(x_0, t, epsilon_2d)
-    assert grad.shape == (2 * cld_instance.d,)
+    assert grad.shape == (2 * cld_instance.state_dim,)
     assert np.all(np.isfinite(grad))
 
 
 def test_compute_dsm_grad_v_t_log_p_t(cld_instance):
-    u_t = np.zeros(2 * cld_instance.d)
-    u_0 = np.ones(2 * cld_instance.d)
+    u_t = np.zeros(2 * cld_instance.state_dim)
+    u_0 = np.ones(2 * cld_instance.state_dim)
     t = 0.5
-    epsilon_d = jax.random.normal(key=jax.random.PRNGKey(0), shape=(cld_instance.d,))
+    epsilon_d = jax.random.normal(key=jax.random.PRNGKey(0), shape=(cld_instance.state_dim,))
     grad = cld_instance.compute_dsm_grad_v_t_log_p_t(u_t, u_0, t, epsilon_d)
-    assert grad.shape == (cld_instance.d,)
+    assert grad.shape == (cld_instance.state_dim,)
     assert np.all(np.isfinite(grad))
 
 
 def test_compute_hsm_grad_v_t_log_p_t(cld_instance):
-    x_0 = np.ones(cld_instance.d)
+    x_0 = np.ones(cld_instance.state_dim)
     t = 0.5
-    epsilon_d = jax.random.normal(key=jax.random.PRNGKey(0), shape=(cld_instance.d,))
+    epsilon_d = jax.random.normal(key=jax.random.PRNGKey(0), shape=(cld_instance.state_dim,))
     grad = cld_instance.compute_hsm_grad_v_t_log_p_t(x_0, t, epsilon_d)
-    assert grad.shape == (cld_instance.d,)
+    assert grad.shape == (cld_instance.state_dim,)
     assert np.all(np.isfinite(grad))
 
 
@@ -152,15 +152,15 @@ def test_compute_L_t_inv_T(cld_instance):
 
 def test_invalid_parameters():
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDynamics(d=-1, M=1.0, beta=1.0)
+        CriticallyDampedLangevinDynamics(state_dim=-1, M=1.0, beta=1.0, gamma=1.0)
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDynamics(d=10, M=-1.0, beta=1.0)
+        CriticallyDampedLangevinDynamics(state_dim=10, M=-1.0, beta=1.0, gamma=1.0)
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDynamics(d=10, M=1.0, beta=-1.0)
+        CriticallyDampedLangevinDynamics(state_dim=10, M=1.0, beta=-1.0, gamma=1.0)
 
 
 def test_jit_compilation():
-    cld = CriticallyDampedLangevinDynamics(d=10, M=1.0, beta=1.0)
+    cld = CriticallyDampedLangevinDynamics(state_dim=10, M=1.0, beta=1.0, gamma=1.0)
     jitted_cld = eqx.filter_jit(lambda: cld)()
     assert isinstance(jitted_cld, CriticallyDampedLangevinDynamics)
 

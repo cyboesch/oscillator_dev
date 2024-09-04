@@ -1,36 +1,37 @@
+from typing import Union
 import jax.numpy as jnp
 import equinox as eqx
 import diffrax
 
 class CriticallyDampedLangevinDynamics(eqx.Module):
-    d: int
+    state_dim: int
     M: float
     M_inv: float
-    Gamma: float
     gamma: float
     beta: float
+    Gamma: Union[float, None] = None
 
-    def __init__(self, d: int, M: float, beta: float, gamma: float = 1.0):
-        if d <= 0 or M <= 0 or beta <= 0:
+    def __init__(self, state_dim: int, M: float, beta: float, gamma: float, Gamma: Union[float, None] = None):
+        if state_dim <= 0 or M <= 0 or beta <= 0:
             raise ValueError("All parameters must be positive.")
-        self.d = d
+        self.state_dim = state_dim
         self.M = M
         self.M_inv = 1 / M
-        self.Gamma = jnp.sqrt(4 * M)
+        self.Gamma = Gamma if Gamma is not None else jnp.sqrt(4 * M)
         self.gamma = gamma
         self.beta = beta
 
 
     def drift(self, t, u, args):
-        x, v = u[: self.d], u[self.d :]
+        x, v = u[: self.state_dim], u[self.state_dim :]
         f_x = self.beta * self.M_inv * v
         f_v = -self.beta * x - self.beta * self.Gamma * self.M_inv * v
         return jnp.concatenate([f_x, f_v])
 
     def diffusion(self, t, u, args):
-        G = jnp.zeros((2 * self.d, 2 * self.d))
-        G = G.at[self.d :, self.d :].set(
-            jnp.sqrt(2 * self.Gamma * self.beta) * jnp.eye(self.d)
+        G = jnp.zeros((2 * self.state_dim, 2 * self.state_dim))
+        G = G.at[self.state_dim :, self.state_dim :].set(
+            jnp.sqrt(2 * self.Gamma * self.beta) * jnp.eye(self.state_dim)
         )
         return G
 
@@ -82,11 +83,11 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         ) * exp_term
 
         Sigma_t = jnp.array([[Sigma_xx, Sigma_xv], [Sigma_xv, Sigma_vv]])
-        return jnp.kron(Sigma_t, jnp.eye(self.d))
+        return jnp.kron(Sigma_t, jnp.eye(self.state_dim))
 
     def get_dsm_kernel_params(self, u_0, t):
         """“when conditioning on initial data and velocity samples x0 and v0 (as in denoising score matching (DSM)), the mean and covariance matrix of the perturbation kernel p(ut|u0) can be obtained by setting μ0 = (x0, v0)>, Σ0xx = 0, and Σ0vv = 0.” ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=6ZWQTEZZ))"""
-        x_0, v_0 = u_0[: self.d], u_0[self.d :]
+        x_0, v_0 = u_0[: self.state_dim], u_0[self.state_dim :]
         mean = self.mean(x_0, v_0, t)
         cov = self.covariance(t, Sigma_0_xx=0, Sigma_0_vv=0)
         return mean, cov
@@ -125,7 +126,7 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
     def compute_grad_u_t_log_p_t(self, Sigma_t, epsilon_2d):
         """Compute the gradient of log p_t(u_t | ·) with respect to u_t."""
         L_t_inv_T = self.compute_L_t_inv_T(Sigma_t)
-        return -jnp.kron(L_t_inv_T, jnp.eye(self.d)) @ epsilon_2d
+        return -jnp.kron(L_t_inv_T, jnp.eye(self.state_dim)) @ epsilon_2d
 
     def compute_grad_v_t_log_p_t(self, Sigma_t, epsilon_d):
         """Compute the gradient of log p_t(u_t | ·) with respect to v_t."""
