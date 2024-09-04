@@ -98,7 +98,9 @@ def test_compute_grad_v_t_log_p_t(cld_instance):
 def test_compute_dsm_grad_u_t_log_p_t(cld_instance):
     u_0 = np.ones(2 * cld_instance.d)
     t = 0.5
-    epsilon_2d = jax.random.normal(key=jax.random.PRNGKey(0), shape=(2*cld_instance.d,))
+    epsilon_2d = jax.random.normal(
+        key=jax.random.PRNGKey(0), shape=(2 * cld_instance.d,)
+    )
     grad = cld_instance.compute_dsm_grad_u_t_log_p_t(u_0, t, epsilon_2d)
     assert grad.shape == (2 * cld_instance.d,)
     assert np.all(np.isfinite(grad))
@@ -107,7 +109,9 @@ def test_compute_dsm_grad_u_t_log_p_t(cld_instance):
 def test_compute_hsm_grad_u_t_log_p_t(cld_instance):
     x_0 = np.ones(cld_instance.d)
     t = 0.5
-    epsilon_2d = jax.random.normal(key=jax.random.PRNGKey(0), shape=(2*cld_instance.d,))
+    epsilon_2d = jax.random.normal(
+        key=jax.random.PRNGKey(0), shape=(2 * cld_instance.d,)
+    )
     grad = cld_instance.compute_hsm_grad_u_t_log_p_t(x_0, t, epsilon_2d)
     assert grad.shape == (2 * cld_instance.d,)
     assert np.all(np.isfinite(grad))
@@ -153,6 +157,7 @@ def test_invalid_parameters():
         CriticallyDampedLangevinDiffusion(d=10, M=-1.0, beta=1.0)
     with pytest.raises(ValueError):
         CriticallyDampedLangevinDiffusion(d=10, M=1.0, beta=-1.0)
+
 
 def test_jit_compilation():
     cld = CriticallyDampedLangevinDiffusion(d=10, M=1.0, beta=1.0)
