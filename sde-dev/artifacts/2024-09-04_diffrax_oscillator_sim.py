@@ -73,12 +73,12 @@ class SimulationConfig:
             ),
             cld_config=CLDConfig(
                 state_dim=1,
-                beta=5.0,
+                beta=0.1,
                 M=1.0,
                 gamma=1.0,
             )
         )
-
+i
 config = SimulationConfig.create()
 cld = CriticallyDampedLangevinDynamics(**config.cld_config.__dict__)
 
@@ -90,7 +90,6 @@ MoG_1D_params = {
     "stddev1": 0.5,
     "stddev2": 0.5,
 }
-
 
 normal_params = {
     "p1": 1.0,  # p2 = 1 - p1
@@ -107,7 +106,6 @@ def sample_x0_p0(key):
     x = sample_1d_mog(**MoG_1D_params, key=x_key)
     p = sample_1d_mog(**normal_params, key=p_key)
     return jnp.array([x, p])  # (2,)
-
 
 # Sample initial conditions and put them on the cpu
 init_x0s_p0s = jax.device_put(
@@ -322,15 +320,17 @@ norms_xv = vmap(lambda t: jnp.abs(Sigma_inv_xvs.at[t].get() * (mu_vs.at[t].get()
 Sigma_inv_xxs
 # first index where A_xxs is equal to 00
 idx_xx = jnp.argmax(Sigma_inv_xxs == 0)
-idx_vv = jnp.argmax(A_vvs == 0)
-idx_xv = jnp.argmax(A_xvs == 0)
+idx_vv = jnp.argmax(Sigma_inv_vvs == 0)
+idx_xv = jnp.argmax(Sigma_inv_xvs == 0)
 #%%
 # print it
 print(f"First index where A_xxs is equal to 0: {idx_xx}")
 print(f"First index where A_vvs is equal to 0: {idx_vv}")
 print(f"First index where A_xvs is equal to 0: {idx_xv}")
-min_step = 0
-max_step = min(idx_xx, idx_vv)-1
+
+min_step = 10
+max_step = 1000 
+
 
 
 #%%
@@ -349,10 +349,6 @@ ratio_vv2xv = norms_vv_to_plot / norms_xv_to_plot
 rollmean_ratio_vv2xx = jnp.cumsum(ratio_vv2xx) / jnp.arange(1, len(ratio_vv2xx) + 1)
 rollmean_ratio_vv2xv = jnp.cumsum(ratio_vv2xv) / jnp.arange(1, len(ratio_vv2xv) + 1)
 
-
-#%%
-
-ratio_vv2xx[2000:20000]
 #%%
 # Create the mosaic layout
 mosaic = """
@@ -412,6 +408,7 @@ ax_dict['E'].set_title(r"$p_{T}(v)$", fontsize=14)
 ax_dict['E'].set_xlabel("v_T", fontsize=12)
 ax_dict['E'].set_ylabel("Density", fontsize=12)
 
+
 # Final joint distribution of x and p
 sns.kdeplot(
     x=xs_to_plot,
@@ -426,10 +423,11 @@ ax_dict['F'].set_xlabel("X", fontsize=12)
 ax_dict['F'].set_ylabel("P", fontsize=12)
 
 # Convergence means plot
-ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xx, linestyle='-.', label="Rollmean "+r"$r_{vv/xx}$", color=p_color, alpha=1.0)
+# ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xx, linestyle='-.', label="Rollmean "+r"$r_{vv/xx}$", color=p_color, alpha=1.0)
 # ax_dict['G'].plot(ts_to_plot, ratio_vv2xx, label=r"$r_{vv/xx}$", color=p_color, alpha=0.3)
-ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xv, linestyle='-.', label="Rollmean "+r"$r_{vv/xv}$", color=x_color, alpha=1.0)
-# ax_dict['G'].plot(ts_to_plot, ratio_vv2xv, label=r"$r_{vv/xv}$", color=x_color, alpha=0.3)
+# ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xv, linestyle='-.', label="Rollmean "+r"$r_{vv/xv}$", color=x_color, alpha=1.0)
+ax_dict['G'].plot(ts_to_plot, norms_xv_to_plot, label=r'norms $xv$', color=x_color, alpha=1.0)
+ax_dict['G'].plot(ts_to_plot, norms_vv_to_plot, label=r'norms $vv$', color=p_color, alpha=1.0)
 ax_dict['G'].set_title(r"Rolling Mean of Ratios $r_{\frac{vv}{xx}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xx}(t)(\mu_{x}(t) - x(t))\|}$" + " and " + r"$r_{\frac{vv}{xv}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xv}(t)(\mu_{x}(t) - x(t))\|}$"+"\n" + times_info_str, fontsize=14, y=1.05)
 
 # add red line for minimum value of ratio vv/vx
@@ -439,8 +437,9 @@ ts_freq = 10
 ax_dict['G'].set_xticks(ts_to_plot[::max_step//ts_freq])
 ax_dict['G'].set_xticklabels([f"{t:.1f}" for t in ts_to_plot[::max_step//ts_freq]])
 ax_dict['G'].legend(fontsize=10)
-ax_dict['G'].set_xlim(min_t, max_t)
-ax_dict['G'].set_ylim(0,2 )
+# log
+ax_dict['G'].set_yscale('log')
+ax_dict['G'].set_ylim(1e-2, 1e2)
 # put yticklabels on the right side
 ax_dict['G'].yaxis.tick_right()
 plt.tight_layout()

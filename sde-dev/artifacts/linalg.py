@@ -1,7 +1,8 @@
 import jax.numpy as jnp
 from jax import jit
+from functools import partial
 
-@jit
+@partial(jit, static_argnums=(3,))
 def schur_inverse_2x2(S_xx, S_vv, S_xv, which_block=None):
     """
     Computes the inverse of a 2x2 block matrix using Schur complements,

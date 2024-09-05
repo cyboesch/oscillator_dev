@@ -4,6 +4,7 @@ import equinox as eqx
 import diffrax
 from linalg import schur_inverse_2x2
 
+
 class CriticallyDampedLangevinDynamics(eqx.Module):
     state_dim: int
     M: float
@@ -64,28 +65,61 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
     def Sigma_xx_t(self, t, Sigma_0_xx, Sigma_0_vv):
         """$\Sigma_t^{x x}=\Sigma_0^{x x}+e^{4 \mathcal{B}(t) \Gamma^{-1}}-1+4 \mathcal{B}(t) \Gamma^{-1}\left(\Sigma_0^{x x}-1\right)+4 \mathcal{B}^2(t) \Gamma^{-2}\left(\Sigma_0^{x x}-2\right)+16 \mathcal{B}(t)^2 \Gamma^{-4} \Sigma_0^{v v}$"""
         B_t = self.B(t)
-        Sigma_xx = Sigma_0_xx + jnp.exp(4 * B_t / self.Gamma) - 1 + 4 * B_t / self.Gamma * (Sigma_0_xx - 1) + 4 * B_t**2 / self.Gamma**2 * (Sigma_0_xx - 2) + 16 * B_t**2 / self.Gamma**4 * Sigma_0_vv
+        Sigma_xx = (
+            Sigma_0_xx
+            + jnp.exp(4 * B_t / self.Gamma)
+            - 1
+            + 4 * B_t / self.Gamma * (Sigma_0_xx - 1)
+            + 4 * B_t**2 / self.Gamma**2 * (Sigma_0_xx - 2)
+            + 16 * B_t**2 / self.Gamma**4 * Sigma_0_vv
+        )
         return Sigma_xx
 
     def Sigma_vv_t(self, t, Sigma_0_xx, Sigma_0_vv):
         """$\Sigma_t^{v v}=\frac{\Gamma^2}{4}\left(e^{4 \mathcal{B}(t) \Gamma^{-1}}-1\right)+\mathcal{B}(t) \Gamma+\Sigma_0^{v v}\left(1+4 \mathcal{B}(t)^2 \Gamma^{-2}-4 \mathcal{B}(t) \Gamma^{-1}\right)+\mathcal{B}(t)^2\left(\Sigma_0^{x x}-2\right)$"""
-        Sigma_vv = self.Gamma**2 / 4 * (jnp.exp(4 * self.B(t) / self.Gamma) - 1) + self.B(t) * self.Gamma + Sigma_0_vv * (1 + 4 * self.B(t)**2 / self.Gamma**2 - 4 * self.B(t) / self.Gamma) + self.B(t)**2 * (Sigma_0_xx - 2)
+        Sigma_vv = (
+            self.Gamma**2 / 4 * (jnp.exp(4 * self.B(t) / self.Gamma) - 1)
+            + self.B(t) * self.Gamma
+            + Sigma_0_vv
+            * (1 + 4 * self.B(t) ** 2 / self.Gamma**2 - 4 * self.B(t) / self.Gamma)
+            + self.B(t) ** 2 * (Sigma_0_xx - 2)
+        )
         return Sigma_vv
 
     def Sigma_xv_t(self, t, Sigma_0_xx, Sigma_0_vv):
         """$\Sigma_t^{x v}=-\mathcal{B}(t) \Sigma_0^{x x}+4 \mathcal{B}(t) \Gamma^{-2} \Sigma_0^{v v}-2 \mathcal{B}^2(t) \Gamma^{-1}\left(\Sigma_0^{x x}-2\right)-8 \mathcal{B}^2(t) \Gamma^{-3} \Sigma_0^{v v}$"""
         B_t = self.B(t)
-        Sigma_xv = -B_t * Sigma_0_xx + 4 * B_t / self.Gamma**2 * Sigma_0_vv - 2 * B_t**2 / self.Gamma * (Sigma_0_xx - 2) - 8 * B_t**2 / self.Gamma**3 * Sigma_0_vv
+        Sigma_xv = (
+            -B_t * Sigma_0_xx
+            + 4 * B_t / self.Gamma**2 * Sigma_0_vv
+            - 2 * B_t**2 / self.Gamma * (Sigma_0_xx - 2)
+            - 8 * B_t**2 / self.Gamma**3 * Sigma_0_vv
+        )
         return Sigma_xv
-    
+
     def Sigma_inv_xx_t(self, t, Sigma_0_xx, Sigma_0_vv):
-        return schur_inverse_2x2(self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv), which_block='xx')
+        return schur_inverse_2x2(
+            self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv),
+            self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv),
+            self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv),
+            which_block="xx",
+        )
 
     def Sigma_inv_vv_t(self, t, Sigma_0_xx, Sigma_0_vv):
-        return schur_inverse_2x2(self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv), which_block='vv')
+        return schur_inverse_2x2(
+            self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv),
+            self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv),
+            self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv),
+            which_block="vv",
+        )
 
     def Sigma_inv_xv_t(self, t, Sigma_0_xx, Sigma_0_vv):
-        return schur_inverse_2x2(self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv), which_block='xv')
+        return schur_inverse_2x2(
+            self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv),
+            self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv),
+            self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv),
+            which_block="xv",
+        )
 
     def covariance(self, t, Sigma_0_xx, Sigma_0_vv):
         Sigma_xx = self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv)
@@ -133,7 +167,7 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
             ]
         )
         return L_t_inv_T
-    
+
     def compute_Sigma_t_inv(self, Sigma_t):
         """Compute Sigma_t^(-1) as defined in:
         ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=23&annotation=8M85CFQL))
