@@ -310,18 +310,31 @@ mu_xs = vmap(lambda t: cld.mean(t, **HSM_mean))(ts)[:, 0]
 xs = ys_to_plot[:, 0]
 norms_xx = vmap(lambda t: jnp.abs(A_xxs.at[t].get() * (mu_xs.at[t].get() - xs.at[t].get())))(jnp.arange(len(ts)))
 
+A_xvs = vmap(lambda t: cld.Lambda_xv_t(t, **HSM_cov))(ts)
+mu_xv = vmap(lambda t: cld.mean(t, **HSM_mean))(ts)[:, 1]
+xv = ys_to_plot[:, 1]
+norms_xv = vmap(lambda t: jnp.abs(A_xvs.at[t].get() * (mu_xv.at[t].get() - xv.at[t].get())))(jnp.arange(len(ts)))
+
 #%%
 # compute rolling mean
 
-min_step = 1000
-max_step = int(1.2*min_step)
+min_step = 0
+max_step = num_steps
 # Plot the differences for both vv and xx
 ts_to_plot = ts[min_step:max_step]
 norms_vv_to_plot = norms_vv[min_step:max_step]
 norms_xx_to_plot = norms_xx[min_step:max_step]
-
+norms_xv_to_plot = norms_xv[min_step:max_step]
 rollmean_vv = jnp.cumsum(norms_vv_to_plot) / jnp.arange(1, len(norms_vv_to_plot) + 1)
 rollmean_xx = jnp.cumsum(norms_xx_to_plot) / jnp.arange(1, len(norms_xx_to_plot) + 1)
+#%%
+#The ratio plot (option 1) or the log-scale ratio plot (option 2) are often good starting points, as they directly show the relative magnitude of the two quantities.
+
+# ratio of avv to axv
+ratio_vv2xx = norms_vv_to_plot / norms_xx_to_plot
+ratio_vv2xv = norms_vv_to_plot / norms_xv_to_plot
+rollmean_ratio_vv2xx = jnp.cumsum(ratio_vv2xx) / jnp.arange(1, len(ratio_vv2xx) + 1)
+rollmean_ratio_vv2xv = jnp.cumsum(ratio_vv2xv) / jnp.arange(1, len(ratio_vv2xv) + 1)
 
 # Create the mosaic layout
 mosaic = """
@@ -394,13 +407,15 @@ ax_dict['F'].set_xlabel("X", fontsize=12)
 ax_dict['F'].set_ylabel("P", fontsize=12)
 
 # Convergence means plot
-ax_dict['G'].plot(ts_to_plot, norms_vv_to_plot, label=r"$\|A_{vv}(t)(\mu_v(t) - v(t))\|$", color=p_color, alpha=0.3)
-ax_dict['G'].plot(ts_to_plot, norms_xx_to_plot, label=r"$\|A_{xx}(t)(\mu_x(t) - x(t))\|$", color=x_color, alpha=0.3)
-ax_dict['G'].plot(ts_to_plot, rollmean_vv, '-.', label="Rolling Mean vv", color=p_color, linewidth=2, zorder=10)
-ax_dict['G'].plot(ts_to_plot, rollmean_xx, '-.', label="Rolling Mean xx", color=x_color, linewidth=2, zorder=10)
+ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xx, label=r"$r_{vv/xx}$", color=p_color, alpha=1.0)
+ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xv, label=r"$r_{vv/xv}$", color=x_color, alpha=1.0)
+# ax_dict['G'].plot(ts_to_plot, norms_vv_to_plot, label=r"$\|A_{vv}(t)(\mu_v(t) - v(t))\|$", color=p_color, alpha=0.3
+# ax_dict['G'].plot(ts_to_plot, norms_xx_to_plot, label=r"$\|A_{xx}(t)(\mu_x(t) - x(t))\|$", color=x_color, alpha=0.3)
+# ax_dict['G'].plot(ts_to_plot, rollmean_vv, '-.', label="Rolling Mean vv", color=p_color, linewidth=2, zorder=10)
+# ax_dict['G'].plot(ts_to_plot, rollmean_xx, '-.', label="Rolling Mean xx", color=x_color, linewidth=2, zorder=10)
 ax_dict['G'].set_title(r"$t_0 = $" + f"{t0}, $t_1 = $" + f"{final_t:.2f}, " + 
               r"$\beta = $" + f"{config.cld_config.beta}, "+r"$\gamma = $" + f"{config.cld_config.gamma}" + 
-              "\n" + r"$\|A_{vv}(t)(\mu_{v}(t) - v(t))\|$ and $\|A_{xx}(t)(\mu_{x}(t) - x(t))\|$", fontsize=14)
+              "\n" + r"$r_{\frac{vv}{xx}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xx}(t)(\mu_{x}(t) - x(t))\|}$" + " and " + r"$r_{\frac{vv}{xv}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xv}(t)(\mu_{x}(t) - x(t))\|}$", fontsize=14, y=1.05)
 ax_dict['G'].set_xlabel("Time", fontsize=12)
 ax_dict['G'].set_ylabel("Value", fontsize=12)
 ax_dict['G'].set_xticklabels([f"{t:.2f}" for t in ts_to_plot[::max_step//10]])
