@@ -2,7 +2,7 @@ from typing import Union
 import jax.numpy as jnp
 import equinox as eqx
 import diffrax
-
+from linalg import schur_inverse_2x2
 
 class CriticallyDampedLangevinDynamics(eqx.Module):
     state_dim: int
@@ -77,16 +77,15 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         B_t = self.B(t)
         Sigma_xv = -B_t * Sigma_0_xx + 4 * B_t / self.Gamma**2 * Sigma_0_vv - 2 * B_t**2 / self.Gamma * (Sigma_0_xx - 2) - 8 * B_t**2 / self.Gamma**3 * Sigma_0_vv
         return Sigma_xv
+    
+    def Sigma_inv_xx_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        return schur_inverse_2x2(self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv), which_block='xx')
 
-    # inverses of these as Lambda_xx, Lambda_vv, Lambda_xv
-    def Lambda_xx_t(self, t, Sigma_0_xx, Sigma_0_vv):
-        return 1 / self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv)
+    def Sigma_inv_vv_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        return schur_inverse_2x2(self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv), which_block='vv')
 
-    def Lambda_vv_t(self, t, Sigma_0_xx, Sigma_0_vv):
-        return 1 / self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv)
-
-    def Lambda_xv_t(self, t, Sigma_0_xx, Sigma_0_vv):
-        return 1 / self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv)
+    def Sigma_inv_xv_t(self, t, Sigma_0_xx, Sigma_0_vv):
+        return schur_inverse_2x2(self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_vv_t(t, Sigma_0_xx, Sigma_0_vv), self.Sigma_xv_t(t, Sigma_0_xx, Sigma_0_vv), which_block='xv')
 
     def covariance(self, t, Sigma_0_xx, Sigma_0_vv):
         Sigma_xx = self.Sigma_xx_t(t, Sigma_0_xx, Sigma_0_vv)
@@ -134,6 +133,14 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
             ]
         )
         return L_t_inv_T
+    
+    def compute_Sigma_t_inv(self, Sigma_t):
+        """Compute Sigma_t^(-1) as defined in:
+        ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=23&annotation=8M85CFQL))
+        ([Dockhorn et al., 2022, p. 23](zotero://select/library/items/EW8U6A8H))"""
+        Sigma_xx, Sigma_xv, Sigma_vv = Sigma_t[0, 0], Sigma_t[0, 1], Sigma_t[1, 1]
+        det = Sigma_xx * Sigma_vv - Sigma_xv**2
+        return jnp.array([[Sigma_vv, -Sigma_xv], [-Sigma_xv, Sigma_xx]]) / det
 
     def compute_grad_u_t_log_p_t(self, Sigma_t, epsilon_2d):
         """Compute the gradient of log p_t(u_t | ·) with respect to u_t."""

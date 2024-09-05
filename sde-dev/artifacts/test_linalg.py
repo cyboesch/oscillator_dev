@@ -28,7 +28,8 @@ def test_schur_inverse_square_blocks(S_xx, S_vv, S_xv):
     S_inv_np = np.linalg.inv(S)
     
     # Extract components from numpy inverse
-    S_inv_xx_np, S_inv_vv_np = S_inv_np[0, 0], S_inv_np[1, 1]
+    S_inv_xx_np = S_inv_np[0, 0]
+    S_inv_vv_np = S_inv_np[1, 1]
     S_inv_xv_np = S_inv_np[0, 1]  # or S_inv_np[1, 0], they should be the same
     
     # Assert that our results match numpy's results

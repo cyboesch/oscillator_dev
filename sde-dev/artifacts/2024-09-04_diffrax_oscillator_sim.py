@@ -67,13 +67,13 @@ class SimulationConfig:
         return cls(
             init_seed=init_seed,
             init_config=InitConfig(
-                N=100000,
+                N=1_000_000,
                 rng=jr.PRNGKey(init_seed),
                 step_size=0.01
             ),
             cld_config=CLDConfig(
                 state_dim=1,
-                beta=0.0005,
+                beta=5.0,
                 M=1.0,
                 gamma=1.0,
             )
@@ -230,9 +230,6 @@ init_x0s_p0s = jax.device_put(
 #     return 1.0 * Q @ grad_z_H(state)  # (2,2) @ (2,) -> (2,)@
 
 
-t0 = 0.0
-t1 = 1.0
-dt0 = 0.001
 
 rng = jrnd.PRNGKey(4)
 bm = UnsafeBrownianPath(shape=(2 * cld.state_dim,), key=rng)
@@ -279,18 +276,24 @@ trajectory = jnp.zeros((num_steps, 2 * config.cld_config.state_dim))
 init_carry = (0.0, y0, trajectory, 0)
 final_t, final_y, full_trajectory, _ = simulation_loop(init_carry)
 
-# Generate time array
-ts = jnp.linspace(0, final_t, num_steps)
-
-# random subsample of 10000 for plotting
-rng, subkey = jax.random.split(rng)
-idxs = jax.random.choice(subkey, jnp.arange(num_steps), (10000,), replace=False)
-ys_to_plot = full_trajectory[idxs]
-ts_to_plot = [idxs]
 
 #%%
 # A_vv*(mu_v(t)-v(t))
 # Assuming HSM
+# Generate time array
+ts = jnp.linspace(0, final_t, num_steps)
+
+# random subsample of 10000 for plotting
+n_subsample = 1000
+rng, subkey = jax.random.split(rng)
+idxs = jax.random.choice(subkey, jnp.arange(num_steps), (n_subsample,), replace=False)
+
+ys_to_plot = full_trajectory[idxs]
+vs = ys_to_plot[:, 1]
+xs = ys_to_plot[:, 0]
+xs_to_plot = ys_to_plot[:, 0]
+vs_to_plot = ys_to_plot[:, 1]
+ts_to_plot = ts[idxs]
 HSM_cov = {
     "Sigma_0_xx": 0.0,
     "Sigma_0_vv": config.cld_config.gamma * config.cld_config.M,
@@ -300,26 +303,39 @@ HSM_mean = {
     "v_0": jnp.array([0.0]),
 }
 
-A_vvs = vmap(lambda t: cld.Lambda_vv_t(t, **HSM_cov))(ts)
+Sigma_inv_xxs = vmap(lambda t: cld.Sigma_inv_xx_t(t, **HSM_cov))(ts)
+Sigma_inv_vvs = vmap(lambda t: cld.Sigma_inv_vv_t(t, **HSM_cov))(ts)
+Sigma_inv_xvs = vmap(lambda t: cld.Sigma_inv_xv_t(t, **HSM_cov))(ts)
 mu_vs = vmap(lambda t: cld.mean(t, **HSM_mean))(ts)[:, 1]
-vs = ys_to_plot[:, 1]
-norms_vv = vmap(lambda t: jnp.abs(A_vvs.at[t].get() * (mu_vs.at[t].get() - vs.at[t].get())))(jnp.arange(len(ts)))
-
-A_xxs = vmap(lambda t: cld.Lambda_xx_t(t, **HSM_cov))(ts)
 mu_xs = vmap(lambda t: cld.mean(t, **HSM_mean))(ts)[:, 0]
-xs = ys_to_plot[:, 0]
-norms_xx = vmap(lambda t: jnp.abs(A_xxs.at[t].get() * (mu_xs.at[t].get() - xs.at[t].get())))(jnp.arange(len(ts)))
 
-A_xvs = vmap(lambda t: cld.Lambda_xv_t(t, **HSM_cov))(ts)
-mu_xv = vmap(lambda t: cld.mean(t, **HSM_mean))(ts)[:, 1]
-xv = ys_to_plot[:, 1]
-norms_xv = vmap(lambda t: jnp.abs(A_xvs.at[t].get() * (mu_xv.at[t].get() - xv.at[t].get())))(jnp.arange(len(ts)))
+norms_vv = vmap(lambda t: jnp.abs(Sigma_inv_vvs.at[t].get() * (mu_vs.at[t].get() - vs.at[t].get())))(jnp.arange(len(ts)))
+
+norms_xx = vmap(lambda t: jnp.abs(Sigma_inv_xxs.at[t].get() * (mu_xs.at[t].get() - xs.at[t].get())))(jnp.arange(len(ts)))
+
+norms_xv = vmap(lambda t: jnp.abs(Sigma_inv_xvs.at[t].get() * (mu_vs.at[t].get() - vs.at[t].get())))(jnp.arange(len(ts)))
 
 #%%
 # compute rolling mean
 
+#%%
+Sigma_inv_xxs
+# first index where A_xxs is equal to 00
+idx_xx = jnp.argmax(Sigma_inv_xxs == 0)
+idx_vv = jnp.argmax(A_vvs == 0)
+idx_xv = jnp.argmax(A_xvs == 0)
+#%%
+# print it
+print(f"First index where A_xxs is equal to 0: {idx_xx}")
+print(f"First index where A_vvs is equal to 0: {idx_vv}")
+print(f"First index where A_xvs is equal to 0: {idx_xv}")
 min_step = 0
-max_step = num_steps
+max_step = min(idx_xx, idx_vv)-1
+
+
+#%%
+min_t = ts[min_step]
+max_t = ts[max_step]
 # Plot the differences for both vv and xx
 ts_to_plot = ts[min_step:max_step]
 norms_vv_to_plot = norms_vv[min_step:max_step]
@@ -327,15 +343,17 @@ norms_xx_to_plot = norms_xx[min_step:max_step]
 norms_xv_to_plot = norms_xv[min_step:max_step]
 rollmean_vv = jnp.cumsum(norms_vv_to_plot) / jnp.arange(1, len(norms_vv_to_plot) + 1)
 rollmean_xx = jnp.cumsum(norms_xx_to_plot) / jnp.arange(1, len(norms_xx_to_plot) + 1)
-#%%
-#The ratio plot (option 1) or the log-scale ratio plot (option 2) are often good starting points, as they directly show the relative magnitude of the two quantities.
-
 # ratio of avv to axv
 ratio_vv2xx = norms_vv_to_plot / norms_xx_to_plot
 ratio_vv2xv = norms_vv_to_plot / norms_xv_to_plot
 rollmean_ratio_vv2xx = jnp.cumsum(ratio_vv2xx) / jnp.arange(1, len(ratio_vv2xx) + 1)
 rollmean_ratio_vv2xv = jnp.cumsum(ratio_vv2xv) / jnp.arange(1, len(ratio_vv2xv) + 1)
 
+
+#%%
+
+ratio_vv2xx[2000:20000]
+#%%
 # Create the mosaic layout
 mosaic = """
 AABBCC
@@ -345,9 +363,10 @@ GGGGGG
 
 fig = plt.figure(figsize=(10, 9), dpi=600)
 ax_dict = fig.subplot_mosaic(mosaic)
-
+times_info_str = r"$t_{min} = $" + f"{min_t:.2f}, "+r"$t_{max} = $" + f"{max_t:.1f}"
 fig.suptitle(
-    "Stochastic Oscillator System: Initial vs Final Distributions and Convergence", fontsize=16,
+    "Critically Damped Langevin Dynamics at "+
+              r"$\beta = $" + f"{config.cld_config.beta}, "+r"$\gamma = $" + f"{config.cld_config.gamma}", fontsize=16,
     y=1.02
 )
 
@@ -358,13 +377,13 @@ joint_cmap = "viridis"  # better heatmap coloring for joint distributions
 
 # Initial distribution of x
 sns.histplot(init_x0s_p0s[idxs, 0], kde=True, color=x_color, alpha=0.6, ax=ax_dict['A'])
-ax_dict['A'].set_title("Initial Distribution of X", fontsize=14)
+ax_dict['A'].set_title(r"$p_0(x)$", fontsize=14)
 ax_dict['A'].set_xlabel("X", fontsize=12)
 ax_dict['A'].set_ylabel("Density", fontsize=12)
 
 # Initial distribution of p
 sns.histplot(init_x0s_p0s[idxs, 1], kde=True, color=p_color, alpha=0.6, ax=ax_dict['B'])
-ax_dict['B'].set_title("Initial Distribution of P", fontsize=14)
+ax_dict['B'].set_title(r"$p_0(v)$", fontsize=14)
 ax_dict['B'].set_xlabel("P", fontsize=12)
 ax_dict['B'].set_ylabel("Density", fontsize=12)
 
@@ -377,26 +396,26 @@ sns.kdeplot(
     cbar=True,
     ax=ax_dict['C'],
 )
-ax_dict['C'].set_title("Initial Joint Distribution of X and P", fontsize=14)
-ax_dict['C'].set_xlabel("X", fontsize=12)
-ax_dict['C'].set_ylabel("P", fontsize=12)
+ax_dict['C'].set_title(r"$p_0(x,v)$", fontsize=14)
+ax_dict['C'].set_xlabel("x_0", fontsize=12)
+ax_dict['C'].set_ylabel("v_0", fontsize=12)
 
 # Final distribution of x
-sns.histplot(ys_to_plot[-1000:, 0], kde=True, color=x_color, alpha=0.6, ax=ax_dict['D'])
-ax_dict['D'].set_title("Final Distribution of X", fontsize=14)
-ax_dict['D'].set_xlabel("X", fontsize=12)
+sns.histplot(xs_to_plot, kde=True, color=x_color, alpha=0.6, ax=ax_dict['D'])
+ax_dict['D'].set_title(r"$p_{T}(x)$", fontsize=14)
+ax_dict['D'].set_xlabel("x_T", fontsize=12)
 ax_dict['D'].set_ylabel("Density", fontsize=12)
 
-# Final distribution of p
-sns.histplot(ys_to_plot[-1000:, 1], kde=True, color=p_color, alpha=0.6, ax=ax_dict['E'])
-ax_dict['E'].set_title("Final Distribution of P", fontsize=14)
-ax_dict['E'].set_xlabel("P", fontsize=12)
+# Final distribution of v
+sns.histplot(vs_to_plot, kde=True, color=p_color, alpha=0.6, ax=ax_dict['E'])
+ax_dict['E'].set_title(r"$p_{T}(v)$", fontsize=14)
+ax_dict['E'].set_xlabel("v_T", fontsize=12)
 ax_dict['E'].set_ylabel("Density", fontsize=12)
 
 # Final joint distribution of x and p
 sns.kdeplot(
-    x=ys_to_plot[-1000:, 0],
-    y=ys_to_plot[-1000:, 1],
+    x=xs_to_plot,
+    y=vs_to_plot,
     cmap=joint_cmap,
     fill=True,
     cbar=True,
@@ -407,21 +426,23 @@ ax_dict['F'].set_xlabel("X", fontsize=12)
 ax_dict['F'].set_ylabel("P", fontsize=12)
 
 # Convergence means plot
-ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xx, label=r"$r_{vv/xx}$", color=p_color, alpha=1.0)
-ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xv, label=r"$r_{vv/xv}$", color=x_color, alpha=1.0)
-# ax_dict['G'].plot(ts_to_plot, norms_vv_to_plot, label=r"$\|A_{vv}(t)(\mu_v(t) - v(t))\|$", color=p_color, alpha=0.3
-# ax_dict['G'].plot(ts_to_plot, norms_xx_to_plot, label=r"$\|A_{xx}(t)(\mu_x(t) - x(t))\|$", color=x_color, alpha=0.3)
-# ax_dict['G'].plot(ts_to_plot, rollmean_vv, '-.', label="Rolling Mean vv", color=p_color, linewidth=2, zorder=10)
-# ax_dict['G'].plot(ts_to_plot, rollmean_xx, '-.', label="Rolling Mean xx", color=x_color, linewidth=2, zorder=10)
-ax_dict['G'].set_title(r"$t_0 = $" + f"{t0}, $t_1 = $" + f"{final_t:.2f}, " + 
-              r"$\beta = $" + f"{config.cld_config.beta}, "+r"$\gamma = $" + f"{config.cld_config.gamma}" + 
-              "\n" + r"$r_{\frac{vv}{xx}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xx}(t)(\mu_{x}(t) - x(t))\|}$" + " and " + r"$r_{\frac{vv}{xv}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xv}(t)(\mu_{x}(t) - x(t))\|}$", fontsize=14, y=1.05)
+ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xx, linestyle='-.', label="Rollmean "+r"$r_{vv/xx}$", color=p_color, alpha=1.0)
+# ax_dict['G'].plot(ts_to_plot, ratio_vv2xx, label=r"$r_{vv/xx}$", color=p_color, alpha=0.3)
+ax_dict['G'].plot(ts_to_plot, rollmean_ratio_vv2xv, linestyle='-.', label="Rollmean "+r"$r_{vv/xv}$", color=x_color, alpha=1.0)
+# ax_dict['G'].plot(ts_to_plot, ratio_vv2xv, label=r"$r_{vv/xv}$", color=x_color, alpha=0.3)
+ax_dict['G'].set_title(r"Rolling Mean of Ratios $r_{\frac{vv}{xx}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xx}(t)(\mu_{x}(t) - x(t))\|}$" + " and " + r"$r_{\frac{vv}{xv}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xv}(t)(\mu_{x}(t) - x(t))\|}$"+"\n" + times_info_str, fontsize=14, y=1.05)
+
+# add red line for minimum value of ratio vv/vx
 ax_dict['G'].set_xlabel("Time", fontsize=12)
 ax_dict['G'].set_ylabel("Value", fontsize=12)
-ax_dict['G'].set_xticklabels([f"{t:.2f}" for t in ts_to_plot[::max_step//10]])
-ax_dict['G'].set_xticks(ts_to_plot[::max_step//10])
+ts_freq = 10
+ax_dict['G'].set_xticks(ts_to_plot[::max_step//ts_freq])
+ax_dict['G'].set_xticklabels([f"{t:.1f}" for t in ts_to_plot[::max_step//ts_freq]])
 ax_dict['G'].legend(fontsize=10)
-
+ax_dict['G'].set_xlim(min_t, max_t)
+ax_dict['G'].set_ylim(0,2 )
+# put yticklabels on the right side
+ax_dict['G'].yaxis.tick_right()
 plt.tight_layout()
 plt.show()
 
