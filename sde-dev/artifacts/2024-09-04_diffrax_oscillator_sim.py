@@ -78,7 +78,6 @@ class SimulationConfig:
                 gamma=1.0,
             )
         )
-i
 config = SimulationConfig.create()
 cld = CriticallyDampedLangevinDynamics(**config.cld_config.__dict__)
 
@@ -311,7 +310,7 @@ norms_vv = vmap(lambda t: jnp.abs(Sigma_inv_vvs.at[t].get() * (mu_vs.at[t].get()
 
 norms_xx = vmap(lambda t: jnp.abs(Sigma_inv_xxs.at[t].get() * (mu_xs.at[t].get() - xs.at[t].get())))(jnp.arange(len(ts)))
 
-norms_xv = vmap(lambda t: jnp.abs(Sigma_inv_xvs.at[t].get() * (mu_vs.at[t].get() - vs.at[t].get())))(jnp.arange(len(ts)))
+norms_xv = vmap(lambda t: jnp.abs(Sigma_inv_xvs.at[t].get() * (mu_xs.at[t].get() - xs.at[t].get())))(jnp.arange(len(ts)))
 
 #%%
 # compute rolling mean
