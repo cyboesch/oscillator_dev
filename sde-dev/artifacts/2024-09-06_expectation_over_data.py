@@ -74,7 +74,7 @@ class SimulationConfig:
             ),
             cld_config=CLDConfig(
                 state_dim=1,
-                beta=0.01,
+                beta=1.0,
                 M=1.0,
                 gamma=1.0,
             )
@@ -158,9 +158,9 @@ def run_simulation(y0):
     return full_trajectory
 
 # Set up multiple initial conditions
-n_data_samples = 1000
-rand_idxs = np.random.choice(np.arange(config.init_config.N), n_data_samples, replace=False)
-inits = init_x0s_p0s[rand_idxs]  # This should be your (n_inits, 2) array of initial conditions
+n_data_samples = 100
+rand_init_idxs = np.random.choice(np.arange(config.init_config.N), n_data_samples, replace=False)
+inits = init_x0s_p0s[rand_init_idxs]  # This should be your (n_inits, 2) array of initial conditions
 
 # Run the simulation for all initial conditions using vmap
 all_trajectories = jax.vmap(run_simulation)(inits)
@@ -247,21 +247,21 @@ p_color = "#ff7f0e"  # orange
 joint_cmap = "viridis"  # better heatmap coloring for joint distributions
 
 # Initial distribution of x
-sns.histplot(init_x0s_p0s[plot_idxs, 0], kde=True, color=x_color, alpha=0.6, ax=ax_dict['A'])
+sns.histplot(init_x0s_p0s[rand_init_idxs, 0], kde=True, color=x_color, alpha=0.6, ax=ax_dict['A'])
 ax_dict['A'].set_title(r"$p_0(x)$", fontsize=14)
 ax_dict['A'].set_xlabel("X", fontsize=12)
 ax_dict['A'].set_ylabel("Density", fontsize=12)
 
 # Initial distribution of p
-sns.histplot(init_x0s_p0s[plot_idxs, 1], kde=True, color=p_color, alpha=0.6, ax=ax_dict['B'])
+sns.histplot(init_x0s_p0s[rand_init_idxs, 1], kde=True, color=p_color, alpha=0.6, ax=ax_dict['B'])
 ax_dict['B'].set_title(r"$p_0(v)$", fontsize=14)
 ax_dict['B'].set_xlabel("P", fontsize=12)
 ax_dict['B'].set_ylabel("Density", fontsize=12)
 
 # Initial joint distribution of x and p
 sns.kdeplot(
-    x=init_x0s_p0s[plot_idxs, 0],
-    y=init_x0s_p0s[plot_idxs, 1],
+    x=init_x0s_p0s[rand_init_idxs, 0],
+    y=init_x0s_p0s[rand_init_idxs, 1],
     cmap=joint_cmap,
     fill=True,
     cbar=True,
@@ -300,7 +300,7 @@ ax_dict['F'].set_ylabel("P", fontsize=12)
 # Convergence means plot
 ax_dict['G'].plot(ts_to_plot, rollmean_norms_xv_to_plot, label=r'$\frac{1}{N}\sum_{n=0}^N\|A_{xv}(t)(\mu_{x_n}(t) - x_n(t))\|$', color=x_color, alpha=1.0)
 ax_dict['G'].plot(ts_to_plot, rollmean_norms_vv_to_plot, label=r'$\frac{1}{N}\sum_{n=0}^N\|A_{vv}(t)(\mu_{v_n}(t) - v_n(t))\|$', color=p_color, alpha=1.0)
-ax_dict['G'].set_title(r"Rolling Mean of Ratios $r_{\frac{vv}{xx}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xx}(t)(\mu_{x}(t) - x(t))\|}$" + " and " + r"$r_{\frac{vv}{xv}} = $" + r"$\frac{\|A_{vv}(t)(\mu_{v}(t) - v(t))\|}{\|A_{xv}(t)(\mu_{x}(t) - x(t))\|}$"+"\n" + times_info_str, fontsize=14, y=1.05)
+ax_dict['G'].set_title(r"Rolling Means", fontsize=14, y=1.05)
 
 # add red line for minimum value of ratio vv/vx
 ax_dict['G'].set_xlabel("Time", fontsize=12)
@@ -320,3 +320,4 @@ ax_dict['G'].yaxis.tick_left()
 plt.tight_layout()
 plt.show()
 # %%
+
