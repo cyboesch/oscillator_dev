@@ -74,7 +74,7 @@ class SimulationConfig:
             ),
             cld_config=CLDConfig(
                 state_dim=1,
-                beta=1.0,
+                beta=0.01,
                 M=1.0,
                 gamma=1.0,
             )
@@ -158,7 +158,7 @@ def run_simulation(y0):
     return full_trajectory
 
 # Set up multiple initial conditions
-n_data_samples = 100
+n_data_samples = 10
 rand_init_idxs = np.random.choice(np.arange(config.init_config.N), n_data_samples, replace=False)
 inits = init_x0s_p0s[rand_init_idxs]  # This should be your (n_inits, 2) array of initial conditions
 
@@ -321,3 +321,76 @@ plt.tight_layout()
 plt.show()
 # %%
 
+# %%
+# ... existing code ...
+
+# Create a new figure with two subplots
+fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), sharex=True)
+
+# Plot displacements (x)
+for i in range(n_data_samples):
+    ax1.plot(ts, all_trajectories[i, :, 0], alpha=0.1, color='blue')
+ax1.set_ylabel('Displacement (x)', fontsize=12)
+ax1.set_title('Trajectories of Displacement', fontsize=14)
+
+# Plot velocities (v)
+for i in range(n_data_samples):
+    ax2.plot(ts, all_trajectories[i, :, 1], alpha=0.1, color='red')
+ax2.set_xlabel('Time', fontsize=12)
+ax2.set_ylabel('Velocity (v)', fontsize=12)
+ax2.set_title('Trajectories of Velocity', fontsize=14)
+
+# Adjust layout and display
+plt.tight_layout()
+plt.show()
+
+# %%
+# import matplotlib.animation as animation
+# # import numpy as np
+
+# # ... existing code ...
+
+# # Create a new figure for the animation
+# fig_anim, ax_anim = plt.subplots(figsize=(8, 6))
+
+# # Function to update the plot for each frame
+# def update(frame):
+#     ax_anim.clear()
+    
+#     x_data = all_trajectories[:, frame, 0]
+#     v_data = all_trajectories[:, frame, 1]
+    
+#     # Check if there's enough variation in the data
+#     if jnp.ptp(x_data) > 1e-8 and np.ptp(v_data) > 1e-8:
+#         try:
+#             sns.kdeplot(
+#                 x=x_data,
+#                 y=v_data,
+#                 cmap=joint_cmap,
+#                 fill=True,
+#                 cbar=False,
+#                 ax=ax_anim,
+#             )
+#         except ValueError:
+#             # If kdeplot fails, fall back to scatter plot
+#             ax_anim.scatter(x_data, v_data, alpha=0.5, s=1)
+#     else:
+#         # If not enough variation, just plot points
+#         ax_anim.scatter(x_data, v_data, alpha=0.5, s=1)
+    
+#     ax_anim.set_title(f"Joint Distribution of X and P at t = {ts[frame]:.2f}", fontsize=14)
+#     ax_anim.set_xlabel("X", fontsize=12)
+#     ax_anim.set_ylabel("P", fontsize=12)
+#     ax_anim.set_xlim(xs.min(), xs.max())
+#     ax_anim.set_ylim(vs.min(), vs.max())
+
+# # Create the animation
+# frames = range(0, num_steps, num_steps // 100)  # 100 frames total
+# anim = animation.FuncAnimation(fig_anim, update, frames=frames, interval=50)
+
+# # Save the animation as a GIF file
+# anim.save('joint_distribution_evolution.gif', writer='pillow', fps=20)
+
+# plt.close(fig_anim)
+
+# print("Animation saved as 'joint_distribution_evolution.gif'")
