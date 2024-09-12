@@ -1,89 +1,123 @@
-from jax.scipy.stats import multivariate_normal
-import jax.random as random
+import jax
+#%%
 import jax.numpy as jnp
+import jax.random as random
+from jax.scipy.stats import multivariate_normal
 import matplotlib.pyplot as plt
+from matplotlib.animation import FuncAnimation
+import numpy as np
+from IPython.display import HTML
+import matplotlib.animation as animation
 
-def sample_1d_mog(mu1, stddev1, mu2, stddev2, p1, key):
-    """
-    Samples from a superposition of two Gaussian distributions in 2D using JAX.
-    """
-    u_rng, z_rng = random.split(key)
-    u = random.uniform(u_rng)
-    mu = jnp.where(u < p1, mu1, mu2)
-    stddev = jnp.where(u < p1, stddev1, stddev2)
-    return mu + stddev*random.normal(z_rng)
-
-def sample_from_superposition(mu1, sigma1, mu2, sigma2, p1, n_samples, key):
-    """
-    Samples from a superposition of two Gaussian distributions in 2D using JAX.
-    """
-    key1, key2, key3 = random.split(key, 3)
+@jax.jit
+def sample_mog(key, means, covariances, weights):
+    n_components = weights.shape[0]
     
-    # Sample from both Gaussians
-    samples1 = random.multivariate_normal(key1, mu1, sigma1, shape=(n_samples,))
-    samples2 = random.multivariate_normal(key2, mu2, sigma2, shape=(n_samples,))
+    key_select, key_sample = random.split(key)
     
-    # Generate random numbers to decide which sample to keep
-    choices = random.uniform(key3, shape=(n_samples,)) < p1
+    component_index = random.choice(
+        key_select, 
+        n_components, 
+        p=weights
+    )
     
-    # Select samples based on the choices
-    samples = jnp.where(choices[:, None], samples1, samples2)
+    sample = random.multivariate_normal(
+        key_sample, 
+        means[component_index], 
+        covariances[component_index]
+    )
     
-    return samples
+    return sample
 
-def gaussian_pdf(x1, x2, mu, sigma):
-    """Compute the PDF of a 2D Gaussian distribution."""
-    pos = jnp.dstack((x1, x2))
-    return multivariate_normal.pdf(pos, mean=mu, cov=sigma)
+@jax.jit
+def mog_pdf(x, means, covariances, weights):
+    def component_pdf(mean, cov):
+        return multivariate_normal.pdf(x, mean=mean, cov=cov)
+    
+    pdfs = jax.vmap(component_pdf)(means, covariances)
+    return jnp.sum(weights[:, None, None] * pdfs, axis=0)
 
+@jax.jit
+def mog_logpdf(x, means, covariances, weights):
+    def component_logpdf(mean, cov):
+        return multivariate_normal.logpdf(x, mean=mean, cov=cov)
+    
+    logpdfs = jax.vmap(component_logpdf)(means, covariances)
+    return jax.nn.logsumexp(jnp.log(weights)[:, None, None] + logpdfs, axis=0)
 
-if __name__ == "__main__":
-    # Parameters for the first Gaussian
-    mu1 = jnp.array([1, 1])
-    sigma1 = jnp.array([[0.01, 0.01], [0.01, 0.4]])
+@jax.jit
+def mog_energy(x, means, covariances, weights):
+    return -mog_logpdf(x, means, covariances, weights)
 
-    # Parameters for the second Gaussian
-    mu2 = jnp.array([-1, 0])
-    sigma2 = jnp.array([[0.1, -0.03], [-.03, 0.1]])
+#%%
+means = jnp.array([
+    [1.0, 1.0],
+    [-1.0, 0.0],
+    [0.0, -1.0]
+])
+covariances = jnp.array([
+    [[0.01, 0.01], [0.01, 0.4]],
+    [[0.1, -0.03], [-0.03, 0.1]],
+    [[0.2, 0.0], [0.0, 0.2]]
+])
+weights = jnp.array([0.3, 0.3, 0.4])
 
-    # Probability of sampling from the first Gaussian
-    p1 = 0.5
+# Number of samples to generate
+n_samples = 1000
 
-    # Number of samples to generate
-    n_samples = 1000
+# JAX random key
+key = random.PRNGKey(42)
 
-    # JAX random key
-    key = random.PRNGKey(0)
+# Generate samples
+keys = random.split(key, n_samples)
+samples = jax.vmap(lambda key: sample_mog(key, means, covariances, weights))(keys)
 
-    # Generate samples
-    samples = sample_from_superposition(mu1, sigma1, mu2, sigma2, p1, n_samples, key)
+# Create a grid for the contour plot
+x_lim, y_lim = 2, 2
+res = 0.01
+x, y = jnp.mgrid[-x_lim:x_lim:res, -y_lim:y_lim:res]
+pos = jnp.dstack((x, y))
 
-    # Create a grid for the contour plot
-    x_lim = 2
-    y_lim = 2
-    x, y = jnp.mgrid[-x_lim:x_lim:.01, -y_lim:y_lim:.01]
+# Compute the PDF, logPDF, and energy
+z_pdf = mog_pdf(pos, means, covariances, weights)
+z_logpdf = mog_logpdf(pos, means, covariances, weights)
+z_energy = mog_energy(pos, means, covariances, weights)
 
-    # Compute the PDF for both Gaussians
-    z1 = gaussian_pdf(x, y, mu1, sigma1)
-    z2 = gaussian_pdf(x, y, mu2, sigma2)
+# Create a new figure with a 2x3 grid of subplots
+fig, axs = plt.subplots(2, 3, figsize=(18, 12))
+fig.suptitle('Mixture of Gaussians Visualization', fontsize=16)
 
-    # Combine the PDFs according to the mixture weights
-    z = p1 * z1 + (1 - p1) * z2
+# 2D Contour plots
+contour_plots = [
+    (axs[0, 0], z_pdf, 'PDF'),
+    (axs[0, 1], z_logpdf, 'Log PDF'),
+    (axs[0, 2], z_energy, 'Energy')
+]
 
-    # Create the plot
-    plt.figure(figsize=(8, 6))
+for ax, z, title in contour_plots:
+    cf = ax.contourf(x, y, z, levels=20, cmap='viridis')
+    ax.set_title(f'{title} (2D Contour)')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    fig.colorbar(cf, ax=ax)
+    ax.scatter(samples[:, 0], samples[:, 1], color='red', alpha=0.5, s=1)
 
-    # Plot the contour of the combined distribution
-    plt.contourf(x, y, z, levels=20, cmap='viridis', alpha=0.7)
-    plt.colorbar(label='Probability Density')
+# 3D Surface plots
+surface_plots = [
+    (axs[1, 0], z_pdf, 'PDF'),
+    (axs[1, 1], z_logpdf, 'Log PDF'),
+    (axs[1, 2], z_energy, 'Energy')
+]
 
-    # Plot the samples
-    plt.scatter(samples[:, 0], samples[:, 1], color='red', alpha=0.5, s=10, label='Samples')
+for ax, z, title in surface_plots:
+    ax.remove()
+    ax = fig.add_subplot(2, 3, 4 + surface_plots.index((ax, z, title)), projection='3d')
+    surf = ax.plot_surface(x, y, z, cmap='viridis')
+    ax.set_title(f'{title} (3D Surface)')
+    ax.set_xlabel('X')
+    ax.set_ylabel('Y')
+    ax.set_zlabel(title)
+    fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
 
-    plt.title('Superposition of Two Gaussians in 2D with Samples')
-    plt.xlabel('X')
-    plt.ylabel('Y')
-    plt.legend()
-    plt.axis('equal')
-    plt.tight_layout()
-    plt.show()
+plt.tight_layout()
+plt.show()
