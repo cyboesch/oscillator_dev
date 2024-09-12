@@ -3,6 +3,7 @@ import jax
 import jax.numpy as jnp
 import jax.random as random
 from jax.scipy.stats import multivariate_normal
+from jax.scipy.special import logsumexp
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 import numpy as np
@@ -35,7 +36,7 @@ def mog_pdf(x, means, covariances, weights):
         return multivariate_normal.pdf(x, mean=mean, cov=cov)
     
     pdfs = jax.vmap(component_pdf)(means, covariances)
-    return jnp.sum(weights[:, None, None] * pdfs, axis=0)
+    return jnp.sum(weights * pdfs)
 
 @jax.jit
 def mog_logpdf(x, means, covariances, weights):
@@ -43,7 +44,7 @@ def mog_logpdf(x, means, covariances, weights):
         return multivariate_normal.logpdf(x, mean=mean, cov=cov)
     
     logpdfs = jax.vmap(component_logpdf)(means, covariances)
-    return jax.nn.logsumexp(jnp.log(weights)[:, None, None] + logpdfs, axis=0)
+    return logsumexp(jnp.log(weights) + logpdfs)
 
 @jax.jit
 def mog_energy(x, means, covariances, weights):
@@ -79,9 +80,9 @@ x, y = jnp.mgrid[-x_lim:x_lim:res, -y_lim:y_lim:res]
 pos = jnp.dstack((x, y))
 
 # Compute the PDF, logPDF, and energy
-z_pdf = mog_pdf(pos, means, covariances, weights)
-z_logpdf = mog_logpdf(pos, means, covariances, weights)
-z_energy = mog_energy(pos, means, covariances, weights)
+z_pdf = jax.vmap(lambda p: mog_pdf(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
+z_logpdf = jax.vmap(lambda p: mog_logpdf(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
+z_energy = jax.vmap(lambda p: mog_energy(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
 
 # Create a new figure with a 2x3 grid of subplots
 fig, axs = plt.subplots(2, 3, figsize=(18, 12))
