@@ -8,7 +8,7 @@ from cld import CriticallyDampedLangevinDynamics
 
 @pytest.fixture
 def cld_instance():
-    return CriticallyDampedLangevinDynamics(state_dim=10, M=1.0, gamma=1.0, beta=1.0)
+    return CriticallyDampedLangevinDynamics(dim=10, M=1.0, gamma=1.0, beta=1.0)
 
 
 def test_initialization(cld_instance):
@@ -152,15 +152,15 @@ def test_compute_L_t_inv_T(cld_instance):
 
 def test_invalid_parameters():
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDynamics(state_dim=-1, M=1.0, beta=1.0, gamma=1.0)
+        CriticallyDampedLangevinDynamics(dim=-1, M=1.0, beta=1.0, gamma=1.0)
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDynamics(state_dim=10, M=-1.0, beta=1.0, gamma=1.0)
+        CriticallyDampedLangevinDynamics(dim=10, M=-1.0, beta=1.0, gamma=1.0)
     with pytest.raises(ValueError):
-        CriticallyDampedLangevinDynamics(state_dim=10, M=1.0, beta=-1.0, gamma=1.0)
+        CriticallyDampedLangevinDynamics(dim=10, M=1.0, beta=-1.0, gamma=1.0)
 
 
 def test_jit_compilation():
-    cld = CriticallyDampedLangevinDynamics(state_dim=10, M=1.0, beta=1.0, gamma=1.0)
+    cld = CriticallyDampedLangevinDynamics(dim=10, M=1.0, beta=1.0, gamma=1.0)
     jitted_cld = eqx.filter_jit(lambda: cld)()
     assert isinstance(jitted_cld, CriticallyDampedLangevinDynamics)
 

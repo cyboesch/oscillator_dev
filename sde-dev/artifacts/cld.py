@@ -1,4 +1,5 @@
-from typing import Union
+from typing import Callable, Union
+from jax import grad
 import jax.numpy as jnp
 import equinox as eqx
 import diffrax
@@ -8,37 +9,60 @@ from linalg import schur_inverse_2x2
 class CriticallyDampedLangevinDynamics(eqx.Module):
     state_dim: int
     M: float
-    gamma: float
+    gamma: float 
     beta: float
+    H: Callable
     Gamma: Union[float, None] = None  # Default to sqrt(4 * M)
 
     def __init__(
         self,
-        state_dim: int,
+        dim: int,
         M: float,
         beta: float,
         gamma: float,
         Gamma: Union[float, None] = None,
+        Hamiltonian: Union[Callable, None] = None,
     ):
-        if state_dim <= 0 or M <= 0 or beta <= 0:
+        if dim <= 0 or M <= 0 or beta <= 0:
             raise ValueError("All parameters must be positive.")
-        self.state_dim = state_dim
+        self.state_dim = dim
         self.M = M
         self.Gamma = Gamma if Gamma is not None else jnp.sqrt(4 * M)
         self.gamma = gamma
         self.beta = beta
+        if Hamiltonian is None:
+            self.H = lambda x, v: jnp.dot(x, x) - 0.5 * jnp.dot(v, v) / M
+        else:
+            self.H = lambda x, v: Hamiltonian(jnp.concatenate([x, v]))
 
     def drift(self, t, u, args):
         x, v = u[: self.state_dim], u[self.state_dim :]
-        f_x = self.beta * v / self.M
-        f_v = -self.beta * x - self.beta * self.Gamma * v / self.M
-        return jnp.concatenate([f_x, f_v])
+        x_dot = -1.0 * grad(self.H, argnums=1)(x, v)  # e.g., M^-1 v
+        v_dot = grad(self.H, argnums=0)(x, v)  # e.g., -x
+        friction_term = -self.Gamma * x_dot  # e.g., -Γ M^-1 v
+        hamiltonian_terms = jnp.concatenate([x_dot, v_dot])
+        ou_process_terms = jnp.concatenate([jnp.zeros_like(x), friction_term])
+
+        return self.beta * (hamiltonian_terms + ou_process_terms)
 
     def diffusion(self, t, u, args):
-        G = jnp.zeros((2 * self.state_dim, 2 * self.state_dim))
-        G = G.at[self.state_dim :, self.state_dim :].set(
-            jnp.sqrt(2 * self.Gamma * self.beta) * jnp.eye(self.state_dim)
-        )
+        """
+        Compute the diffusion term of the CLD process at time t.
+
+        The diffusion term is given by:
+        [      0      |      0      ]
+        [-------------|-------------]
+        [      0      |  σ * I      ]
+        where I is the identity matrix of size state_dim x state_dim
+        and σ = sqrt(2 * Γ * β)
+        """
+
+        zero_block = jnp.zeros((self.state_dim, self.state_dim))
+        sigma = jnp.sqrt(2 * self.Gamma * self.beta)
+        diffusion_block = sigma * jnp.eye(self.state_dim)
+
+        G = jnp.block([[zero_block, zero_block], [zero_block, diffusion_block]])
+
         return G
 
     def get_terms(self, bm):
@@ -131,14 +155,14 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         return jnp.kron(Sigma_t, jnp.eye(self.state_dim))
 
     def get_dsm_kernel_params(self, u_0, t):
-        """“when conditioning on initial data and velocity samples x0 and v0 (as in denoising score matching (DSM)), the mean and covariance matrix of the perturbation kernel p(ut|u0) can be obtained by setting μ0 = (x0, v0)>, Σ0xx = 0, and Σ0vv = 0.” ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=6ZWQTEZZ))"""
+        """ "when conditioning on initial data and velocity samples x0 and v0 (as in denoising score matching (DSM)), the mean and covariance matrix of the perturbation kernel p(ut|u0) can be obtained by setting μ0 = (x0, v0)>, Σ0xx = 0, and Σ0vv = 0." ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=6ZWQTEZZ))"""
         x_0, v_0 = u_0[: self.state_dim], u_0[self.state_dim :]
         mean = self.mean(t, x_0, v_0)
         cov = self.covariance(t, Sigma_0_xx=0, Sigma_0_vv=0)
         return mean, cov
 
     def get_hsm_kernel_params(self, x_0, t, gamma=1.0):
-        """“conditioning only on initial data samples x0 and marginalizing over the full initial velocity distribution (as in our hybrid score matching (HSM), see Sec. C), the mean and covariance matrix of the perturbation kernel p(ut|x0) can be obtained by setting μ0 = (x0, 0d)>, Σ0xx = 0, and Σ0vv = γM” ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=CW5PUPSH))"""
+        """ "conditioning only on initial data samples x0 and marginalizing over the full initial velocity distribution (as in our hybrid score matching (HSM), see Sec. C), the mean and covariance matrix of the perturbation kernel p(ut|x0) can be obtained by setting μ0 = (x0, 0d)>, Σ0xx = 0, and Σ0vv = γM" ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=CW5PUPSH))"""
         v_0_hsm = jnp.zeros_like(x_0)
         mean = self.mean(t, x_0, v_0_hsm)
         cov = self.covariance(t, Sigma_0_xx=0, Sigma_0_vv=gamma * self.M)
