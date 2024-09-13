@@ -14,7 +14,8 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
     Gamma: Union[float, None] = None  # Default to sqrt(4 * M)
     U: Union[Callable, None] = None
     V: Union[Callable, None] = None
-
+    score_fn: Union[Callable, None] = None
+    
     def __init__(
         self,
         state_dim: int,
@@ -24,6 +25,7 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         Gamma: Union[float, None] = None,
         U: Union[Callable, None] = None,
         V: Union[Callable, None] = None,
+        score_fn: Union[Callable, None] = None,
     ):
         if state_dim < 1 or M <= 0 or beta <= 0:
             raise ValueError("All parameters must be positive.")
@@ -43,9 +45,10 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
             self.V = lambda v: 0.5 * jnp.sum(v**2) / self.M
         else:
             self.V = V
+        self.score_fn = score_fn
 
     @eqx.filter_jit
-    def drift(self, t, u, args):
+    def fwd_drift(self, t, u, args):
         x, v = u[:self.state_dim], u[self.state_dim:]
         
         # Compute Hamiltonian terms
@@ -58,9 +61,32 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
                                             friction_term])
 
         return self.beta * (hamiltonian_terms + ou_process_terms)
-
+    
     @eqx.filter_jit
-    def diffusion(self, t, u, args):
+    def bwd_drift(self, t, u, args):
+        x, v = u[:self.state_dim], u[self.state_dim:]
+        
+        # Compute Hamiltonian terms (A_H)
+        x_dot = -grad(self.V)(v)  # e.g., -M^-1 v
+        v_dot = grad(self.U)(x, t)  # e.g., x
+        
+        # Compute Ornstein-Uhlenbeck terms (A_O)
+        friction_term = -self.Gamma * grad(self.V)(v)  # e.g., -Γ M^-1 v
+        
+        # Compute score function term (S)
+        s = self.score_fn(u, t)
+        s_v = s[self.state_dim:]
+        score_term = 2 * self.Gamma * (s_v + grad(self.V)(v))
+        
+        # Combine all terms
+        hamiltonian_terms = jnp.concatenate([x_dot, v_dot])
+        ou_process_terms = jnp.concatenate([jnp.zeros_like(x), friction_term])
+        score_terms = jnp.concatenate([jnp.zeros_like(x), score_term])
+        
+        return self.beta * (hamiltonian_terms + ou_process_terms + score_terms)
+    
+    @eqx.filter_jit
+    def fwd_diffusion(self, t, u, args):
         """
         Compute the diffusion term of the CLD process at time t.
 
@@ -79,10 +105,24 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         G = jnp.block([[zero_block, zero_block], [zero_block, diffusion_block]])
 
         return G
+    
+    @eqx.filter_jit
+    def bwd_diffusion(self, t, u, args):
+        zero_block = jnp.zeros((self.state_dim, self.state_dim))
+        sigma = jnp.sqrt(2 * self.Gamma * self.beta)
+        diffusion_block = sigma * jnp.eye(self.state_dim)
+        G = jnp.block([[zero_block, zero_block], [zero_block, diffusion_block]])
 
-    def get_terms(self, bm):
-        drift_term = diffrax.ODETerm(self.drift)
-        diffusion_term = diffrax.ControlTerm(self.diffusion, bm)
+        return G
+    
+    def get_fwd_terms(self, bm):
+        drift_term = diffrax.ODETerm(self.fwd_drift)
+        diffusion_term = diffrax.ControlTerm(self.fwd_diffusion, bm)
+        return diffrax.MultiTerm(drift_term, diffusion_term)
+    
+    def get_bwd_terms(self, bm):
+        drift_term = diffrax.ODETerm(self.bwd_drift)
+        diffusion_term = diffrax.ControlTerm(self.bwd_diffusion, bm)
         return diffrax.MultiTerm(drift_term, diffusion_term)
 
     def B(self, t):
