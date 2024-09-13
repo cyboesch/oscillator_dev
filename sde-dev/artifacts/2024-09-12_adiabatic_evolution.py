@@ -1,117 +1,165 @@
 # %%
 # %%
 # %%
+from dataclasses import dataclass
 from typing import Callable, Union
-import jax.numpy as jnp
-import jax.random as jrnd
-from diffrax import MultiTerm, ODETerm, ControlTerm, ItoMilstein, UnsafeBrownianPath
 import matplotlib.pyplot as plt
-from tqdm.auto import tqdm
-from jax import jit
-from jax.lax import map
-
-import diffrax
-from matplotlib import gridspec
-import matplotlib.pyplot as plt
-from diffrax import ControlTerm, MultiTerm, ODETerm
-from jax import grad, vmap
 import jax
 import jax.numpy as jnp
+from diffrax import Euler, ItoMilstein, UnsafeBrownianPath
+from jax import config, devices, jit
+from jaxtyping import Scalar, Array, Float, Int
 import jax.random as jr
-import lineax as lx
-import numpy as np
-from scipy import stats
 
-from jax import jit, devices, config
-# Plot the results
-import matplotlib.pyplot as plt
-import seaborn as sns
+from plot_helpers import plot_time_dependent_energy
 
-sns.set_style("whitegrid")
-plt.rcParams["font.family"] = "serif"
-plt.rcParams["font.serif"] = ["Times New Roman"] + plt.rcParams["font.serif"]
+from thermoai.distributions import mog_energy as mog_energy_fn, sample_mog
+from cld import CriticallyDampedLangevinDynamics
 
 config.update("jax_enable_x64", True)
 
-from thermoai.distributions import mog_energy 
-
 cpu_devices = devices("cpu")
 
-from dataclasses import dataclass
-import jax.random as jr
-from cld import CriticallyDampedLangevinDynamics
+
 @dataclass
 class CLDConfig:
-    dim: int
+    state_dim: int
     beta: float
     M: float
     gamma: float
     Gamma: Union[float, None] = None
-    H: Union[Callable, None] = None
-@dataclass
-class InitConfig:
-    N: int
-    rng: jr.PRNGKey
-    step_size: float
-#%%
-
-#%%
+    U: Union[Callable, None] = None  # potential energy function
 
 
+# %%
 
-#%%
-# Create energy function with time-varying parameters
-# TODO: Implement a function that defines the energy landscape
-# with parameters that change over time
-energy_fn = lambda u, t: None 
+# Create time-dependent energy function 
+means = jnp.array([-4.0, 0.0])
+covariances = jnp.array([1.0, 1.0])
+weights = jnp.array([0.5, 0.5])
 
-#%%
+# --- Make time-dependent weights
+weights_t = lambda t: jnp.array(
+    [weights[0] * (1 - t), weights[1] + t * (1 - weights[1])]
+)
+
+params_fn = lambda t: {
+    "means": means,
+    "covariances": covariances,
+    "weights": weights_t(t),
+}
+
+def U_x_t(x: Float, t: Float):
+    # At time t=0, this function returns the energy of a 1D bimodal Gaussian
+    # At time t=1, this function returns the energy of a 1D Normal
+    return mog_energy_fn(x, **params_fn(t))
+
+
+# %%
+
+# Plot weights as a sanity check.
+plt.plot(
+    jnp.linspace(0, 1, 100),
+    jax.vmap(weights_t)(jnp.linspace(0, 1, 100)),
+    label=["$\pi_0(t)$", "$\pi_1(t)$"],
+)
+plt.legend()
+plt.show()
+# Plot the energy landscape at different times.
+
+plot_time_dependent_energy(U_x_t)
+
+# %%
+
 # Create SDE terms
+time_dependent_potential = CLDConfig(
+    state_dim=1,
+    beta=0.01,
+    M=1.0,
+    gamma=1.0,
+    U=U_x_t,
+)
+
+cld = CriticallyDampedLangevinDynamics(**time_dependent_potential.__dict__)
+
+# %%
+# Set up solve parameters
+solver = Euler()
 
 
-cld_config = CLDConfig(dim=1, beta=1.0, M=1.0, gamma=1.0, H=energy_fn)
+def _split_state(y):
+    state_dim = time_dependent_potential.state_dim
+    return y[:state_dim], y[state_dim:]
 
-cld = CriticallyDampedLangevinDynamics(**cld_config)
-#%%
-# Create a simple solver for the SDE
 
-# Set up solver
-solver = ItoMilstein()
-solver_state = solver.init(sde_terms, t0=0.0, t1=t_final, y0=jnp.empty(2 * cld.state_dim), args=None)
+def solve_fwd(key, x0, v0, dt, t0=0.0, t1=1.0):
+    brownian = UnsafeBrownianPath(
+        shape=(2 * time_dependent_potential.state_dim,), key=key
+    )
+    terms = cld.get_terms(brownian)
 
-@jit
-def ItoMilstein_step(t, y):
-    next_t = t + step_size
-    next_y = solver.step(sde_terms, t, next_t, y, None, solver_state, made_jump=False)[0]
-    return next_t, next_y
+    @jax.jit
+    def solve_step(carry, _):
+        y, t = carry
+        next_y = solver.step(terms, t, t + dt, y, None, None, made_jump=False)[0]
+        return (next_y, t + dt), next_y
+    
+    (y, t), ys = jax.lax.scan(solve_step, (jnp.array([x0, v0]), t0), length=int((t1 - t0) / dt))
+    x, v = _split_state(y)
+    xs, vs = jax.vmap(_split_state)(ys)
+    return (x, v, t), (xs, vs)
 
-@jit
-def simulation_step(carry):
-    t, y, trajectory, i = carry
-    next_t, next_y = ItoMilstein_step(t, y)
-    trajectory = trajectory.at[i].set(next_y)
-    return next_t, next_y, trajectory, i + 1
 
-@jit
-def simulation_loop(init_carry):
-    def cond_fun(carry):
-        t, _, _, i = carry
-        return (t < t_final) & (i < num_steps)
+# %%
+# Example usage for single trajectory:
 
-    return jax.lax.while_loop(cond_fun, simulation_step, init_carry)
+key = jax.random.PRNGKey(0)
+x0 = 0.0
+v0 = 0.0
+dt = 1e-5
+t0, t1 = 0.0, 1.0
 
-# Modify the simulation to accept initial conditions
-@jit
-def run_simulation(y0):
-    trajectory = jnp.zeros((num_steps, 2 * config.cld_config.state_dim))
-    init_carry = (0.0, y0, trajectory, 0)
-    _, _, full_trajectory, _ = simulation_loop(init_carry)
-    return full_trajectory
+(x, v, t), (xs, vs) = solve_fwd(key, x0, v0, dt, t0, t1)
 
-# Set up multiple initial conditions
-n_data_samples = 10
-rand_init_idxs = np.random.choice(np.arange(config.init_config.N), n_data_samples, replace=False)
-inits = init_x0s_p0s[rand_init_idxs]  # This should be your (n_inits, 2) array of initial conditions
+# %%
+# Example usage for sampling N trajectories in parallel:
+N = 1000
+dt = 1e-2
+t0, t1 = 0.0, 1.0
 
-# Run the simulation for all initial conditions using vmap
-all_trajectories = jax.vmap(run_simulation)(inits)
+
+# --- Get randomness
+x0s_key, v0s_key, solve_key = jax.random.split(key, 3)
+x0s_keys = jax.random.split(x0s_key, N)
+v0s_keys = jax.random.split(v0s_key, N)
+solve_keys = jax.random.split(solve_key, N)
+
+# --- Sample initial conditions at t=0.
+x0s = jax.vmap(lambda key: sample_mog(key, **params_fn(0)))(x0s_keys)
+v0s = jax.vmap(lambda key: jr.normal(key))(v0s_keys)
+
+
+# --- Solve N trajectories in parallel, with different key, x0, v0.
+(xs, vs, ts), _ = jax.vmap(
+    lambda key, x0, v0: solve_fwd(key, x0, v0, dt, t0, t1)
+)(solve_keys, x0s, v0s)
+
+
+# %%
+# Visualize initial and final distributions.
+# intiial
+plt.hist(x0s, bins=50, alpha=0.5, label="$x_0$")
+plt.legend()
+plt.hist(xs, bins=50, alpha=0.5, label="$x_T$")
+plt.legend()
+plt.show()
+
+# v0
+plt.hist(v0s, bins=50, alpha=0.5, label="$v_0$")
+plt.legend()
+plt.hist(vs, bins=50, alpha=0.5, label="$v_T$")
+plt.legend()
+plt.show()
+
+
+# %%

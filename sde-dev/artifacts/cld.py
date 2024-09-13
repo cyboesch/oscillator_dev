@@ -9,42 +9,57 @@ from linalg import schur_inverse_2x2
 class CriticallyDampedLangevinDynamics(eqx.Module):
     state_dim: int
     M: float
-    gamma: float 
+    gamma: float
     beta: float
-    H: Callable
     Gamma: Union[float, None] = None  # Default to sqrt(4 * M)
+    U: Union[Callable, None] = None
+    V: Union[Callable, None] = None
 
     def __init__(
         self,
-        dim: int,
+        state_dim: int,
         M: float,
         beta: float,
         gamma: float,
         Gamma: Union[float, None] = None,
-        Hamiltonian: Union[Callable, None] = None,
+        U: Union[Callable, None] = None,
+        V: Union[Callable, None] = None,
     ):
-        if dim <= 0 or M <= 0 or beta <= 0:
+        if state_dim < 1 or M <= 0 or beta <= 0:
             raise ValueError("All parameters must be positive.")
-        self.state_dim = dim
+        self.state_dim = state_dim
         self.M = M
-        self.Gamma = Gamma if Gamma is not None else jnp.sqrt(4 * M)
         self.gamma = gamma
         self.beta = beta
-        if Hamiltonian is None:
-            self.H = lambda x, v: jnp.dot(x, x) - 0.5 * jnp.dot(v, v) / M
+        if Gamma is None:
+            self.Gamma = jnp.sqrt(4 * M)
         else:
-            self.H = lambda x, v: Hamiltonian(jnp.concatenate([x, v]))
+            self.Gamma = Gamma
+        if U is None:
+            self.U = lambda x: 0.5 * jnp.sum(x**2)
+        else:
+            self.U = U
+        if V is None:
+            self.V = lambda v: 0.5 * jnp.sum(v**2) / self.M
+        else:
+            self.V = V
 
+    @eqx.filter_jit
     def drift(self, t, u, args):
-        x, v = u[: self.state_dim], u[self.state_dim :]
-        x_dot = -1.0 * grad(self.H, argnums=1)(x, v)  # e.g., M^-1 v
-        v_dot = grad(self.H, argnums=0)(x, v)  # e.g., -x
+        x, v = u[:self.state_dim], u[self.state_dim:]
+        
+        # Compute Hamiltonian terms
+        x_dot = grad(self.V)(v)         # e.g., M^-1 v
+        v_dot = -1.0 * grad(self.U)(x, t)  # e.g., -x
         friction_term = -self.Gamma * x_dot  # e.g., -Γ M^-1 v
-        hamiltonian_terms = jnp.concatenate([x_dot, v_dot])
-        ou_process_terms = jnp.concatenate([jnp.zeros_like(x), friction_term])
+        hamiltonian_terms = jnp.concatenate([x_dot, 
+                                             v_dot])
+        ou_process_terms = jnp.concatenate([jnp.zeros_like(x), 
+                                            friction_term])
 
         return self.beta * (hamiltonian_terms + ou_process_terms)
 
+    @eqx.filter_jit
     def diffusion(self, t, u, args):
         """
         Compute the diffusion term of the CLD process at time t.
