@@ -51,74 +51,75 @@ def mog_energy(x, means, covariances, weights):
     return -mog_logpdf(x, means, covariances, weights)
 
 #%%
-means = jnp.array([
-    [1.0, 1.0],
-    [-1.0, 0.0],
-    [0.0, -1.0]
-])
-covariances = jnp.array([
-    [[0.01, 0.01], [0.01, 0.4]],
-    [[0.1, -0.03], [-0.03, 0.1]],
-    [[0.2, 0.0], [0.0, 0.2]]
-])
-weights = jnp.array([0.3, 0.3, 0.4])
+if __name__ == "__main__":
+    means = jnp.array([
+        [1.0, 1.0],
+        [-1.0, 0.0],
+        [0.0, -1.0]
+    ])
+    covariances = jnp.array([
+        [[0.01, 0.01], [0.01, 0.4]],
+        [[0.1, -0.03], [-0.03, 0.1]],
+        [[0.2, 0.0], [0.0, 0.2]]
+    ])
+    weights = jnp.array([0.3, 0.3, 0.4])
 
-# Number of samples to generate
-n_samples = 1000
+    # Number of samples to generate
+    n_samples = 1000
 
-# JAX random key
-key = random.PRNGKey(42)
+    # JAX random key
+    key = random.PRNGKey(42)
 
-# Generate samples
-keys = random.split(key, n_samples)
-samples = jax.vmap(lambda key: sample_mog(key, means, covariances, weights))(keys)
+    # Generate samples
+    keys = random.split(key, n_samples)
+    samples = jax.vmap(lambda key: sample_mog(key, means, covariances, weights))(keys)
 
-# Create a grid for the contour plot
-x_lim, y_lim = 2, 2
-res = 0.01
-x, y = jnp.mgrid[-x_lim:x_lim:res, -y_lim:y_lim:res]
-pos = jnp.dstack((x, y))
+    # Create a grid for the contour plot
+    x_lim, y_lim = 2, 2
+    res = 0.01
+    x, y = jnp.mgrid[-x_lim:x_lim:res, -y_lim:y_lim:res]
+    pos = jnp.dstack((x, y))
 
-# Compute the PDF, logPDF, and energy
-z_pdf = jax.vmap(lambda p: mog_pdf(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
-z_logpdf = jax.vmap(lambda p: mog_logpdf(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
-z_energy = jax.vmap(lambda p: mog_energy(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
+    # Compute the PDF, logPDF, and energy
+    z_pdf = jax.vmap(lambda p: mog_pdf(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
+    z_logpdf = jax.vmap(lambda p: mog_logpdf(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
+    z_energy = jax.vmap(lambda p: mog_energy(p, means, covariances, weights))(pos.reshape(-1, 2)).reshape(x.shape)
 
-# Create a new figure with a 2x3 grid of subplots
-fig, axs = plt.subplots(2, 3, figsize=(18, 12))
-fig.suptitle('Mixture of Gaussians Visualization', fontsize=16)
+    # Create a new figure with a 2x3 grid of subplots
+    fig, axs = plt.subplots(2, 3, figsize=(18, 12))
+    fig.suptitle('Mixture of Gaussians Visualization', fontsize=16)
 
-# 2D Contour plots
-contour_plots = [
-    (axs[0, 0], z_pdf, 'PDF'),
-    (axs[0, 1], z_logpdf, 'Log PDF'),
-    (axs[0, 2], z_energy, 'Energy')
-]
+    # 2D Contour plots
+    contour_plots = [
+        (axs[0, 0], z_pdf, 'PDF'),
+        (axs[0, 1], z_logpdf, 'Log PDF'),
+        (axs[0, 2], z_energy, 'Energy')
+    ]
 
-for ax, z, title in contour_plots:
-    cf = ax.contourf(x, y, z, levels=20, cmap='viridis')
-    ax.set_title(f'{title} (2D Contour)')
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    fig.colorbar(cf, ax=ax)
-    ax.scatter(samples[:, 0], samples[:, 1], color='red', alpha=0.5, s=1)
+    for ax, z, title in contour_plots:
+        cf = ax.contourf(x, y, z, levels=20, cmap='viridis')
+        ax.set_title(f'{title} (2D Contour)')
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        fig.colorbar(cf, ax=ax)
+        ax.scatter(samples[:, 0], samples[:, 1], color='red', alpha=0.5, s=1)
 
-# 3D Surface plots
-surface_plots = [
-    (axs[1, 0], z_pdf, 'PDF'),
-    (axs[1, 1], z_logpdf, 'Log PDF'),
-    (axs[1, 2], z_energy, 'Energy')
-]
+    # 3D Surface plots
+    surface_plots = [
+        (axs[1, 0], z_pdf, 'PDF'),
+        (axs[1, 1], z_logpdf, 'Log PDF'),
+        (axs[1, 2], z_energy, 'Energy')
+    ]
 
-for ax, z, title in surface_plots:
-    ax.remove()
-    ax = fig.add_subplot(2, 3, 4 + surface_plots.index((ax, z, title)), projection='3d')
-    surf = ax.plot_surface(x, y, z, cmap='viridis')
-    ax.set_title(f'{title} (3D Surface)')
-    ax.set_xlabel('X')
-    ax.set_ylabel('Y')
-    ax.set_zlabel(title)
-    fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
+    for ax, z, title in surface_plots:
+        ax.remove()
+        ax = fig.add_subplot(2, 3, 4 + surface_plots.index((ax, z, title)), projection='3d')
+        surf = ax.plot_surface(x, y, z, cmap='viridis')
+        ax.set_title(f'{title} (3D Surface)')
+        ax.set_xlabel('X')
+        ax.set_ylabel('Y')
+        ax.set_zlabel(title)
+        fig.colorbar(surf, ax=ax, shrink=0.5, aspect=5)
 
-plt.tight_layout()
-plt.show()
+    plt.tight_layout()
+    plt.show()
