@@ -104,6 +104,50 @@ def test_logpdf_energy_consistency(distribution_params):
                               distribution_params['covariances'], 
                               distribution_params['weights'])
     assert jnp.allclose(-logpdf_value, energy_value, atol=1e-6)
+
+@pytest.fixture
+def distribution_params_1d():
+    return {
+        'means': jnp.array([1.0, -1.0, 0.0]),
+        'covariances': jnp.array([0.5, 0.3, 0.2]),
+        'weights': jnp.array([0.3, 0.3, 0.4]),
+        'n_samples': 1_000_000
+    }
+
+def test_sample_mog_1d(distribution_params_1d, key):
+    samples = jax.vmap(lambda k: sample_mog(k,
+                                            distribution_params_1d['means'],
+                                            distribution_params_1d['covariances'],
+                                            distribution_params_1d['weights']))(
+        random.split(key, distribution_params_1d['n_samples'])
+    )
     
+    assert samples.shape == (distribution_params_1d['n_samples'],)
+    assert jnp.all(jnp.isfinite(samples))
+    assert jnp.all((samples >= -5) & (samples <= 5))
+    
+    mean = jnp.mean(samples)
+    expected_mean = jnp.sum(distribution_params_1d['weights'] * distribution_params_1d['means'])
+    assert jnp.allclose(mean, expected_mean, atol=0.1)
+    
+    # Test PDF, logPDF, and energy functions for 1D case
+    x = jnp.array(0.0)
+    pdf_value = mog_pdf(x, 
+                        distribution_params_1d['means'], 
+                        distribution_params_1d['covariances'], 
+                        distribution_params_1d['weights'])
+    logpdf_value = mog_logpdf(x, 
+                              distribution_params_1d['means'], 
+                              distribution_params_1d['covariances'], 
+                              distribution_params_1d['weights'])
+    energy_value = mog_energy(x, 
+                              distribution_params_1d['means'], 
+                              distribution_params_1d['covariances'], 
+                              distribution_params_1d['weights'])
+    
+    assert pdf_value >= 0
+    assert jnp.allclose(jnp.log(pdf_value), logpdf_value, atol=1e-6)
+    assert jnp.allclose(-logpdf_value, energy_value, atol=1e-6)
+
 if __name__ == "__main__":
     pytest.main(["-v", __file__])

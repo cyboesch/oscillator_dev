@@ -22,10 +22,16 @@ def sample_mog(key, means, covariances, weights):
         p=weights
     )
     
-    sample = random.multivariate_normal(
-        key_sample, 
-        means[component_index], 
-        covariances[component_index]
+    selected_mean = means[component_index]
+    selected_cov = covariances[component_index]
+    
+    if selected_mean.ndim == 0:
+        sample = random.normal(key_sample) * jnp.sqrt(selected_cov) + selected_mean
+    else:
+        sample = random.multivariate_normal(
+            key_sample, 
+            selected_mean, 
+            selected_cov
     )
     
     return sample
