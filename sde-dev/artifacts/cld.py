@@ -74,7 +74,7 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         friction_term = -self.Gamma * grad(self.V)(v)  # e.g., -Γ M^-1 v
         
         # Compute score function term (S)
-        s = self.score_fn(u, t)
+        
         s_v = s[self.state_dim:]
         score_term = 2 * self.Gamma * (s_v + grad(self.V)(v))
         
@@ -106,24 +106,24 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
 
         return G
     
-    @eqx.filter_jit
-    def bwd_diffusion(self, t, u, args):
-        zero_block = jnp.zeros((self.state_dim, self.state_dim))
-        sigma = jnp.sqrt(2 * self.Gamma * self.beta)
-        diffusion_block = sigma * jnp.eye(self.state_dim)
-        G = jnp.block([[zero_block, zero_block], [zero_block, diffusion_block]])
+    # @eqx.filter_jit
+    # def bwd_diffusion(self, t, u, args):
+    #     zero_block = jnp.zeros((self.state_dim, self.state_dim))
+    #     sigma = jnp.sqrt(2 * self.Gamma * self.beta)
+    #     diffusion_block = sigma * jnp.eye(self.state_dim)
+    #     G = jnp.block([[zero_block, zero_block], [zero_block, diffusion_block]])
 
-        return G
+    #     return G
     
     def get_fwd_terms(self, bm):
         drift_term = diffrax.ODETerm(self.fwd_drift)
         diffusion_term = diffrax.ControlTerm(self.fwd_diffusion, bm)
         return diffrax.MultiTerm(drift_term, diffusion_term)
     
-    def get_bwd_terms(self, bm):
-        drift_term = diffrax.ODETerm(self.bwd_drift)
-        diffusion_term = diffrax.ControlTerm(self.bwd_diffusion, bm)
-        return diffrax.MultiTerm(drift_term, diffusion_term)
+    # def get_bwd_terms(self, bm):
+    #     drift_term = diffrax.ODETerm(self.bwd_drift)
+    #     diffusion_term = diffrax.ControlTerm(self.bwd_diffusion, bm)
+    #     return diffrax.MultiTerm(drift_term, diffusion_term)
 
     def B(self, t):
         return self.beta * t

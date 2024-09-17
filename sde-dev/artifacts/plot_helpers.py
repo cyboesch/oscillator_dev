@@ -3,9 +3,12 @@ import jax
 import jax.numpy as jnp
 
 
-def plot_time_dependent_energy(energy_fn, n_lines=51, center_x=-2.0, y_min=0.5, y_max=6.0):
+def plot_time_dependent_energy(energy_fn, n_lines=51, center_x=-2.0, y_min=0.5, y_max=6.0, reverse=False):
     # Create a grid of time values
-    t_values = jnp.linspace(0.0, 1.0, n_lines)
+    if reverse:
+        t_values = jnp.linspace(1.0, 0.0, n_lines)
+    else:
+        t_values = jnp.linspace(0.0, 1.0, n_lines)
 
     x = jnp.linspace(center_x - 6, center_x + 6, 1000)
 
@@ -17,7 +20,10 @@ def plot_time_dependent_energy(energy_fn, n_lines=51, center_x=-2.0, y_min=0.5, 
     ax_colorbar = ax_dict["colorbar"]
 
     # Create a reversed colormap
-    cmap = plt.get_cmap("plasma_r")
+    if reverse:
+        cmap = plt.get_cmap("plasma")
+    else:
+        cmap = plt.get_cmap("plasma_r")
 
     # mark some ratio the ts for special visualization ensuring that 0 and 1 are always marked
     ratio = 4
@@ -44,7 +50,10 @@ def plot_time_dependent_energy(energy_fn, n_lines=51, center_x=-2.0, y_min=0.5, 
             zorder=zorder,
         )
 
-    ax_main.set_title("Potential Energy as a Function of Position (x) and Time (t)")
+    if reverse:
+        ax_main.set_title("Potential Energy as a Function of Position (x) and Time (T-t)")
+    else:
+        ax_main.set_title("Potential Energy as a Function of Position (x) and Time (t)")
     ax_main.set_xlabel("Position $x$")
     ax_main.set_ylabel("Potential Energy $U(x, t)$")
     ax_main.grid(True)
@@ -53,15 +62,27 @@ def plot_time_dependent_energy(energy_fn, n_lines=51, center_x=-2.0, y_min=0.5, 
     # Create a colorbar with reversed colors
     sm = plt.cm.ScalarMappable(cmap=cmap, norm=plt.Normalize(vmin=0, vmax=1))
     sm.set_array([])
-    cbar = fig.colorbar(sm, cax=ax_colorbar, orientation="horizontal", label="Time $t$")
+    if reverse:
+        cbar = fig.colorbar(sm, cax=ax_colorbar, orientation="horizontal", label="Time $T-t$")
+    else:
+        cbar = fig.colorbar(sm, cax=ax_colorbar, orientation="horizontal", label="Time $t$")
     cbar.set_ticks([0, 0.5, 1])
-    cbar.set_ticklabels(
-        [
-            f"{t_values[0]:.2f}",
+    if not reverse:
+        cbar.set_ticklabels(
+            [
+                f"{t_values[0]:.2f}",
             f"{t_values[len(t_values)//2]:.2f}",
             f"{t_values[-1]:.2f}",
-        ]
-    )
+            ]
+        )
+    else:
+        cbar.set_ticklabels(
+            [
+                f"{t_values[0]:.2f}",
+            f"{t_values[len(t_values)//2]:.2f}",
+            f"{t_values[-1]:.2f}",
+            ]
+        )
     ax_colorbar.xaxis.set_ticks_position("bottom")
     ax_colorbar.xaxis.set_label_position("bottom")
 
