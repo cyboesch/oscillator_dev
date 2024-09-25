@@ -47,9 +47,6 @@ damping = jnp.sqrt(4.0*mass)
 # )
 
 
-#%%
-damping
-#%%
 
 params_fn = lambda t: {
     "means": means,
@@ -57,9 +54,10 @@ params_fn = lambda t: {
     "weights": weights,
 }
 
-initial_position = jnp.zeros(state_dim)
+initial_position = jnp.zeros(2*state_dim)
 target_logdensity_fn = jax.jit(lambda t, x, args: mog_logpdf(x, **params_fn(t)))
 H = lambda t, z, args:  -1.0*target_logdensity_fn(t, z[:state_dim], args) + 0.5*jnp.dot(z[state_dim:],jnp.linalg.inv(mass) @ z[state_dim:])
+
 
 key = jrnd.PRNGKey(seed)
 key, subkey = jrnd.split(key)
@@ -70,16 +68,13 @@ bm_ubt = diffrax.UnsafeBrownianPath(shape=(state_dim,), key=bm_key)
 
 D = lambda z, args: jnp.array([[jnp.zeros((state_dim,state_dim)), jnp.zeros((state_dim,state_dim))], [jnp.zeros((state_dim,state_dim)), damping]]).reshape((2*state_dim,2*state_dim))
 Q = lambda z, args: jnp.array([[jnp.zeros((state_dim,state_dim)), jnp.ones((state_dim,state_dim))], [-jnp.ones((state_dim,state_dim)),jnp.zeros((state_dim,state_dim)) ]]).reshape((2*state_dim,2*state_dim))
-#%%
-Q(initial_position, None)
-#%%
+
 target_ctmc = ContinuousTimeMarkovChain(H_fn=H, D_fn=D, Q_fn=Q)
 
 sde_terms_vbt = target_ctmc.get_terms(bm_ubt)
 # mala_solver = MetropolisAdjustedSolver(logdensity_val_and_grad_fn=jax.jit(jax.value_and_grad(target_logdensity_fn, argnums=1)), log_accept_ratio_fn=jax.jit(compute_log_rho), solver=Euler())
-
 solver = diffrax.ItoMilstein()
-
+#%%
 # Generate samples using VBT MALA
 vbt_solution = diffrax.diffeqsolve(
     terms=sde_terms_vbt,
@@ -91,12 +86,12 @@ vbt_solution = diffrax.diffeqsolve(
     args=None,
     adjoint=diffrax.DirectAdjoint(),
     max_steps=int((T - t0) / step_size) + 1,
-    solver_state=mala_solver.init(bm_ubt, t0, T, initial_position, None, mh_key),
+    solver_state=solver.init(sde_terms_vbt,t0, T, initial_position, None),
     saveat=diffrax.SaveAt(ts=jnp.arange(t0, T, step_size)),
     progress_meter=diffrax.TqdmProgressMeter()
 )
 vbt_samples = vbt_solution.ys
-
+#%%
 # Import seaborn and update matplotlib style
 import seaborn as sns
 import matplotlib.pyplot as plt
