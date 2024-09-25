@@ -54,9 +54,15 @@ params_fn = lambda t: {
     "weights": weights,
 }
 
-initial_position = jnp.zeros(2*state_dim)
+initial_position = jnp.zeros(state_dim)
+initial_velocity = jnp.zeros(state_dim)
+initial_state = jnp.concatenate([initial_position, initial_velocity])
 target_logdensity_fn = jax.jit(lambda t, x, args: mog_logpdf(x, **params_fn(t)))
 H = lambda t, z, args:  -1.0*target_logdensity_fn(t, z[:state_dim], args) + 0.5*jnp.dot(z[state_dim:],jnp.linalg.inv(mass) @ z[state_dim:])
+
+#%%
+H(0, initial_state, None)
+#%%
 
 
 key = jrnd.PRNGKey(seed)
@@ -82,11 +88,11 @@ vbt_solution = diffrax.diffeqsolve(
     t0=t0,
     t1=T,
     dt0=step_size,
-    y0=initial_position,
+    y0=initial_state,
     args=None,
     adjoint=diffrax.DirectAdjoint(),
     max_steps=int((T - t0) / step_size) + 1,
-    solver_state=solver.init(sde_terms_vbt,t0, T, initial_position, None),
+    solver_state=solver.init(sde_terms_vbt,t0, T, initial_state, None),
     saveat=diffrax.SaveAt(ts=jnp.arange(t0, T, step_size)),
     progress_meter=diffrax.TqdmProgressMeter()
 )
