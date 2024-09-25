@@ -36,6 +36,9 @@ def sample_mog(key, means, covariances, weights):
     
     return sample
 
+def mog_get_mean(means, weights):
+    return jnp.sum(weights * means)
+
 @jax.jit
 def mog_pdf(x, means, covariances, weights):
     def component_pdf(mean, cov):
@@ -51,11 +54,6 @@ def mog_logpdf(x, means, covariances, weights):
     
     logpdfs = jax.vmap(component_logpdf)(means, covariances)
     return logsumexp(jnp.log(weights) + logpdfs)
-
-@jax.jit
-def mog_energy(x, means, covariances, weights):
-    return -mog_logpdf(x, means, covariances, weights)
-
 #%%
 if __name__ == "__main__":
     means = jnp.array([
