@@ -17,12 +17,19 @@ dt0 = 0.22
 state_dim = 1
 
 
-means = jnp.array([-4.0, 4.0])
-covariances = jnp.array([0.1, 0.1])
-weights = jnp.array([0.1, 0.9])
+# means = jnp.array([-4.0, 4.0])
+# covariances = jnp.array([0.1, 0.1])
+# weights = jnp.array([0.1, 0.9])
+
+means = jnp.array([-3.0, 0.0])
+covariances = jnp.array([1., 1.])
+weights = jnp.array([0.8, 0.2])
+
+#%%
 
 # - Make time-dependent covariances
 T = 10000.0
+N_samples = int(T/dt0)
 t0 = 0.0
 temp_final = 10.0
 Zero = jnp.zeros((state_dim, state_dim))
@@ -31,9 +38,33 @@ Identity = jnp.eye(state_dim)
 mass = 1.0 * Identity
 damping = jnp.sqrt(4.0 * mass)
 
+
+
+# --- Make time-dependent weights between t0 and T
+# weights_t_fn = lambda t: jnp.array(
+#     [weights[0] * (1 - (t-t0)/(T-t0)), weights[1] * (t-t0)/(T-t0)]
+# )
+
+params_fn = lambda t: {
+    "means": means,
+    "covariances": covariances * temp_final,
+    "weights": weights,
+}
+
+initial_position = jnp.array([-2.0]) #jnp.zeros(state_dim)
+initial_velocity = jnp.zeros(state_dim)
+y0 = jnp.concatenate([initial_position, initial_velocity])
+
+#%%
+
+y0[0]
+#%%
+
+target_logdensity_fn = jax.jit(lambda t, x, args: mog_logpdf(x, **params_fn(t)))
+
 def U(t, z, args):
     x = z[:state_dim]
-    return -1.0 * target_logdensity_fn(t, x, args)
+    return -1. * target_logdensity_fn(t, x, args)
 
 def V(t, z, args):
     p = z[state_dim:]
@@ -57,23 +88,6 @@ Q = lambda t, z, args: jnp.block(
 
 # Set to zero for CLD so we don't waste time computing it.
 tau = lambda t, z, args: jnp.zeros((2 * state_dim,))
-
-# --- Make time-dependent weights between t0 and T
-# weights_t_fn = lambda t: jnp.array(
-#     [weights[0] * (1 - (t-t0)/(T-t0)), weights[1] * (t-t0)/(T-t0)]
-# )
-
-params_fn = lambda t: {
-    "means": means,
-    "covariances": covariances * temp_final,
-    "weights": weights,
-}
-
-initial_position = jnp.zeros(state_dim)
-initial_velocity = jnp.zeros(state_dim)
-y0 = jnp.concatenate([initial_position, initial_velocity])
-
-target_logdensity_fn = jax.jit(lambda t, x, args: mog_logpdf(x, **params_fn(t)))
 
 
 key = jrnd.PRNGKey(seed)
@@ -111,7 +125,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 sns.set_theme(style="darkgrid")
-keys = jrnd.split(key, 100000)
+keys = jrnd.split(key, N_samples)
 samples_t = 0.0
 mog_samples = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
 
@@ -177,3 +191,84 @@ ax4.set_ylabel("Value", fontsize=16)
 plt.tight_layout()
 plt.show()
 # %%
+# ... existing code ...
+
+# Create a new figure for the comparison plot
+plt.figure(figsize=(12, 8))
+ax = plt.gca()
+
+# Plot histograms for x
+sns.histplot(
+    ctmc_samples_x.flatten(),
+    kde=True,
+    stat="density",
+    label="CTMC Samples",
+    color="skyblue",
+    alpha=0.6,
+    ax=ax,
+)
+sns.histplot(
+    mog_samples.flatten(),
+    kde=True,
+    stat="density",
+    label=f"MoG Samples at t={samples_t}",
+    color="salmon",
+    alpha=0.6,
+    ax=ax,
+)
+
+# Calculate the integral of exp(-U(x)) over the displayed domain
+# x_min, x_max = ax.get_xlim()
+# x_values = jnp.linspace(x_min, x_max, N_samples)
+# U_values = jax.vmap(lambda x: -target_logdensity_fn(samples_t, x, None))(x_values)
+# exp_neg_U = jnp.exp(U_values)
+
+# jnp.sum(exp_neg_U)*(x_max-x_min)/N_samples
+
+# Calculate the integral using the trapezoidal rule
+integral = 2 #jnp.trapezoid(exp_neg_U, x_values)
+
+# print(f"Integral of exp(-U(x)) over [{x_min:.2f}, {x_max:.2f}]: {integral:.6f}")
+
+
+
+# Add exp(-U(x)) to the plot
+x_values = jnp.linspace(ax.get_xlim()[0], ax.get_xlim()[1], 1000)
+U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), None))(x_values)
+exp_neg_U = jnp.exp(-U_values)
+ax_right = ax.twinx()
+ax_right.plot(x_values, exp_neg_U/integral, color='green', label='exp(-U(x))/Z')
+
+
+# ... existing code ...
+
+# Customize the density plot for x
+ax.set_title("Comparison of CTMC Samples (x) vs Prior and exp(-U(x))/Z", fontsize=16)
+ax.set_xlabel("Value", fontsize=14)
+ax.set_ylabel("Density", fontsize=14)
+ax.legend(fontsize=10, loc='upper left')
+
+# Customize the right y-axis
+ax_right.set_ylabel("exp(-U(x))/Z", fontsize=14, color='green')
+ax_right.tick_params(axis='y', labelcolor='green')
+ax_right.legend(fontsize=10, loc='upper right')
+
+# Set the same y-axis limits for both left and right axes
+y_min = min(ax.get_ylim()[0], ax_right.get_ylim()[0])
+y_max = max(ax.get_ylim()[1], ax_right.get_ylim()[1])
+ax.set_ylim(y_min, y_max)
+ax_right.set_ylim(y_min, y_max)
+
+# ... rest of the existing code ...
+
+# ... rest of the existing code ...
+
+# Adjust layout and show the plot
+plt.tight_layout()
+plt.show()
+
+# ... rest of the existing code ...
+
+
+# %%
+
