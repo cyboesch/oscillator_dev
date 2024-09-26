@@ -1,11 +1,7 @@
 # %%
-# No GPU
-import os
-
-os.environ["CUDA_VISIBLE_DEVICES"] = ""
-# %%
 import diffrax
 import jax
+
 jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import jax.random as jrnd
@@ -19,6 +15,8 @@ dt0 = 0.22
 
 # - Create a time-dependent energy function
 state_dim = 1
+
+
 means = jnp.array([-4.0, 4.0])
 covariances = jnp.array([0.1, 0.1])
 weights = jnp.array([0.1, 0.9])
@@ -32,6 +30,33 @@ All_Ones = jnp.ones((state_dim, state_dim))
 Identity = jnp.eye(state_dim)
 mass = 1.0 * Identity
 damping = jnp.sqrt(4.0 * mass)
+
+def U(t, z, args):
+    x = z[:state_dim]
+    return -1.0 * target_logdensity_fn(t, x, args)
+
+def V(t, z, args):
+    p = z[state_dim:]
+    return 0.5 * jnp.dot(p, jnp.linalg.inv(mass) @ p)
+
+H = lambda t, z, args: U(t, z, args) + V(t, z, args)
+
+D = lambda t, z, args: jnp.block(
+    [
+        [Zero, Zero],
+        [Zero, damping * Identity],
+    ]
+)
+
+Q = lambda t, z, args: jnp.block(
+    [
+        [Zero, Identity],
+        [-Identity, Zero],
+    ]
+)
+
+# Set to zero for CLD so we don't waste time computing it.
+tau = lambda t, z, args: jnp.zeros((2 * state_dim,))
 
 # --- Make time-dependent weights between t0 and T
 # weights_t_fn = lambda t: jnp.array(
@@ -50,40 +75,15 @@ y0 = jnp.concatenate([initial_position, initial_velocity])
 
 target_logdensity_fn = jax.jit(lambda t, x, args: mog_logpdf(x, **params_fn(t)))
 
-def U(t, z, args):
-    x = z[:state_dim]
-    return -1.0 * target_logdensity_fn(t, x, args)
-
-def V(t, z, args):
-    p = z[state_dim:]
-    return 0.5 * jnp.dot(p, jnp.linalg.inv(mass) @ p)
-
-H = lambda t, z, args: U(t, z, args) + V(t, z, args)
 
 key = jrnd.PRNGKey(seed)
 key, subkey = jrnd.split(key)
 
 key, bm_key = jrnd.split(key)
-brownian_motion = diffrax.UnsafeBrownianPath(shape=(2*state_dim,), key=bm_key)
+brownian_motion = diffrax.UnsafeBrownianPath(shape=(2 * state_dim,), key=bm_key)
 
-D = lambda z, args: jnp.block(
-    [
-        [Zero, Zero],
-        [Zero, damping * Identity],
-    ]
-)
-
-print(f"D shape: {D(y0, None).shape}")
-
-Q = lambda z, args: jnp.block(
-    [
-        [Zero, Identity],
-        [-Identity, Zero],
-    ]
-)
-print(f"Q shape: {Q(y0, None).shape}")
-#%%
-target_ctmc = ContinuousTimeMarkovChain(H_fn=H, D_fn=D, Q_fn=Q)
+# %%
+target_ctmc = ContinuousTimeMarkovChain(H_fn=H, D_fn=D, Q_fn=Q, Gamma_fn=tau)
 target_ctmc_terms = target_ctmc.get_terms(brownian_motion)
 solver = diffrax.ItoMilstein()
 
@@ -103,7 +103,8 @@ ctmc_solution = diffrax.diffeqsolve(
     saveat=diffrax.SaveAt(ts=jnp.arange(t0, T, dt0)),
     progress_meter=diffrax.TqdmProgressMeter(),
 )
-ctmc_samples = ctmc_solution.ys
+ctmc_samples_x = ctmc_solution.ys[:, :state_dim]
+ctmc_samples_p = ctmc_solution.ys[:, state_dim:]
 # %%
 # Import seaborn and update matplotlib style
 import seaborn as sns
@@ -111,14 +112,15 @@ import matplotlib.pyplot as plt
 
 sns.set_theme(style="darkgrid")
 keys = jrnd.split(key, 100000)
-mog_samples = jax.vmap(lambda key: sample_mog(key, **params_fn(0)))(keys)
+samples_t = 0.0
+mog_samples = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
 
-# Create a figure with two subplots
-fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 10), height_ratios=[2, 1])
+# Create a figure with four subplots
+fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
 
-# Plot histograms using seaborn on the first subplot
+# Plot histograms for x
 sns.histplot(
-    ctmc_samples.flatten(),
+    ctmc_samples_x.flatten(),
     kde=True,
     stat="density",
     label="CTMC Samples",
@@ -130,23 +132,46 @@ sns.histplot(
     mog_samples.flatten(),
     kde=True,
     stat="density",
-    label="True MoG Samples",
+    label=f"MoG Samples at t={samples_t}",
     color="salmon",
     alpha=0.6,
     ax=ax1,
 )
 
-# Customize the density plot
-ax1.set_title("Comparison of CTMC Samples vs Directly Sampled Mixture of Gaussians", fontsize=16)
-ax1.set_xlabel("Value", fontsize=12)
-ax1.set_ylabel("Density", fontsize=12)
+# Customize the density plot for x
+ax1.set_title("Comparison of CTMC Samples (x) vs Prior", fontsize=16)
+ax1.set_xlabel("Value", fontsize=16)
+ax1.set_ylabel("Density", fontsize=16)
 ax1.legend(fontsize=10)
 
-# Plot trace plot on the second subplot
-ax2.plot(jnp.arange(len(ctmc_samples)), ctmc_samples.flatten(), alpha=0.6)
-ax2.set_title("Trace Plot of MALA Samples", fontsize=16)
-ax2.set_xlabel("Sample Index", fontsize=12)
-ax2.set_ylabel("Value", fontsize=12)
+# Plot histograms for p
+sns.histplot(
+    ctmc_samples_p.flatten(),
+    kde=True,
+    stat="density",
+    label="CTMC Samples (p)",
+    color="lightgreen",
+    alpha=0.6,
+    ax=ax2,
+)
+
+# Customize the density plot for p
+ax2.set_title("Distribution of CTMC Samples (p)", fontsize=16)
+ax2.set_xlabel("Value", fontsize=16)
+ax2.set_ylabel("Density", fontsize=16)
+ax2.legend(fontsize=10)
+
+# Plot trace plot for x on the third subplot
+ax3.plot(jnp.arange(len(ctmc_samples_x)), ctmc_samples_x.flatten(), alpha=0.6)
+ax3.set_title("Trace Plot of CTMC Samples (x)", fontsize=16)
+ax3.set_xlabel("Sample Index", fontsize=16)
+ax3.set_ylabel("Value", fontsize=16)
+
+# Plot trace plot for p on the fourth subplot
+ax4.plot(jnp.arange(len(ctmc_samples_p)), ctmc_samples_p.flatten(), alpha=0.6)
+ax4.set_title("Trace Plot of CTMC Samples (p)", fontsize=16)
+ax4.set_xlabel("Sample Index", fontsize=16)
+ax4.set_ylabel("Value", fontsize=16)
 
 # Adjust layout and show the plot
 plt.tight_layout()
