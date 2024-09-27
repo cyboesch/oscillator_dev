@@ -22,8 +22,8 @@ state_dim = 1
 dt0 = 0.22
 t0 = 0.0
 T = 10000.0
-N_samples = int((T - t0) / dt0) + 1
-time_points = jnp.linspace(t0, T, N_samples)
+N_timesteps = int((T - t0) / dt0) + 1
+time_points = jnp.linspace(t0, T, N_timesteps)
 temp_final = 1000.0
 temp_0 = 1.0
 
@@ -103,7 +103,7 @@ def run_time_evolving_cdl(y0,key):
         y0=y0,
         args=None,
         adjoint=diffrax.DirectAdjoint(),
-        max_steps=N_samples,
+        max_steps=N_timesteps,
         solver_state=solver.init(target_ctmc_terms, t0, T, y0, None),
         saveat=diffrax.SaveAt(ts=jnp.arange(t0, T, dt0)),
         progress_meter=diffrax.TqdmProgressMeter(),
@@ -111,13 +111,29 @@ def run_time_evolving_cdl(y0,key):
     ctmc_samples_x = ctmc_solution.ys[:, :state_dim]
     ctmc_samples_p = ctmc_solution.ys[:, state_dim:]
     
-    return ctmc_samples_x, ctmc_samples_p
+    return ctmc_samples_x.reshape(-1)[-1], ctmc_samples_p.reshape(-1)[-1]
 # %%
+seed_ini = 1
+key_ini = jrnd.PRNGKey(seed_ini)
+N_initialconds = 10
+keys = jrnd.split(key_ini, N_initialconds)
+samples_t = 0
+initial_position = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
+initial_velocity = jnp.zeros_like(initial_position)
+z0 = jnp.vstack([initial_position, initial_velocity])
+
+seed_brownian = 2
+key_brownian = jrnd.PRNGKey(seed_brownian)
+print(key_brownian.shape)
+keys_brownian = jrnd.split(key_ini, N_initialconds)
+keys_brownian[:,0]
+#%%
 
 key = jrnd.PRNGKey(seed)
 initial_position = jnp.array([-2.0]) #jnp.zeros(state_dim)
 initial_velocity = jnp.zeros(state_dim)
 y0 = jnp.concatenate([initial_position, initial_velocity])
+
 ctmc_samples_x, ctmc_samples_p = run_time_evolving_cdl(y0,key)
 
 # %%
@@ -126,7 +142,7 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 
 sns.set_theme(style="darkgrid")
-keys = jrnd.split(key, N_samples)
+keys = jrnd.split(key, N_timesteps)
 samples_t = T
 mog_samples = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
 
@@ -159,7 +175,7 @@ sns.histplot(
 
 
 
-x_values = jnp.linspace(ax1.get_xlim()[0], ax1.get_xlim()[1], N_samples)
+x_values = jnp.linspace(ax1.get_xlim()[0], ax1.get_xlim()[1], N_timesteps)
 U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), None))(x_values)
 exp_neg_U = jnp.exp(-U_values)
 ax1_right = ax1.twinx()
