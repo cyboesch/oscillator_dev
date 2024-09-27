@@ -180,7 +180,7 @@ samples_t = T
 mog_samples = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
 
 
-
+font_size = 20
 # Create a figure with four subplots
 fig, ((ax1,ax3, ax4)) = plt.subplots(3, 1, figsize=(20, 16))
 
@@ -195,14 +195,14 @@ sns.histplot(
     alpha=0.6,
     ax=ax1,
 )
-sns.histplot(
-    mog_samples.flatten(),
-    stat="density",
-    label=f"MoG Samples at t={samples_t}",
-    color="salmon",
-    alpha=0.6,
-    ax=ax1,
-)
+# sns.histplot(
+#     mog_samples.flatten(),
+#     stat="density",
+#     label=f"MoG Samples at t={samples_t}",
+#     color="salmon",
+#     alpha=0.6,
+#     ax=ax1,
+# )
 
 
 
@@ -210,12 +210,12 @@ x_values = jnp.linspace(ax1.get_xlim()[0], ax1.get_xlim()[1], N_timesteps)
 U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), None))(x_values)
 exp_neg_U = jnp.exp(-U_values)
 ax1_right = ax1.twinx()
-ax1_right.plot(x_values, exp_neg_U, color='green', label='exp(-U(x))')
+ax1_right.plot(x_values, exp_neg_U, color='green', label='p(x)')
 
 # Customize the density plot for x
-ax1.set_title("Comparison of CTMC Samples (x) vs Prior", fontsize=16)
-ax1.set_xlabel("Value", fontsize=16)
-ax1.set_ylabel("Density", fontsize=16)
+ax1.set_title("Comparison adiabatic sampling vs true probability distribution", fontsize=font_size)
+ax1.set_xlabel("Value", fontsize=font_size)
+ax1.set_ylabel("Density", fontsize=font_size)
 
 # Remove the y-axis label and tick labels for the right axis, keep green ticks
 ax1_right.set_ylabel("")
@@ -225,7 +225,7 @@ ax1_right.set_yticklabels([])  # Remove tick labels from right axis
 # Combine legends from both axes
 lines1, labels1 = ax1.get_legend_handles_labels()
 lines2, labels2 = ax1_right.get_legend_handles_labels()
-ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=10, loc='upper left')
+ax1.legend(lines1 + lines2, labels1 + labels2, fontsize=font_size, loc='upper left')
 
 # Set the same y-axis limits for both left and right axes
 y_min = min(ax1.get_ylim()[0], ax1_right.get_ylim()[0])
@@ -264,14 +264,14 @@ for i in range(num_trajectories):
     ax4.plot(time_points, ctmc_samples_p[i], color='white', alpha=0.1, linewidth=3.)
 
 # Customize the plots
-ax3.set_title("Position Trajectories on Energy Landscape", fontsize=16)
-ax3.set_xlabel("Time", fontsize=12)
-ax3.set_ylabel("Position (x)", fontsize=12)
+ax3.set_title("Position Trajectories on Potential Energy Landscape", fontsize=font_size)
+ax3.set_xlabel("Time", fontsize=font_size)
+ax3.set_ylabel("Position (x)", fontsize=font_size)
 ax3.set_ylim(-20, 20)
 
-ax4.set_title("Momentum Trajectories on Energy Landscape", fontsize=16)
-ax4.set_xlabel("Time", fontsize=12)
-ax4.set_ylabel("Momentum (p)", fontsize=12)
+ax4.set_title("Momentum Trajectories on Kinetic Energy Landscape", fontsize=font_size)
+ax4.set_xlabel("Time", fontsize=font_size)
+ax4.set_ylabel("Momentum (p)", fontsize=font_size)
 ax4.set_ylim(-20, 20)
 
 plt.tight_layout()
