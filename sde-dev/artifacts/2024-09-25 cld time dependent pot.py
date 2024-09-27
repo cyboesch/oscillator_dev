@@ -10,6 +10,8 @@ from ctmc import ContinuousTimeMarkovChain
 import matplotlib.pyplot as plt
 from thermoai.distributions import mog_logpdf, sample_mog
 import seaborn as sns
+
+# from jax import config
 ################
 ################
 ################
@@ -21,7 +23,7 @@ state_dim = 1
 
 dt0 = 0.22
 t0 = 0.0
-T = 10000.0
+T = 1000.0
 N_timesteps = int((T - t0) / dt0) + 1
 time_points = jnp.linspace(t0, T, N_timesteps)
 temp_final = 1000.0
@@ -34,9 +36,42 @@ weights = jnp.array([0.8, 0.2])
 # weights_t_fn = lambda t: jnp.array(
 #     [weights[0] * (1 - (t-t0)/(T-t0)), weights[1] * (t-t0)/(T-t0)]
 # )
-temp_fn = lambda t: jnp.array(
-    temp_final - (temp_final - temp_0) * (t/T)
-)
+# temp_fn = lambda t: jnp.where(t<T/10, jnp.array(
+#     temp_final - (temp_final - temp_0) * (t/(T/10))
+# ), jnp.array(
+#     temp_0
+# ))
+
+def sigmoid(x):
+    return 1 / (1 + jnp.exp(-x))
+
+def reverse_sigmoid(x, k=10):
+    return 1 - sigmoid(k * (x - 0.5))
+
+temp_fn = lambda t: temp_0 + (temp_final - temp_0) * reverse_sigmoid(t / T)
+
+plt.figure(figsize=(12, 6))
+
+
+# Calculate temperatures
+temperatures = jax.vmap(temp_fn)(time_points)
+
+# Plot the temperature profile
+plt.plot(time_points, temperatures, color='red', linewidth=2)
+
+# Customize the plot
+plt.title("Temperature Profile", fontsize=16)
+plt.xlabel("Time", fontsize=12)
+plt.ylabel("Temperature", fontsize=12)
+plt.grid(True)
+
+
+# Show the plot
+plt.tight_layout()
+plt.show()
+
+
+#%%
 params_fn = lambda t: {
     "means": means,
     "covariances": covariances * temp_fn(t),
@@ -136,9 +171,11 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
 
+N_samples = 10000
+
 sns.set_theme(style="darkgrid")
 key_sample = jrnd.PRNGKey(seed_ini)
-keys = jrnd.split(key_sample, N_timesteps)
+keys = jrnd.split(key_sample, N_samples)
 samples_t = T
 mog_samples = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
 
@@ -152,7 +189,6 @@ ax1_right = ax1.twinx()
 # Plot histograms for x
 sns.histplot(
     ctmc_samples_x[:,-1].flatten(),
-    kde=True,
     stat="density",
     label="CTMC Samples",
     color="skyblue",
@@ -161,7 +197,6 @@ sns.histplot(
 )
 sns.histplot(
     mog_samples.flatten(),
-    kde=True,
     stat="density",
     label=f"MoG Samples at t={samples_t}",
     color="salmon",
@@ -223,10 +258,10 @@ fig.colorbar(im_x, ax=ax3, label='Potential Energy')
 fig.colorbar(im_p, ax=ax4, label='Kinetic Energy')
 
 # Plot individual trajectories
-num_trajectories = min(10000, N_initialconds)  # Limit to 100 trajectories for clarity
+num_trajectories = min(50, N_initialconds)  # Limit to 100 trajectories for clarity
 for i in range(num_trajectories):
-    ax3.plot(time_points, ctmc_samples_x[i], color='white', alpha=0.1, linewidth=0.5)
-    ax4.plot(time_points, ctmc_samples_p[i], color='white', alpha=0.1, linewidth=0.5)
+    ax3.plot(time_points, ctmc_samples_x[i], color='white', alpha=0.1, linewidth=3.)
+    ax4.plot(time_points, ctmc_samples_p[i], color='white', alpha=0.1, linewidth=3.)
 
 # Customize the plots
 ax3.set_title("Position Trajectories on Energy Landscape", fontsize=16)
