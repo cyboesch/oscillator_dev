@@ -45,7 +45,7 @@ weights = jnp.array([0.8, 0.2])
 def sigmoid(x):
     return 1 / (1 + jnp.exp(-x))
 
-def reverse_sigmoid(x, k=20):
+def reverse_sigmoid(x, k=10):
     return 1 - sigmoid(k * (x - 0.5))
 
 temp_fn = lambda t: temp_0 + (temp_final - temp_0) * reverse_sigmoid(t / T)
