@@ -21,7 +21,7 @@ state_dim = 1
 
 dt0 = 0.22
 t0 = 0.0
-T = 100.0
+T = 10000.0
 N_timesteps = int((T - t0) / dt0) + 1
 time_points = jnp.linspace(t0, T, N_timesteps)
 temp_final = 1000.0
@@ -115,7 +115,7 @@ def run_time_evolving_cdl(y0,key):
 # %%
 seed_ini = 1
 key_ini = jrnd.PRNGKey(seed_ini)
-N_initialconds = 10000
+N_initialconds = 1000
 keys = jrnd.split(key_ini, N_initialconds)
 samples_t = 0
 initial_position = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
@@ -231,7 +231,7 @@ fig.colorbar(im_x, ax=ax3, label='Potential Energy')
 fig.colorbar(im_p, ax=ax4, label='Kinetic Energy')
 
 # Plot individual trajectories
-num_trajectories = min(100, N_initialconds)  # Limit to 100 trajectories for clarity
+num_trajectories = min(10000, N_initialconds)  # Limit to 100 trajectories for clarity
 for i in range(num_trajectories):
     ax3.plot(time_points, ctmc_samples_x[i], color='white', alpha=0.1, linewidth=0.5)
     ax4.plot(time_points, ctmc_samples_p[i], color='white', alpha=0.1, linewidth=0.5)
@@ -250,5 +250,77 @@ ax4.set_ylim(-20, 20)
 plt.tight_layout()
 plt.show()
 
+
+# %%
+# ... existing code ...
+
+# Create a figure with four subplots, arranged as requested
+fig = plt.figure(figsize=(20, 30))
+gs = fig.add_gridspec(3, 2, height_ratios=[1, 1, 1])
+
+ax1 = fig.add_subplot(gs[0, 0])
+ax2 = fig.add_subplot(gs[0, 1])
+ax3 = fig.add_subplot(gs[1, :])
+ax4 = fig.add_subplot(gs[2, :])
+
+ax1_right = ax1.twinx()
+
+# Plot histograms for x (in ax1)
+sns.histplot(
+    ctmc_samples_x[:,-1].flatten(),
+    kde=True,
+    stat="density",
+    label="CTMC Samples",
+    color="skyblue",
+    alpha=0.6,
+    ax=ax1,
+)
+sns.histplot(
+    mog_samples.flatten(),
+    kde=True,
+    stat="density",
+    label=f"MoG Samples at t={samples_t}",
+    color="salmon",
+    alpha=0.6,
+    ax=ax1,
+)
+
+# ... rest of the code for ax1 ...
+
+# Add the energy plot to ax2
+plot_time_dependent_energy(U_xt, T=T, n_lines=50, x_min=-20.0, x_max=20.0, y_min=0.5, y_max=10.0, reverse=False)
+ax2.set_title("Time-Dependent Energy", fontsize=16)
+ax2.set_xlabel("Position (x)", fontsize=12)
+ax2.set_ylabel("Energy", fontsize=12)
+
+# ... existing code for creating meshgrids and calculating energy values ...
+
+# Plot colormaps
+im_x = ax3.pcolormesh(T_x, X, energy_values_x, cmap='viridis', norm=LogNorm(), shading='auto')
+im_p = ax4.pcolormesh(T_p, P, energy_values_p, cmap='viridis',  shading='auto')
+
+# Add colorbars
+fig.colorbar(im_x, ax=ax3, label='Potential Energy')
+fig.colorbar(im_p, ax=ax4, label='Kinetic Energy')
+
+# Plot individual trajectories
+num_trajectories = min(10000, N_initialconds)
+for i in range(num_trajectories):
+    ax3.plot(time_points, ctmc_samples_x[i], color='white', alpha=0.1, linewidth=0.5)
+    ax4.plot(time_points, ctmc_samples_p[i], color='white', alpha=0.1, linewidth=0.5)
+
+# Customize the plots
+ax3.set_title("Position Trajectories on Energy Landscape", fontsize=16)
+ax3.set_xlabel("Time", fontsize=12)
+ax3.set_ylabel("Position (x)", fontsize=12)
+ax3.set_ylim(-20, 20)
+
+ax4.set_title("Momentum Trajectories on Energy Landscape", fontsize=16)
+ax4.set_xlabel("Time", fontsize=12)
+ax4.set_ylabel("Momentum (p)", fontsize=12)
+ax4.set_ylim(-20, 20)
+
+plt.tight_layout()
+plt.show()
 
 # %%
