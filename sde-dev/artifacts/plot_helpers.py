@@ -3,14 +3,14 @@ import jax
 import jax.numpy as jnp
 
 
-def plot_time_dependent_energy(energy_fn,T=1.0, n_lines=51, center_x=-2.0, y_min=0.5, y_max=6.0, reverse=False):
+def plot_time_dependent_energy(energy_fn,T=1.0, n_lines=51,x_min=-6.0,x_max=6.0, y_min=0.5, y_max=6.0, reverse=False):
     # Create a grid of time values
     if reverse:
         t_values = jnp.linspace(1.0*T, 0.0, n_lines)
     else:
         t_values = jnp.linspace(0.0, 1.0*T, n_lines)
 
-    x = jnp.linspace(center_x - 6, center_x + 6, 1000)
+    x = jnp.linspace(x_min, x_max, 1000)
 
     fig = plt.figure(layout="constrained", figsize=(8, 6), dpi=400)
     mosaic = [["main"], ["colorbar"]]
