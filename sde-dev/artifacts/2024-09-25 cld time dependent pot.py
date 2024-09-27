@@ -45,7 +45,7 @@ weights = jnp.array([0.8, 0.2])
 def sigmoid(x):
     return 1 / (1 + jnp.exp(-x))
 
-def reverse_sigmoid(x, k=10):
+def reverse_sigmoid(x, k=20):
     return 1 - sigmoid(k * (x - 0.5))
 
 temp_fn = lambda t: temp_0 + (temp_final - temp_0) * reverse_sigmoid(t / T)
@@ -55,6 +55,8 @@ plt.figure(figsize=(12, 6))
 
 # Calculate temperatures
 temperatures = jax.vmap(temp_fn)(time_points)
+temperatures[-1]
+#%%
 
 # Plot the temperature profile
 plt.plot(time_points, temperatures, color='red', linewidth=2)
@@ -209,18 +211,14 @@ sns.histplot(
 x_values = jnp.linspace(ax1.get_xlim()[0], ax1.get_xlim()[1], N_timesteps)
 U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), None))(x_values)
 exp_neg_U = jnp.exp(-U_values)
-ax1_right = ax1.twinx()
+# ax1_right = ax1.twinx()
 ax1_right.plot(x_values, exp_neg_U, color='green', label='p(x)')
 
 # Customize the density plot for x
-ax1.set_title("Comparison adiabatic sampling vs true probability distribution", fontsize=font_size)
+ax1.set_title(f"Comparison adiabatic sampling vs true probability distribution; final temperature = {temp_final}; integration time = {T}", fontsize=font_size)
 ax1.set_xlabel("Value", fontsize=font_size)
 ax1.set_ylabel("Density", fontsize=font_size)
 
-# Remove the y-axis label and tick labels for the right axis, keep green ticks
-ax1_right.set_ylabel("")
-ax1_right.tick_params(axis='y', colors='green', labelcolor='green')
-ax1_right.set_yticklabels([])  # Remove tick labels from right axis
 
 # Combine legends from both axes
 lines1, labels1 = ax1.get_legend_handles_labels()
