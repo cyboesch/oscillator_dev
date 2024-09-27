@@ -21,7 +21,7 @@ state_dim = 1
 
 dt0 = 0.22
 t0 = 0.0
-T = 10000.0
+T = 100.0
 N_timesteps = int((T - t0) / dt0) + 1
 time_points = jnp.linspace(t0, T, N_timesteps)
 temp_final = 1000.0
@@ -111,51 +111,55 @@ def run_time_evolving_cdl(y0,key):
     ctmc_samples_x = ctmc_solution.ys[:, :state_dim]
     ctmc_samples_p = ctmc_solution.ys[:, state_dim:]
     
-    return ctmc_samples_x.reshape(-1)[-1], ctmc_samples_p.reshape(-1)[-1]
+    return ctmc_samples_x, ctmc_samples_p
 # %%
 seed_ini = 1
 key_ini = jrnd.PRNGKey(seed_ini)
-N_initialconds = 10
+N_initialconds = 10000
 keys = jrnd.split(key_ini, N_initialconds)
 samples_t = 0
 initial_position = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
 initial_velocity = jnp.zeros_like(initial_position)
 z0 = jnp.vstack([initial_position, initial_velocity])
 
-seed_brownian = 2
-key_brownian = jrnd.PRNGKey(seed_brownian)
-print(key_brownian.shape)
-keys_brownian = jrnd.split(key_ini, N_initialconds)
-keys_brownian[:,0]
+seed_bm = 2
+key_bm = jrnd.PRNGKey(seed_bm)
+keys_bm = jrnd.split(key_bm, N_initialconds)
+
+#%%
+ctmc_samples_x, ctmc_samples_p = jax.vmap(run_time_evolving_cdl)(z0.T, keys_bm)
+
 #%%
 
-key = jrnd.PRNGKey(seed)
-initial_position = jnp.array([-2.0]) #jnp.zeros(state_dim)
-initial_velocity = jnp.zeros(state_dim)
-y0 = jnp.concatenate([initial_position, initial_velocity])
+# key = jrnd.PRNGKey(seed)
+# initial_position = jnp.array([-2.0]) #jnp.zeros(state_dim)
+# initial_velocity = jnp.zeros(state_dim)
+# y0 = jnp.concatenate([initial_position, initial_velocity])
 
-ctmc_samples_x, ctmc_samples_p = run_time_evolving_cdl(y0,key)
+# ctmc_samples_x, ctmc_samples_p = run_time_evolving_cdl(y0,key)
 
 # %%
 # Import seaborn and update matplotlib style
 import seaborn as sns
 import matplotlib.pyplot as plt
+from matplotlib.colors import LogNorm
 
 sns.set_theme(style="darkgrid")
-keys = jrnd.split(key, N_timesteps)
+key_sample = jrnd.PRNGKey(seed_ini)
+keys = jrnd.split(key_sample, N_timesteps)
 samples_t = T
 mog_samples = jax.vmap(lambda key: sample_mog(key, **params_fn(samples_t)))(keys)
 
 
 
 # Create a figure with four subplots
-fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(20, 16))
+fig, ((ax1,ax3, ax4)) = plt.subplots(3, 1, figsize=(20, 16))
 
 ax1_right = ax1.twinx()
 
 # Plot histograms for x
 sns.histplot(
-    ctmc_samples_x.flatten(),
+    ctmc_samples_x[:,-1].flatten(),
     kde=True,
     stat="density",
     label="CTMC Samples",
@@ -202,39 +206,49 @@ y_max = max(ax1.get_ylim()[1], ax1_right.get_ylim()[1])
 ax1.set_ylim(y_min, y_max)
 ax1_right.set_ylim(y_min, y_max)
 
-# ... rest of the existing code ...
 
-# Plot histograms for p
-sns.histplot(
-    ctmc_samples_p.flatten(),
-    kde=True,
-    stat="density",
-    label="CTMC Samples (p)",
-    color="lightgreen",
-    alpha=0.6,
-    ax=ax2,
-)
+# After the existing plot code, add the following:
 
-# Customize the density plot for p
-ax2.set_title("Distribution of CTMC Samples (p)", fontsize=16)
-ax2.set_xlabel("Value", fontsize=16)
-ax2.set_ylabel("Density", fontsize=16)
-ax2.legend(fontsize=10)
+# Create meshgrids for the colormaps
+x_range = jnp.linspace(-20, 20, 500)
+p_range = jnp.linspace(-20, 20, 500)
+t_range = jnp.linspace(t0, T, 500)
+X, T_x = jnp.meshgrid(x_range, t_range)
+P, T_p = jnp.meshgrid(p_range, t_range)
 
-# Plot trace plot for x on the third subplot
-ax3.plot(jnp.arange(len(ctmc_samples_x)), ctmc_samples_x.flatten(), alpha=0.6)
-ax3.set_title("Trace Plot of CTMC Samples (x)", fontsize=16)
-ax3.set_xlabel("Sample Index", fontsize=16)
-ax3.set_ylabel("Value", fontsize=16)
+# Calculate the energy values for position
+energy_values_x = jax.vmap(jax.vmap(lambda x, t: U(t, jnp.array([x, 0.0]), None)))(X, T_x)
 
-# Plot trace plot for p on the fourth subplot
-ax4.plot(jnp.arange(len(ctmc_samples_p)), ctmc_samples_p.flatten(), alpha=0.6)
-ax4.set_title("Trace Plot of CTMC Samples (p)", fontsize=16)
-ax4.set_xlabel("Sample Index", fontsize=16)
-ax4.set_ylabel("Value", fontsize=16)
+# Calculate the energy values for momentum (using potential function V)
+energy_values_p = jax.vmap(jax.vmap(lambda p, t: V(t, jnp.array([0.0, p]), None)))(P, T_p)
 
-# Adjust layout and show the plot
+# Plot colormaps
+im_x = ax3.pcolormesh(T_x, X, energy_values_x, cmap='viridis', norm=LogNorm(), shading='auto')#norm=LogNorm(),
+im_p = ax4.pcolormesh(T_p, P, energy_values_p, cmap='viridis',  shading='auto')#norm=LogNorm(),
+
+# Add colorbars
+fig.colorbar(im_x, ax=ax3, label='Potential Energy')
+fig.colorbar(im_p, ax=ax4, label='Kinetic Energy')
+
+# Plot individual trajectories
+num_trajectories = min(100, N_initialconds)  # Limit to 100 trajectories for clarity
+for i in range(num_trajectories):
+    ax3.plot(time_points, ctmc_samples_x[i], color='white', alpha=0.1, linewidth=0.5)
+    ax4.plot(time_points, ctmc_samples_p[i], color='white', alpha=0.1, linewidth=0.5)
+
+# Customize the plots
+ax3.set_title("Position Trajectories on Energy Landscape", fontsize=16)
+ax3.set_xlabel("Time", fontsize=12)
+ax3.set_ylabel("Position (x)", fontsize=12)
+ax3.set_ylim(-20, 20)
+
+ax4.set_title("Momentum Trajectories on Energy Landscape", fontsize=16)
+ax4.set_xlabel("Time", fontsize=12)
+ax4.set_ylabel("Momentum (p)", fontsize=12)
+ax4.set_ylim(-20, 20)
+
 plt.tight_layout()
 plt.show()
-#%%
 
+
+# %%
