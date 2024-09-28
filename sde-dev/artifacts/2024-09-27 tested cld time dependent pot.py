@@ -56,19 +56,20 @@ class Args(NamedTuple):
 
 seed = 0
 
-state_dim: StateDim = 10
+state_dim: StateDim = 1
 
 dt0: Time = 0.22
 t0: Time = 0.0
 T: Time = 1000.0
-num_timesteps: int = int((T - t0) / dt0) + 1
+num_timesteps: Count = int((T - t0) / dt0) + 1
 
 time_points: ArrayLike = jnp.linspace(t0, T, num_timesteps)
 
 temp_final: Temperature = 1000.0
 temp_0: Temperature = 1.0
 
-num_mixture_components = 2
+num_mixture_components: Count = 2
+
 means = jnp.array([-4.0, 7.0])
 covariances = jnp.array([0.1, 0.1])
 weights = jnp.array([0.8, 0.2])
@@ -93,7 +94,7 @@ def create_block_diagonal_cov(variances: ArrayLike, state_dim: StateDim) -> Matr
 
 # --- Mixture of 2 100-D Gaussians
 
-def create_means_nd(means: Vector, num_mixture_components: int, state_dim: StateDim) -> Matrix:
+def create_means_nd(means: Vector, num_mixture_components: Count, state_dim: StateDim) -> Matrix:
     return jnp.ones((num_mixture_components, state_dim)) * means[:, None]
 
 means_nd = create_means_nd(means, num_mixture_components, state_dim)
@@ -146,7 +147,7 @@ def sigmoid(x: Position) -> Position:
     return 1 / (1 + jnp.exp(-x))
 
 
-def reverse_sigmoid(x: Position, k: float = 10.0) -> Position:
+def reverse_sigmoid(x: Position, k: Scalar = 10.0) -> Position:
     return 1 - sigmoid(k * (x - 0.5))
 
 
@@ -200,19 +201,21 @@ def target_logdensity_fn(t: Time, x: Position, args: Args) -> Scalar:
 
 #%%
 # --- System parameters
-Zero = jnp.zeros((state_dim, state_dim))
-Identity = jnp.eye(state_dim)
-mass: ArrayLike = 1.0 * Identity
-damping: ArrayLike = jnp.sqrt(4.0 * mass)
-sys_params = SystemParams(mass=mass, damping=damping)
-args_1d = Args(params_fn=generate_params_1d, system=sys_params)
-args = Args(params_fn=generate_params_nd, system=sys_params)
+Zero: Matrix = jnp.zeros((state_dim, state_dim))
+Identity: Matrix = jnp.eye(state_dim)
+mass: Matrix = 1.0 * Identity
+damping: Scalar = jnp.sqrt(4.0 * mass)
+
+sys_params: SystemParams = SystemParams(mass=mass, damping=damping)
+args: Args = Args(params_fn=generate_params_nd, system=sys_params)
+
 #%%
 generate_params_1d(0.0).values()
 for x in generate_params_nd(0.0).values():
     print(x.shape)
 val = target_logdensity_fn(0.0, get_position(jnp.zeros(2 * state_dim)), args)
 print(val)
+
 #%%
 def U(t: Time, y: State, args: Args) -> Scalar:
     return -1.0 * target_logdensity_fn(t, get_position(y), args)
@@ -229,13 +232,6 @@ H: Callable[[Time, State, Args], Scalar] = lambda t, z, args: U(t, z, args) + V(
 )
 
 # %%
-# H(0.0, jnp.zeros(2 * state_dim), args_1d)
-jax.grad(H, argnums=1)(0.0, jnp.zeros(2 * state_dim), args)
-# curently returns State(position=Array([-0.01051272], dtype=float64), velocity=Array([0.], dtype=float64))
-# should return Array([-0.01051272, 0], dtype=float64)
-
-# %%
-
 D: Callable[[Time, State, Args], Matrix] = lambda t, z, args: jnp.block(
     [
         [Zero, Zero],
@@ -270,7 +266,7 @@ def sample_velocity(key: jrnd.PRNGKey, args: Args, t: Time) -> Velocity:
     return jnp.zeros(state_dim)
 
 
-def sample_initial_condition(key: jrnd.PRNGKey, args: Args, t: Time) -> ArrayLike:
+def sample_initial_condition(key: jrnd.PRNGKey, args: Args, t: Time) -> State:
     pos_key, vel_key = jrnd.split(key)
     position = sample_position(pos_key, args, t)
     velocity = sample_velocity(vel_key, args, t)
@@ -303,7 +299,7 @@ def run_time_evolving_cdl(
         progress_meter=diffrax.TqdmProgressMeter(),
     )
 
-    return jax.vmap(unpack_state)(ctmc_solution.ys)
+    return jax.vmap(unpack_state)(ctmc_solution.ys)  # xs, vs
 
 
 # %%
@@ -349,7 +345,7 @@ print(f"xs.shape: {xs.shape}\nvs.shape: {vs.shape}")
 # %%
 
 U_xt: Callable[[ArrayLike, Time], Scalar] = lambda x, t: -target_logdensity_fn(
-    t, x, args_1d 
+    t, x, args
 )
 
 plot_time_dependent_energy(
@@ -357,7 +353,6 @@ plot_time_dependent_energy(
 )
 # %%
 # Import seaborn and update matplotlib style
-assert False, "Needs to be updated for N-Dimensional visualizations"
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
@@ -376,9 +371,6 @@ font_size = 20
 fig, ((ax1, ax3, ax4)) = plt.subplots(3, 1, figsize=(20, 16))
 
 ax1_right = ax1.twinx()
-#%%
-xs[:, -1].flatten().shape
-#%%
 # Plot histograms for x
 sns.histplot(
     xs[:, -1].flatten(),
@@ -399,7 +391,7 @@ sns.histplot(
 
 
 x_values = jnp.linspace(ax1.get_xlim()[0], ax1.get_xlim()[1], num_timesteps)
-U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), args_1d))(x_values)
+U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), args))(x_values)
 exp_neg_U = jnp.exp(-U_values)
 # ax1_right = ax1.twinx()
 ax1_right.plot(x_values, exp_neg_U, color="green", label="p(x)")
@@ -435,12 +427,12 @@ X, T_x = jnp.meshgrid(x_range, t_range)
 P, T_p = jnp.meshgrid(p_range, t_range)
 
 # Calculate the energy values for position
-energy_values_x = jax.vmap(jax.vmap(lambda x, t: U(t, jnp.array([x, 0.0]), args_1d)))(
+energy_values_x = jax.vmap(jax.vmap(lambda x, t: U(t, jnp.array([x, 0.0]), args)))(
     X, T_x
 )
 
 # Calculate the energy values for momentum (using potential function V)
-energy_values_p = jax.vmap(jax.vmap(lambda p, t: V(t, jnp.array([0.0, p]), args_1d)))(
+energy_values_p = jax.vmap(jax.vmap(lambda p, t: V(t, jnp.array([0.0, p]), args)))(
     P, T_p
 )
 
@@ -458,6 +450,10 @@ fig.colorbar(im_p, ax=ax4, label="Kinetic Energy")
 
 # Plot individual trajectories
 num_trajectories = min(50, N_initialconds)  # Limit to 100 trajectories for clarity
+
+#%%
+xs.shape
+#%%
 for i in range(num_trajectories):
     ax3.plot(
         time_points,
