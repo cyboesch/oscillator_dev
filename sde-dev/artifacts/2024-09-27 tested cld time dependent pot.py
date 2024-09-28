@@ -15,25 +15,34 @@ from thermoai.distributions import mog_logpdf, sample_mog
 import seaborn as sns
 
 # %%
-Time = float
-Position = ArrayLike
-Velocity = ArrayLike
-State = Union[Position, Velocity]
+# --- Types
+
+Time = float  # Real number representing time
+StateDim = int  # Dimension of a position in state space
+Count = int  # Natural number representing a quantity
+Temperature = float  # Positive real number representing temperature
+Scalar = float  # Positive real number representing a scalar quantity
+Matrix = ArrayLike  # shape: (StateDim, StateDim)
+Vector = ArrayLike  # shape: (StateDim,)
+
+Position = ArrayLike  # shape: (StateDim,)
+Velocity = ArrayLike  # shape: (StateDim,)
+State = Union[Position, Velocity]  # shape: (2*StateDim,)
 
 
-class DistributionParams(Dict):
-    means: ArrayLike
-    covariances: ArrayLike
-    weights: ArrayLike
+class MixtureParams(Dict):
+    means: Vector
+    covariances: Matrix
+    weights: Vector
 
 
 class SystemParams(NamedTuple):
-    mass: ArrayLike
-    damping: ArrayLike
+    mass: Scalar | Matrix
+    damping: Scalar | Matrix
 
 
 class Args(NamedTuple):
-    params_fn: Callable[[Time], DistributionParams]
+    params_fn: Callable[[Time], MixtureParams]
     system: SystemParams
 
 
@@ -47,20 +56,51 @@ class Args(NamedTuple):
 
 seed = 0
 
-state_dim: int = 1
+state_dim: StateDim = 10
 
-dt0 = 0.22
-t0 = 0.0
-T = 1000.0
-N_timesteps = int((T - t0) / dt0) + 1
-time_points = jnp.linspace(t0, T, N_timesteps)
-temp_final = 1000.0
-temp_0 = 1.0
+dt0: Time = 0.22
+t0: Time = 0.0
+T: Time = 1000.0
+num_timesteps: int = int((T - t0) / dt0) + 1
 
+time_points: ArrayLike = jnp.linspace(t0, T, num_timesteps)
+
+temp_final: Temperature = 1000.0
+temp_0: Temperature = 1.0
+
+num_mixture_components = 2
 means = jnp.array([-4.0, 7.0])
 covariances = jnp.array([0.1, 0.1])
 weights = jnp.array([0.8, 0.2])
 
+# %%
+def create_block_diagonal_cov(variances: ArrayLike, state_dim: int) -> ArrayLike:
+    """
+    Create a block diagonal covariance matrix.
+    
+    Args:
+    covariances (ArrayLike): 1D array of covariance values for each component.
+    state_dim (int): Dimension of the state space.
+    
+    Returns:
+    ArrayLike: Block diagonal covariance matrix.
+    """
+    num_components = len(variances)
+    covariances_nd = jnp.zeros((num_components, state_dim, state_dim))
+    for i, c in enumerate(variances):
+        covariances_nd = covariances_nd.at[i].set(jnp.eye(state_dim) * c)
+    return covariances_nd
+
+# --- Mixture of 2 100-D Gaussians
+
+# make (num_mixture_components, state_dim) dimensional
+means_nd = jnp.ones((num_mixture_components, state_dim)) * means[:, None]
+print(f"means_nd.shape: {means_nd.shape}")
+
+# Create block diagonal covariance matrix
+covariances_nd = create_block_diagonal_cov(covariances, state_dim)
+print(f"covariances_nd.shape: {covariances_nd.shape}")
+#%%
 
 # --- Helper functions to unpack and pack states
 def make_state_fns(state_dim: int) -> tuple[Callable, ...]:
@@ -88,31 +128,8 @@ def make_state_fns(state_dim: int) -> tuple[Callable, ...]:
 
     return get_position, get_velocity, unpack_state, pack_state
 
-# test with 3 state dimensions
-get_position, get_velocity, unpack_state, pack_state = make_state_fns(3)
-test_state = pack_state(jnp.array([1.0, 2.0, 3.0]), jnp.array([0.0, 0.0, 0.0]))
-print(f"test_state: {test_state}")
-print(f"unpack_state(test_state): {unpack_state(test_state)}")
-# test with 2 state dimensions
-get_position, get_velocity, unpack_state, pack_state = make_state_fns(2)
-test_state = pack_state(jnp.array([1.0, 2.0]), jnp.array([0.0, 0.0]))
-print(f"test_state: {test_state}")
-print(f"unpack_state(test_state): {unpack_state(test_state)}")
-# test with 1 state dimension
-get_position, get_velocity, unpack_state, pack_state = make_state_fns(1)
-test_state = pack_state(jnp.array([1.0]), jnp.array([0.0]))
-print(f"test_state: {test_state}")
-print(f"unpack_state(test_state): {unpack_state(test_state)}")
 
-# test vmap on 3 6d states
-test_states = jnp.stack([jnp.array([1.0, 2.0, 3.0, 0.0, 0.0, 0.0]), jnp.array([4.0, 5.0, 6.0, 0.0, 0.0, 0.0]), jnp.array([7.0, 8.0, 9.0, 0.0, 0.0, 0.0])])
-get_position, get_velocity, unpack_state, pack_state = make_state_fns(3)
-# unpack
-unpacked = jax.vmap(unpack_state)(test_states)
-print(f"unpacked: {unpacked}")
-repacked = jax.vmap(pack_state)(jax.vmap(get_position)(test_states), jax.vmap(get_velocity)(test_states))
-print(f"repacked: {repacked}")
-
+get_position, get_velocity, unpack_state, pack_state = make_state_fns(state_dim)
 #%%
 # --- Make time-dependent energy
 # weights_t_fn = lambda t: jnp.array(
@@ -136,7 +153,7 @@ def reverse_sigmoid(x: Position, k: float = 10.0) -> Position:
 plt.figure(figsize=(12, 6))
 
 
-def temp_fn(t: Time) -> float:
+def temp_fn(t: Time) -> Scalar:
     return temp_0 + (temp_final - temp_0) * reverse_sigmoid(t / T)
 
 
@@ -163,57 +180,70 @@ plt.show()
 # %%
 
 
-def generate_params(t: Time) -> DistributionParams:
-    return DistributionParams(
+def generate_params_1d(t: Time) -> MixtureParams:
+    return MixtureParams(
         means=means,
         covariances=covariances * temp_fn(t),
         weights=weights,
     )
+    
+def generate_params_nd(t: Time) -> MixtureParams:
+    return MixtureParams(
+        means=means_nd,
+        covariances=covariances_nd * temp_fn(t),
+        weights=weights,
+    )
 
 
-def target_logdensity_fn(t: Time, x: Position, args: Args) -> float:
+def target_logdensity_fn(t: Time, x: Position, args: Args) -> Scalar:
     return mog_logpdf(x, **args.params_fn(t))
 
-
-# %%
+#%%
+# --- System parameters
 Zero = jnp.zeros((state_dim, state_dim))
 Identity = jnp.eye(state_dim)
 mass: ArrayLike = 1.0 * Identity
 damping: ArrayLike = jnp.sqrt(4.0 * mass)
 sys_params = SystemParams(mass=mass, damping=damping)
-args = Args(params_fn=generate_params, system=sys_params)
-
-
-def U(t: Time, y: ArrayLike, args: Args) -> float:
+args_1d = Args(params_fn=generate_params_1d, system=sys_params)
+args = Args(params_fn=generate_params_nd, system=sys_params)
+#%%
+generate_params_1d(0.0).values()
+for x in generate_params_nd(0.0).values():
+    print(x.shape)
+val = target_logdensity_fn(0.0, get_position(jnp.zeros(2 * state_dim)), args)
+print(val)
+#%%
+def U(t: Time, y: State, args: Args) -> Scalar:
     return -1.0 * target_logdensity_fn(t, get_position(y), args)
 
 
-def V(t: Time, y: ArrayLike, args: Args) -> float:
+def V(t: Time, y: State, args: Args) -> Scalar:
     M_inv = jnp.linalg.inv(args.system.mass)
     v = get_velocity(y)
     return 0.5 * jnp.sum(v * (M_inv @ v), axis=-1)
 
 
-H: Callable[[Time, ArrayLike, Args], float] = lambda t, z, args: U(t, z, args) + V(
+H: Callable[[Time, State, Args], Scalar] = lambda t, z, args: U(t, z, args) + V(
     t, z, args
 )
 
 # %%
-H(0.0, jnp.array([0.0, 0.0]), args)
-jax.grad(H, argnums=1)(0.0, jnp.array([0.0, 0.0]), args)
+# H(0.0, jnp.zeros(2 * state_dim), args_1d)
+jax.grad(H, argnums=1)(0.0, jnp.zeros(2 * state_dim), args)
 # curently returns State(position=Array([-0.01051272], dtype=float64), velocity=Array([0.], dtype=float64))
 # should return Array([-0.01051272, 0], dtype=float64)
 
 # %%
 
-D: Callable[[Time, ArrayLike, Args], ArrayLike] = lambda t, z, args: jnp.block(
+D: Callable[[Time, State, Args], Matrix] = lambda t, z, args: jnp.block(
     [
         [Zero, Zero],
         [Zero, damping * Identity],
     ]
 )
 
-Q: Callable[[Time, ArrayLike, Args], ArrayLike] = lambda t, z, args: jnp.block(
+Q: Callable[[Time, State, Args], Matrix] = lambda t, z, args: jnp.block(
     [
         [Zero, Identity],
         [-Identity, Zero],
@@ -221,7 +251,7 @@ Q: Callable[[Time, ArrayLike, Args], ArrayLike] = lambda t, z, args: jnp.block(
 )
 
 # Set to zero for CLD so we don't waste time computing it.
-tau_fn: Callable[[Time, ArrayLike, Args], ArrayLike] = lambda t, z, args: jnp.zeros(
+tau_fn: Callable[[Time, State, Args], Vector] = lambda t, z, args: jnp.zeros(
     (2 * state_dim,)
 )
 ################
@@ -267,7 +297,7 @@ def run_time_evolving_cdl(
         y0=y0,
         args=args,
         adjoint=diffrax.DirectAdjoint(),
-        max_steps=N_timesteps,
+        max_steps=num_timesteps,
         solver_state=None,  # ItoMilstein does not need solver_state
         saveat=diffrax.SaveAt(ts=saveat_ts),
         progress_meter=diffrax.TqdmProgressMeter(),
@@ -299,7 +329,7 @@ parameters = [
     ["dt0", dt0],
     ["t0", t0],
     ["T", T],
-    ["N_timesteps", N_timesteps],
+    ["N_timesteps", num_timesteps],
     ["temp_final", temp_final],
     ["temp_0", temp_0],
     ["means", means],
@@ -318,8 +348,8 @@ print(f"xs.shape: {xs.shape}\nvs.shape: {vs.shape}")
 # %%
 # %%
 
-U_xt: Callable[[ArrayLike, Time], float] = lambda x, t: -target_logdensity_fn(
-    t, x, args 
+U_xt: Callable[[ArrayLike, Time], Scalar] = lambda x, t: -target_logdensity_fn(
+    t, x, args_1d 
 )
 
 plot_time_dependent_energy(
@@ -337,7 +367,7 @@ sns.set_theme(style="darkgrid")
 key_sample = jrnd.PRNGKey(seed_ini)
 keys = jrnd.split(key_sample, N_samples)
 samples_t = T
-mog_samples = jax.vmap(lambda key: sample_mog(key, **generate_params(samples_t)))(keys)
+mog_samples = jax.vmap(lambda key: sample_mog(key, **generate_params_1d(samples_t)))(keys)
 
 
 font_size = 20
@@ -367,8 +397,8 @@ sns.histplot(
 # )
 
 
-x_values = jnp.linspace(ax1.get_xlim()[0], ax1.get_xlim()[1], N_timesteps)
-U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), args))(x_values)
+x_values = jnp.linspace(ax1.get_xlim()[0], ax1.get_xlim()[1], num_timesteps)
+U_values = jax.vmap(lambda x: U(samples_t, jnp.array([x, 0.0]), args_1d))(x_values)
 exp_neg_U = jnp.exp(-U_values)
 # ax1_right = ax1.twinx()
 ax1_right.plot(x_values, exp_neg_U, color="green", label="p(x)")
@@ -404,12 +434,12 @@ X, T_x = jnp.meshgrid(x_range, t_range)
 P, T_p = jnp.meshgrid(p_range, t_range)
 
 # Calculate the energy values for position
-energy_values_x = jax.vmap(jax.vmap(lambda x, t: U(t, jnp.array([x, 0.0]), args)))(
+energy_values_x = jax.vmap(jax.vmap(lambda x, t: U(t, jnp.array([x, 0.0]), args_1d)))(
     X, T_x
 )
 
 # Calculate the energy values for momentum (using potential function V)
-energy_values_p = jax.vmap(jax.vmap(lambda p, t: V(t, jnp.array([0.0, p]), args)))(
+energy_values_p = jax.vmap(jax.vmap(lambda p, t: V(t, jnp.array([0.0, p]), args_1d)))(
     P, T_p
 )
 
