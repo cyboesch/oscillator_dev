@@ -74,7 +74,7 @@ covariances = jnp.array([0.1, 0.1])
 weights = jnp.array([0.8, 0.2])
 
 # %%
-def create_block_diagonal_cov(variances: ArrayLike, state_dim: int) -> ArrayLike:
+def create_block_diagonal_cov(variances: ArrayLike, state_dim: StateDim) -> Matrix:
     """
     Create a block diagonal covariance matrix.
     
@@ -93,12 +93,12 @@ def create_block_diagonal_cov(variances: ArrayLike, state_dim: int) -> ArrayLike
 
 # --- Mixture of 2 100-D Gaussians
 
-# make (num_mixture_components, state_dim) dimensional
-means_nd = jnp.ones((num_mixture_components, state_dim)) * means[:, None]
-print(f"means_nd.shape: {means_nd.shape}")
+def create_means_nd(means: Vector, num_mixture_components: int, state_dim: StateDim) -> Matrix:
+    return jnp.ones((num_mixture_components, state_dim)) * means[:, None]
 
-# Create block diagonal covariance matrix
+means_nd = create_means_nd(means, num_mixture_components, state_dim)
 covariances_nd = create_block_diagonal_cov(covariances, state_dim)
+print(f"means_nd.shape: {means_nd.shape}")
 print(f"covariances_nd.shape: {covariances_nd.shape}")
 #%%
 
@@ -357,6 +357,7 @@ plot_time_dependent_energy(
 )
 # %%
 # Import seaborn and update matplotlib style
+assert False, "Needs to be updated for N-Dimensional visualizations"
 import seaborn as sns
 import matplotlib.pyplot as plt
 from matplotlib.colors import LogNorm
