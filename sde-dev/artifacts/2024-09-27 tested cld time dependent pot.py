@@ -451,9 +451,7 @@ fig.colorbar(im_p, ax=ax4, label="Kinetic Energy")
 # Plot individual trajectories
 num_trajectories = min(50, N_initialconds)  # Limit to 100 trajectories for clarity
 
-#%%
-xs.shape
-#%%
+
 for i in range(num_trajectories):
     ax3.plot(
         time_points,
