@@ -48,19 +48,19 @@ def mog_pdf(x, means, covariances, weights):
     pdfs = jax.vmap(component_pdf)(means, covariances)
     return jnp.sum(weights*pdfs)
 
-@jax.jit
-def mog_logpdf(x, means, covariances, weights):    
-    pdf = mog_pdf(x, means, covariances, weights)
-    return jnp.log(pdf)
+# @jax.jit
+# def mog_logpdf(x, means, covariances, weights):    
+#     pdf = mog_pdf(x, means, covariances, weights)
+#     return jnp.log(pdf)
 
 ## Geoefrrey more elaborate version
-# @jax.jit
-# def mog_logpdf(x, means, covariances, weights):
-#     def component_logpdf(mean, cov):
-#         return multivariate_normal.logpdf(x, mean=mean, cov=cov)
+@jax.jit
+def mog_logpdf(x, means, covariances, weights):
+    def component_logpdf(mean, cov):
+        return multivariate_normal.logpdf(x, mean=mean, cov=cov)
     
-#     logpdfs = jax.vmap(component_logpdf)(means, covariances)
-#     return logsumexp(jnp.log(weights) + logpdfs)
+    logpdfs = jax.vmap(component_logpdf)(means, covariances)
+    return logsumexp(jnp.log(weights) + logpdfs)
 
 # @jax.jit
 # def mog_logpdf(x, means, covariances, weights):
