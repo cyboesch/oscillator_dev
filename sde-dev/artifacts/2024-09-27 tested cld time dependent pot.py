@@ -58,21 +58,21 @@ seed = 0
 
 state_dim: StateDim = 1
 
-dt0: Time = 0.22
+dt0: Time = 0.022
 t0: Time = 0.0
-T: Time = 1000.0
+T: Time = 2000.0
 num_timesteps: Count = int((T - t0) / dt0) + 1
 
 time_points: ArrayLike = jnp.linspace(t0, T, num_timesteps)
 
-temp_final: Temperature = 1000.0
+temp_final: Temperature = 2000.0
 temp_0: Temperature = 1.0
 
-num_mixture_components: Count = 2
+num_mixture_components: Count = 3
 
-means = jnp.array([-4.0, 7.0])
-covariances = jnp.array([0.1, 0.1])
-weights = jnp.array([0.8, 0.2])
+means = jnp.array([-4.0, 7.0, 4.0])
+covariances = jnp.array([0.6, 0.03, 0.01])
+weights = jnp.array([0.7, 0.2, 0.1])
 
 # %%
 def create_block_diagonal_cov(variances: ArrayLike, state_dim: StateDim) -> Matrix:
@@ -136,26 +136,21 @@ get_position, get_velocity, unpack_state, pack_state = make_state_fns(state_dim)
 # weights_t_fn = lambda t: jnp.array(
 #     [weights[0] * (1 - (t-t0)/(T-t0)), weights[1] * (t-t0)/(T-t0)]
 # )
-# temp_fn = lambda t: jnp.where(t<T/10, jnp.array(
-#     temp_final - (temp_final - temp_0) * (t/(T/10))
+# temp_fn = lambda t: jnp.where(t<T, jnp.array(
+#     temp_final - (temp_final - temp_0) * (t/(T))
 # ), jnp.array(
 #     temp_0
 # ))
 
+# temp_fn = lambda t: 1/((1-1/temp_final)*(t/T) + 1/temp_final)
 
-def sigmoid(x: Position) -> Position:
+def sigmoid(x):
     return 1 / (1 + jnp.exp(-x))
 
-
-def reverse_sigmoid(x: Position, k: Scalar = 10.0) -> Position:
+def reverse_sigmoid(x, k=13):
     return 1 - sigmoid(k * (x - 0.5))
 
-
-plt.figure(figsize=(12, 6))
-
-
-def temp_fn(t: Time) -> Scalar:
-    return temp_0 + (temp_final - temp_0) * reverse_sigmoid(t / T)
+temp_fn = lambda t: temp_0 + (temp_final - temp_0) * reverse_sigmoid(t / T)
 
 
 # Calculate temperatures
@@ -342,6 +337,7 @@ xs, vs = jax.vmap(run_time_evolving_cdl, in_axes=(0, None, 0))(y0, args, keys_bm
 print(f"xs.shape: {xs.shape}\nvs.shape: {vs.shape}")
 
 # %%
+xs.shape
 # %%
 
 U_xt: Callable[[ArrayLike, Time], Scalar] = lambda x, t: -target_logdensity_fn(
@@ -374,6 +370,7 @@ ax1_right = ax1.twinx()
 # Plot histograms for x
 sns.histplot(
     xs[:, -1].flatten(),
+    bins=100,
     stat="density",
     label="CTMC Samples",
     color="skyblue",
@@ -458,14 +455,14 @@ for i in range(num_trajectories):
         xs[i],
         color="white",
         alpha=0.1,
-        linewidth=3.0,
+        linewidth=5.0,
     )
     ax4.plot(
         time_points,
         vs[i],
         color="white",
         alpha=0.1,
-        linewidth=3.0,
+        linewidth=5.0,
     )
 
 # Customize the plots
@@ -481,5 +478,4 @@ ax4.set_ylim(-20, 20)
 
 plt.tight_layout()
 plt.show()
-
 #%%
