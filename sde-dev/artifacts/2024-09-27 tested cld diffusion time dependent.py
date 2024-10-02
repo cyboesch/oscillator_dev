@@ -2,6 +2,7 @@
 from typing import Callable, Dict, NamedTuple, Union
 import diffrax
 import jax
+# jax.config.update("jax_disable_jit", True)
 from jax.typing import ArrayLike
 from tabulate import tabulate
 
@@ -9,7 +10,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp
 import jax.random as jrnd
 from plot_helpers import plot_time_dependent_energy
-from ctmc import ContinuousTimeMarkovChain
+from ctmc_physical import ContinuousTimeMarkovChain
 import matplotlib.pyplot as plt
 from thermoai.distributions import mog_logpdf, sample_mog
 import seaborn as sns
@@ -65,7 +66,7 @@ num_timesteps: Count = int((T - t0) / dt0) + 1
 
 time_points: ArrayLike = jnp.linspace(t0, T, num_timesteps)
 
-temp_final: Temperature = 20000.0
+temp_final: Temperature = 1000.0
 temp_0: Temperature = 4.0
 
 num_mixture_components: Count = 3
@@ -142,7 +143,7 @@ get_position, get_velocity, unpack_state, pack_state = make_state_fns(state_dim)
 #     temp_0
 # ))
 
-# temp_fn = lambda t: 1/((1/temp_0-1/temp_final)*(t/T) + 1/temp_final)
+temp_fn = lambda t: 1/((1/temp_0-1/temp_final)*(t/T) + 1/temp_final)
 
 # def sigmoid(x):
 #     return 1 / (1 + jnp.exp(-x))
@@ -152,17 +153,17 @@ get_position, get_velocity, unpack_state, pack_state = make_state_fns(state_dim)
 
 # temp_fn = lambda t: temp_0 + (temp_final - temp_0) * reverse_sigmoid(t / T)
 
-def temp_fn(t: Time) -> Scalar:
-    # Constants (you may want to define these in your Args or as global constants)
-    a = 100000000  # Acceleration parameter (adjust as needed)
+# def temp_fn(t: Time) -> Scalar:
+#     # Constants (you may want to define these in your Args or as global constants)
+#     a = 1  # Acceleration parameter (adjust as needed)
 
-    numerator = 1.0
-    denominator = (
-        ((1 / temp_0 - 1 / temp_final) / (T + a * T**2 / 2)) * (t + a * t**2 / 2)
-        + 1 / temp_final
-    )
+#     numerator = 1.0
+#     denominator = (
+#         ((1 / temp_0 - 1 / temp_final) / (T + a * T**2 / 2)) * (t + a * t**2 / 2)
+#         + 1 / temp_final
+#     )
     
-    return numerator / denominator
+#     return numerator / denominator
 
 
 # Calculate temperatures
@@ -191,14 +192,14 @@ plt.show()
 def generate_params_1d(t: Time) -> MixtureParams:
     return MixtureParams(
         means=means,
-        covariances=covariances * temp_fn(t),
+        covariances=covariances*temp_0 ,
         weights=weights,
     )
     
 def generate_params_nd(t: Time) -> MixtureParams:
     return MixtureParams(
         means=means_nd,
-        covariances=covariances_nd * temp_fn(t),
+        covariances=covariances_nd*temp_0,
         weights=weights,
     )
 
@@ -242,7 +243,7 @@ H: Callable[[Time, State, Args], Scalar] = lambda t, z, args: U(t, z, args) + V(
 D: Callable[[Time, State, Args], Matrix] = lambda t, z, args: jnp.block(
     [
         [Zero, Zero],
-        [Zero, damping * Identity],
+        [Zero, damping * Identity*temp_fn(t)],
     ]
 )
 
@@ -250,6 +251,13 @@ Q: Callable[[Time, State, Args], Matrix] = lambda t, z, args: jnp.block(
     [
         [Zero, Identity],
         [-Identity, Zero],
+    ]
+)
+
+damping_fn: Callable[[Time, State, Args], Matrix] = lambda t, z, args: jnp.block(
+    [
+        [Zero, Zero],
+        [Zero, damping],
     ]
 )
 
@@ -280,7 +288,7 @@ def sample_initial_condition(key: jrnd.PRNGKey, args: Args, t: Time) -> State:
     return pack_state(position, velocity)
 
 
-target_ctmc = ContinuousTimeMarkovChain(H_fn=H, D_fn=D, Q_fn=Q, Gamma_fn=tau_fn)
+target_ctmc = ContinuousTimeMarkovChain(H_fn=H, D_fn=D, Q_fn=Q, damping_fn=damping_fn, Gamma_fn=tau_fn)
 solver = diffrax.ItoMilstein()
 saveat_ts = jnp.arange(t0, T, dt0)
 
@@ -320,6 +328,9 @@ y0: ArrayLike = jax.vmap(lambda key: sample_initial_condition(key, args, samples
 )
 
 # %%
+y0
+
+# %%
 
 seed_bm = 2
 key_bm = jrnd.PRNGKey(seed_bm)
@@ -349,7 +360,7 @@ xs, vs = jax.vmap(run_time_evolving_cdl, in_axes=(0, None, 0))(y0, args, keys_bm
 print(f"xs.shape: {xs.shape}\nvs.shape: {vs.shape}")
 
 # %%
-xs.shape
+vs
 # %%
 
 U_xt: Callable[[ArrayLike, Time], Scalar] = lambda x, t: -target_logdensity_fn(
