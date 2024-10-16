@@ -1,3 +1,5 @@
+# This notebook demonstrates how to generate toy data
+
 #%%
 # get parent directory and add to sys path
 import sys
