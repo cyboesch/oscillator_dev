@@ -9,11 +9,11 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from utils.toy_data import create_multimodal_swissroll_distribution, create_diamond_distribution
+from utils.toy_data import get_multimodal_swissroll_sample, get_diamond_sample
 
 #%%
 # Create the distribution
-multimodal_swissroll_sample = create_multimodal_swissroll_distribution()
+multimodal_swissroll_sample, multimodal_swissroll_logpdf = get_multimodal_swissroll_sample()
 
 # Example usage with vmap for multiple samples
 key = jax.random.PRNGKey(0)
@@ -30,9 +30,13 @@ plt.scatter(samples[:, 0], samples[:, 1], alpha=0.5, s=1)
 plt.gca().set_aspect('equal', adjustable='box')
 plt.axis('off')
 plt.show()
+
+# compute logpdf
+logpdfs = jax.vmap(multimodal_swissroll_logpdf)(samples)
+print(f"logpdfs: {logpdfs}")
 #%%
 # Create the diamond distribution
-diamond_sample = create_diamond_distribution()
+diamond_sample, diamond_logpdf = get_diamond_sample()
 
 # Example usage with vmap for multiple inputs
 key = jax.random.PRNGKey(0)
@@ -49,4 +53,8 @@ plt.scatter(diamond_samples[:, 0], diamond_samples[:, 1], alpha=0.5, s=1)
 plt.gca().set_aspect('equal', adjustable='box')
 plt.axis('off')
 plt.show()
+
+# compute logpdf
+logpdfs = jax.vmap(diamond_logpdf)(diamond_samples)
+print(f"logpdfs: {logpdfs}")
 #%%

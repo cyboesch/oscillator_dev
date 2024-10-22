@@ -1,8 +1,9 @@
 import jax
 import jax.numpy as jnp
 from typing import Callable
+from jax.scipy.stats import multivariate_normal
 
-def create_diamond_distribution() -> Callable:
+def get_diamond_sample() -> Callable:
     WIDTH: int = 3
     BOUND: float = 0.5
     NOISE: float = 0.04
@@ -17,6 +18,7 @@ def create_diamond_distribution() -> Callable:
     means = means @ ROTATION_MATRIX
 
     covariance_factor: jnp.ndarray = NOISE * jnp.eye(2)
+    covariance: jnp.ndarray = covariance_factor @ covariance_factor.T  # Full covariance matrix
 
     def sample(key: jnp.ndarray) -> jnp.ndarray:
         component_key, noise_key = jax.random.split(key)
@@ -30,9 +32,20 @@ def create_diamond_distribution() -> Callable:
         # Combine selected mean with noise
         return means[index] + noise @ covariance_factor
 
-    return sample
+    def logpdf(x: jnp.ndarray) -> float:
+        # Compute the log PDF of x under each Gaussian component
+        def component_logpdf(mean):
+            return multivariate_normal.logpdf(x, mean, covariance)
 
-def create_multimodal_swissroll_distribution() -> Callable:
+        # Vectorize over all components
+        logpdfs = jax.vmap(component_logpdf)(means)
+        
+        # Calculate the log-sum-exp across components (equal mixing weights)
+        return jax.scipy.special.logsumexp(logpdfs) - jnp.log(WIDTH ** 2)
+
+    return sample, logpdf
+
+def get_multimodal_swissroll_sample() -> Callable:
     NOISE: float = 0.2
     MULTIPLIER: float = 0.01
     OFFSETS: jnp.ndarray = jnp.array([
