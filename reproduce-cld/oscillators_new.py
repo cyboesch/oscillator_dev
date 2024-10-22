@@ -78,7 +78,7 @@ def energy_linear_coupling(x_i, x_j, c_lin):
     """
     return c_lin * (x_i - x_j)**2
 
-def energy_optomechanical(x_i, x_j, g_opt):
+def energy_optomechanical(x, y, g_opt):
     """Optomechanical coupling energy between two oscillators
     
     Args:
@@ -86,11 +86,11 @@ def energy_optomechanical(x_i, x_j, g_opt):
         g_opt: Optomechanical coupling strength
         
     Returns:
-        V_opt(x_i, x_j) = g_opt * x_i * x_j
+        V_opt(x, y) = g_opt * x² * y
     """
-    return g_opt * x_i * x_j
+    return g_opt * x**2 * y
 
-def energy_potential_network(x, k_harmonic, k_duffing):
+def energy_self_network(x, k_harmonic, k_duffing):
     """Total potential energy of all uncoupled oscillators
     
     Args:
@@ -146,7 +146,7 @@ def energy_network(x, k_harmonic, k_duffing, c_lin, g_opt, connectivity, k_b=1.0
         Total normalized energy of the network
     """
     # Potential energy of individual oscillators
-    single_oscillator_energy = energy_potential_network(x, k_harmonic, k_duffing)
+    single_oscillator_energy = energy_self_network(x, k_harmonic, k_duffing)
     # Coupling energy between oscillators
     coupling_energy = energy_coupling_network(x, c_lin, g_opt, connectivity)
     # Total energy normalized by temperature
