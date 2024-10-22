@@ -51,7 +51,7 @@ def energy_coupling_network(x, c_lin, c_optomech, connectivity):
 
 @jit
 def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity, k_b=1.0, T=1.0):
-    # get energy of network of oscillators given input parameters
+    # returns energy of network of oscillators given input parameters
     return (
         energy_self_network(x, k_lin, k_duff) +
         energy_coupling_network(x, c_lin, c_optomech, connectivity)
@@ -121,82 +121,3 @@ def integrate_dofs(
         return logsumexp(compute_integrands(energy_for_marginalized_point))
 
     return logsumexp_energy_fn_marg
-
-
-#%%
-# %% [markdown]
-# aim: re
-#%%
-
-
-#%%
-class Oscillator(eqx.Module):  # node
-    m: float = 1
-    position: jnp.ndarray = jnp.zeros(2)
-    velocity: jnp.ndarray = jnp.zeros(2)
-    
-class Spring(eqx.Module):  # (self) edge
-    dof1_index: int
-    dof2_index: Optional[int] = None
-    stiffness: float = 1
-    rest_length: float = 1
-    force_function: Callable[[float], float] = lambda x: x
-
-
-class OscillatorNetwork(eqx.Module):
-    dofs: List[Oscillator]
-    springs: List[Spring]
-
-    def __init__(self):
-        self.dofs = []
-        self.springs = []
-
-    def add_dof(self, position: jnp.ndarray, mass: float) -> int:
-        self.dofs.append(Oscillator(position, mass))
-        return len(self.dofs) - 1
-
-    def add_spring(self, 
-                   dof1_index: int, 
-                   dof2_index: Optional[int], 
-                   stiffness: float, 
-                   rest_length: float, 
-                   force_function: Callable[[float], float]) -> int:
-        self.springs.append(Spring(dof1_index, dof2_index, stiffness, rest_length, force_function))
-        return len(self.springs) - 1
-
-    def get_state(self) -> jnp.ndarray:
-        return jnp.array([dof.position for dof in self.dofs])
-
-    def set_state(self, state: jnp.ndarray) -> 'OscillatorNetwork':
-        new_dofs = [Oscillator(pos, dof.mass) for pos, dof in zip(state, self.dofs)]
-        return eqx.tree_at(lambda t: t.dofs, self, new_dofs)
-
-def dynamics(network: OscillatorNetwork, t: float, params: eqx.Module) -> Tuple[jnp.ndarray, jnp.ndarray]:
-    forces = network.compute_forces()
-    accelerations = forces / jnp.array([dof.mass for dof in network.dofs])
-    velocities = network.get_state()  # Assuming the state contains velocities
-    return velocities, accelerations
-
-# Create a JIT-compiled version of the dynamics function
-jit_dynamics = eqx.filter_jit(dynamics)
-import jax
-
-# Initialize the network
-if __name__ == "__main__":
-    network = OscillatorNetwork()
-    dof1 = network.add_dof(jnp.array([0.0, 0.0]), 1.0)
-    dof2 = network.add_dof(jnp.array([1.0, 0.0]), 1.0)
-    network.add_spring(dof1, dof2, 1.0, 1.0, lambda x: x)  # Linear spring
-
-    # Set up initial conditions
-    initial_state = jnp.array([[0.0, 0.0], [1.0, 0.0], [0.0, 0.0], [0.0, 0.0]])  # positions and velocities
-    network = network.set_state(initial_state)
-
-    # Simulate
-    t = 0.0
-    dt = 0.01
-    for _ in range(100):
-        velocities, accelerations = jit_dynamics(network, t, None)
-        new_state = network.get_state() + velocities * dt + 0.5 * accelerations * dt**2
-        network = network.set_state(new_state)
-        t += dt
