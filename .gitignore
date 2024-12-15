@@ -9,7 +9,7 @@ __pycache__/
 .npz
 .png
 
-thermoai/notebooks/out
+mechanical-p-bit/out/*
 # C extensions
 *.so
 
