@@ -8,7 +8,7 @@ import equinox as eqx
 from oscillators_new import energy_network
 
 # Import CTMC helper functions from ctmc.py
-from ctmc import create_ctmc_from_logdensity
+from ctmc import create_langevin_ctmc_from_potential
 
 # Define the score model
 class ScoreModel(eqx.Module):
@@ -31,6 +31,7 @@ class ScoreModel(eqx.Module):
         t_expanded = jnp.array([t])  # Shape (1,)
         x_input = jnp.hstack([x, t_expanded])
         return self.mlp(x_input)  # Output shape: (data_dim,)
+
 
 # Define the loss function for a single data point
 def loss_fn_single(score_model, x0, t, key):

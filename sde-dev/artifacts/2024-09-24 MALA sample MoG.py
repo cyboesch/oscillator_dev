@@ -1,22 +1,14 @@
 #%%
-from typing import Callable
-from pathlib import Path
 from diffrax import Euler, VirtualBrownianTree
 import diffrax
-import pytest
 import jax
 import jax.numpy as jnp
 import jax.random as jrnd
 from ctmc import ContinuousTimeMarkovChain
 from mh_solver import MetropolisAdjustedSolver
-from mala import sample as mala_sample
-from jax.scipy.stats import multivariate_normal as MVN
 import matplotlib.pyplot as plt
 from thermoai.distributions import mog_logpdf, sample_mog
-from jaxtyping import Float
-import tqdm
 import seaborn as sns
-
 from mala import compute_log_rho
 
 jax.config.update("jax_enable_x64", True)

@@ -4,6 +4,7 @@
 # get parent directory and add to sys path
 import sys
 import os
+os.environ["CUDA_VISIBLE_DEVICES"] = "-1"
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import jax

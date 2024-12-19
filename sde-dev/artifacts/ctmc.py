@@ -7,6 +7,7 @@ from diffrax import ControlTerm, MultiTerm, ODETerm
 from jaxtyping import ArrayLike
 from diffrax._custom_types import Y, Args, RealScalarLike, BM
 
+
 class ContinuousTimeMarkovChain(eqx.Module):
     H: Callable[[RealScalarLike, Y, Args], RealScalarLike]  # H in Fox et al.
     D: Callable[[RealScalarLike, Y, Args], ArrayLike]  # D >= 1 in Fox et al.
@@ -70,3 +71,8 @@ def create_ctmc_from_logdensity(
 ):
     H = lambda t, z, args: -1.0 * logdensity_fn(t, z, args)
     return ContinuousTimeMarkovChain(H, D, Q)
+
+
+
+if __name__ == "__main__":
+    pass

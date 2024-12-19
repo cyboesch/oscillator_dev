@@ -1,6 +1,3 @@
-# %%
-# %%
-# %%
 from typing import Union
 import jax.numpy as jnp
 import jax.random as jrnd
@@ -158,7 +155,7 @@ def run_simulation(y0):
     return full_trajectory
 
 # Set up multiple initial conditions
-n_data_samples = 1000
+n_data_samples = 100
 rand_init_idxs = np.random.choice(np.arange(config.init_config.N), n_data_samples, replace=False)
 inits = init_x0s_p0s[rand_init_idxs]  # This should be your (n_inits, 2) array of initial conditions
 
@@ -320,3 +317,4 @@ ax_dict['G'].yaxis.tick_left()
 plt.tight_layout()
 plt.show()
 # %%
+

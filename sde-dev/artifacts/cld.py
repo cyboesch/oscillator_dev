@@ -11,10 +11,7 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
     M: float
     gamma: float
     beta: float
-    Gamma: Union[float, None] = None  # Default to sqrt(4 * M)
-    U: Union[Callable, None] = None
-    V: Union[Callable, None] = None
-    score_fn: Union[Callable, None] = None
+    Gamma: float
     
     def __init__(
         self,
@@ -22,10 +19,6 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         M: float,
         beta: float,
         gamma: float,
-        Gamma: Union[float, None] = None,
-        U: Union[Callable, None] = None,
-        V: Union[Callable, None] = None,
-        score_fn: Union[Callable, None] = None,
     ):
         if state_dim < 1 or M <= 0 or beta <= 0:
             raise ValueError("All parameters must be positive.")
@@ -33,102 +26,12 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
         self.M = M
         self.gamma = gamma
         self.beta = beta
-        if Gamma is None:
-            self.Gamma = jnp.sqrt(4 * M)
-        else:
-            self.Gamma = Gamma
-        if U is None:
-            self.U = lambda x: 0.5 * jnp.sum(x**2)
-        else:
-            self.U = U
-        if V is None:
-            self.V = lambda v: 0.5 * jnp.sum(v**2) / self.M
-        else:
-            self.V = V
-        self.score_fn = score_fn
-
-    @eqx.filter_jit
-    def fwd_drift(self, t, u, args):
-        x, v = u[:self.state_dim], u[self.state_dim:]
+        self.Gamma = jnp.sqrt(4 * M)
         
-        # Compute Hamiltonian terms
-        x_dot = grad(self.V)(v)         # e.g., M^-1 v
-        v_dot = -1.0 * grad(self.U)(x, t)  # e.g., -x
-        friction_term = -self.Gamma * x_dot  # e.g., -Γ M^-1 v
-        hamiltonian_terms = jnp.concatenate([x_dot, 
-                                             v_dot])
-        ou_process_terms = jnp.concatenate([jnp.zeros_like(x), 
-                                            friction_term])
-
-        return self.beta * (hamiltonian_terms + ou_process_terms)
-    
-    @eqx.filter_jit
-    def bwd_drift(self, t, u, args):
-        x, v = u[:self.state_dim], u[self.state_dim:]
-        
-        # Compute Hamiltonian terms (A_H)
-        x_dot = -grad(self.V)(v)  # e.g., -M^-1 v
-        v_dot = grad(self.U)(x, t)  # e.g., x
-        
-        # Compute Ornstein-Uhlenbeck terms (A_O)
-        friction_term = -self.Gamma * grad(self.V)(v)  # e.g., -Γ M^-1 v
-        
-        # Compute score function term (S)
-        
-        s_v = s[self.state_dim:]
-        score_term = 2 * self.Gamma * (s_v + grad(self.V)(v))
-        
-        # Combine all terms
-        hamiltonian_terms = jnp.concatenate([x_dot, v_dot])
-        ou_process_terms = jnp.concatenate([jnp.zeros_like(x), friction_term])
-        score_terms = jnp.concatenate([jnp.zeros_like(x), score_term])
-        
-        return self.beta * (hamiltonian_terms + ou_process_terms + score_terms)
-    
-    @eqx.filter_jit
-    def fwd_diffusion(self, t, u, args):
-        """
-        Compute the diffusion term of the CLD process at time t.
-
-        The diffusion term is given by:
-        [      0      |      0      ]
-        [-------------|-------------]
-        [      0      |  σ * I      ]
-        where I is the identity matrix of size state_dim x state_dim
-        and σ = sqrt(2 * Γ * β)
-        """
-
-        zero_block = jnp.zeros((self.state_dim, self.state_dim))
-        sigma = jnp.sqrt(2 * self.Gamma * self.beta)
-        diffusion_block = sigma * jnp.eye(self.state_dim)
-
-        G = jnp.block([[zero_block, zero_block], [zero_block, diffusion_block]])
-
-        return G
-    
-    # @eqx.filter_jit
-    # def bwd_diffusion(self, t, u, args):
-    #     zero_block = jnp.zeros((self.state_dim, self.state_dim))
-    #     sigma = jnp.sqrt(2 * self.Gamma * self.beta)
-    #     diffusion_block = sigma * jnp.eye(self.state_dim)
-    #     G = jnp.block([[zero_block, zero_block], [zero_block, diffusion_block]])
-
-    #     return G
-    
-    def get_fwd_terms(self, bm):
-        drift_term = diffrax.ODETerm(self.fwd_drift)
-        diffusion_term = diffrax.ControlTerm(self.fwd_diffusion, bm)
-        return diffrax.MultiTerm(drift_term, diffusion_term)
-    
-    # def get_bwd_terms(self, bm):
-    #     drift_term = diffrax.ODETerm(self.bwd_drift)
-    #     diffusion_term = diffrax.ControlTerm(self.bwd_diffusion, bm)
-    #     return diffrax.MultiTerm(drift_term, diffusion_term)
-
     def B(self, t):
         return self.beta * t
 
-    def mean(self, t, x_0, v_0):
+    def mu_t(self, t, x_0, v_0):
         if x_0.shape != (self.state_dim,) or v_0.shape != (self.state_dim,):
             raise ValueError("x_0 and v_0 must have shape (state_dim,)")
         B_t = self.B(t)
@@ -212,14 +115,14 @@ class CriticallyDampedLangevinDynamics(eqx.Module):
     def get_dsm_kernel_params(self, u_0, t):
         """ "when conditioning on initial data and velocity samples x0 and v0 (as in denoising score matching (DSM)), the mean and covariance matrix of the perturbation kernel p(ut|u0) can be obtained by setting μ0 = (x0, v0)>, Σ0xx = 0, and Σ0vv = 0." ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=6ZWQTEZZ))"""
         x_0, v_0 = u_0[: self.state_dim], u_0[self.state_dim :]
-        mean = self.mean(t, x_0, v_0)
+        mean = self.mu_t(t, x_0, v_0)
         cov = self.covariance(t, Sigma_0_xx=0, Sigma_0_vv=0)
         return mean, cov
 
     def get_hsm_kernel_params(self, x_0, t, gamma=1.0):
         """ "conditioning only on initial data samples x0 and marginalizing over the full initial velocity distribution (as in our hybrid score matching (HSM), see Sec. C), the mean and covariance matrix of the perturbation kernel p(ut|x0) can be obtained by setting μ0 = (x0, 0d)>, Σ0xx = 0, and Σ0vv = γM" ([Dockhorn et al., 2022, p. 21](zotero://select/library/items/EW8U6A8H)) ([pdf](zotero://open-pdf/library/items/NAYANTYJ?page=21&annotation=CW5PUPSH))"""
         v_0_hsm = jnp.zeros_like(x_0)
-        mean = self.mean(t, x_0, v_0_hsm)
+        mean = self.mu_t(t, x_0, v_0_hsm)
         cov = self.covariance(t, Sigma_0_xx=0, Sigma_0_vv=gamma * self.M)
         return mean, cov
 

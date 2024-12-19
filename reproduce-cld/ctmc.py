@@ -73,3 +73,18 @@ def create_ctmc_from_logdensity(
 ):
     H = lambda t, z, args: -1.0 * logdensity_fn(t, z, args)
     return ContinuousTimeMarkovChain(H, D, Q)
+
+
+def create_langevin_ctmc_from_logdensity(
+    logdensity_fn: Callable[[RealScalarLike, Y, Args], RealScalarLike],
+):
+    D = lambda t, z, args: jnp.eye(z.shape[-1])
+    Q = lambda t, z, args: jnp.zeros((z.shape[-1], z.shape[-1]))
+    return create_ctmc_from_logdensity(logdensity_fn, D, Q)
+
+def create_langevin_ctmc_from_potential(
+    potential_fn: Callable[[RealScalarLike, Y, Args], RealScalarLike]
+):
+    D = lambda t, z, args: jnp.eye(z.shape[-1])
+    Q = lambda t, z, args: jnp.zeros((z.shape[-1], z.shape[-1]))
+    return ContinuousTimeMarkovChain(potential_fn, D, Q)
