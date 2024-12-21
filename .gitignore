@@ -13,6 +13,8 @@ mechanical-p-bit/out/*
 # C extensions
 *.so
 
+out/
+
 # Distribution / packaging
 .Python
 build/
