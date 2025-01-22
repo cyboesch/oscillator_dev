@@ -56,7 +56,7 @@ T = .3             # Temperature (K)
 
 # Simulation Parameters
 t0 = 0.0  
-num_periods = 20000# Start time
+num_periods = 1000# Start time
 period = 2*jnp.pi/w1
 t1 = num_periods*period
 dt0 = period/1000
@@ -225,7 +225,7 @@ def solve_SDE_QP_clamped(Q1_fixed, P1_fixed, args, seed=0):
     sde_samples_QP = solution_QP.ys
     return sde_samples_QP
 
-downsample_step = 100
+downsample_step = 500
 
 # Downsample the Q1,P1 values from the zero simulation, starting halfway through
 halfway_idx = len(sde_samples_QP_target) // 2  # Get the midpoint index
@@ -365,7 +365,7 @@ args_target = args_target
 # Starting from args_0 and training towards args_target
 initial_args = args_0  
 
-n_steps = 3
+n_steps = 5
 learning_rate = 10.
 final_args = train(initial_args, n_steps=n_steps, learning_rate=learning_rate)
 
