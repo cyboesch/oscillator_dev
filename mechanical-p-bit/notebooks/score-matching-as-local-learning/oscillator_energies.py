@@ -43,7 +43,7 @@ def energy_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity, k_b=1.0, T
     return (
         energy_self_network(x, k_lin, k_duff) +
         energy_coupling_network(x, c_lin, c_optomech, connectivity)
-    ) / (2 * k_b * T)
+    ) / (k_b * T)
 
 
 
