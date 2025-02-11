@@ -72,82 +72,36 @@ def rescale_to_pi_interval(data):
     return scaled - jnp.pi
 
 
-def XY_energy(x, W, h):
-    """
-    Compute the energy of the XY model
-    Args:
-        x: array of phases (shape: N_osc)
-        W: coupling matrix (shape: N_osc x N_osc)
-        h: local biases (shape: N_osc)
-    Returns:
-        energy: scalar
-    """
-    # Compute coupling energy
-    coupling = -jnp.sum(W * jnp.cos(x[:, None] - x[None, :]))
-    # Compute bias energy
-    bias = -jnp.sum(h * jnp.cos(x))
-    return coupling + bias
-
-def drift_x_fn(t, state, args):
-    """
-    Drift function for the XY model with effective temperature
-    Args:
-        t: time
-        state: array of phases (shape: N_osc)
-        args: tuple containing (W, h)
-    Returns:
-        Array of phase velocities
-    """
-    W, h = args
-    # Compute force from energy gradient
-    dE_dtheta = jax.grad(XY_energy, argnums=0)(state, W, h)
-    
-    # Damping term
-    gamma = 1.0  # Damping coefficient, adjust as needed
-    
-    dtheta_dt = -gamma * dE_dtheta
-    
-    return dtheta_dt
-
-def diffusion_x_fn(t, state, args):
-    """
-    Diffusion function for the XY model with effective temperature
-    Args:
-        t: time
-        state: array of phases (shape: N_osc)
-        args: additional arguments
-    Returns:
-        Noise matrix (shape: N_osc x 1)
-    """
-    T_eff = 1.0  # Effective temperature, adjust as needed
-    gamma = 1.0  # Same damping coefficient as in drift
-    
-    noise_strength = jnp.sqrt(2 * gamma * T_eff)
-    noise_matrix = jnp.eye(N_osc)
-    return noise_strength * noise_matrix
 
 
-def compute_gradient_difference(samples, param_idx, dt, key, num_noise_samples=1000):
+def CD1_gradient(energy_fn, samples, args, dt, D, key, num_noise_samples=1000):
     """
-    Computes the difference in energy gradients between current and evolved samples for XY model.
-    When num_noise_samples=0, computes deterministic gradient without noise averaging.
+    Computes the difference in energy gradients between current and evolved samples
+    for a generic energy function.
     
     Args:
-        samples: Input samples (angles)
-        param_idx: Parameter index for gradient computation
+        energy_fn: Energy function that takes (x, *args) as input
+        samples: Input samples
+        args: Tuple of parameters for the energy function
         dt: Time step
+        D: Noise strength (diffusion constant)
         key: Random key
         num_noise_samples: Number of noise realizations to average over. If 0, computes deterministically.
+    
+    Returns:
+        Gradient differences with respect to all parameters in args
     """
-    # Compute current gradients
-    grad_energy_curr = grad(XY_energy, argnums=(param_idx))
-    grad_energy_x_curr = lambda x: grad_energy_curr(x, J)
+    # Compute current gradients for all parameters
+    grad_energy_curr = grad(energy_fn, argnums=range(1, len(args) + 1))
+    grad_energy_x_curr = lambda x: grad_energy_curr(x, args)
     grad_batch_curr = vmap(grad_energy_x_curr)
     current_grads = grad_batch_curr(samples)
+    print(current_grads.shape)
     current_grads_avg = jnp.mean(current_grads, axis=0)
     
     # Get drift for all samples
-    drift_batch = vmap(lambda x: drift_x_fn(0., x, None))
+    drift_fn = lambda x: -grad(energy_fn, argnums=0)(x, *args)
+    drift_batch = vmap(drift_fn)
     drifts = drift_batch(samples)
     
     if num_noise_samples == 0:
@@ -155,23 +109,23 @@ def compute_gradient_difference(samples, param_idx, dt, key, num_noise_samples=1
         evolved_samples = samples + drifts * dt/2
         
         # Compute evolved gradients
-        grad_energy = grad(XY_energy, argnums=(param_idx))
-        grad_energy_x = lambda x: grad_energy(x, J)
+        grad_energy = grad(energy_fn, argnums=range(1, len(args) + 1))
+        grad_energy_x = lambda x: grad_energy(x, *args)
         grad_batch = vmap(grad_energy_x)
         evolved_grads = grad_batch(evolved_samples)
         avg_evolved_grads = jnp.mean(evolved_grads, axis=0)
     else:
         # Split key for multiple noise samples
-        keys = random.split(key, num_noise_samples)
+        keys = jr.split(key, num_noise_samples)
         
         # Function to compute evolved gradients for one noise realization
         def compute_evolved_grads(key):
-            noise_std = jnp.sqrt(2*T*dt)  # XY model noise scale
-            noise = random.normal(key, shape=samples.shape) * noise_std
+            noise_std = jnp.sqrt(2*D*dt)
+            noise = jr.normal(key, shape=samples.shape) * noise_std
             evolved_samples = samples + drifts * dt/2 + noise
             
-            grad_energy = grad(XY_energy, argnums=(param_idx))
-            grad_energy_x = lambda x: grad_energy(x, J)
+            grad_energy = grad(energy_fn, argnums=range(1, len(args) + 1))
+            grad_energy_x = lambda x: grad_energy(x, *args)
             grad_batch = vmap(grad_energy_x)
             return grad_batch(evolved_samples)
         
