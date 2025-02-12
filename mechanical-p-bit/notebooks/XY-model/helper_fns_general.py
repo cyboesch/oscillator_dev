@@ -47,34 +47,9 @@ def sample_gaussian_mixture(key, n_samples, weights, means, covs):
     samples = jax.vmap(sample_one)(keys_sample, components)
     return samples
 
-def rescale_to_pi_interval(data):
-    """
-    Rescale and shift data to lie in [-π, π] interval
-    
-    Args:
-        data: array of shape (n_samples, N_dimensions)
-    
-    Returns:
-        scaled_data: array of same shape, rescaled to [-π, π]
-    """
-    # Compute min and max for each dimension
-    data_min = jnp.min(data, axis=0)
-    data_max = jnp.max(data, axis=0)
-    data_range = data_max - data_min
-    
-    # First shift to [0, data_range]
-    shifted = data - data_min
-    
-    # Then rescale to [0, 2π]
-    scaled = (shifted / data_range) * (2 * jnp.pi)
-    
-    # Finally shift to [-π, π]
-    return scaled - jnp.pi
 
 
-
-
-def CD1_gradient(energy_fn, samples, args, dt, D, key, num_noise_samples=1000):
+def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_samples=1000):
     """
     Computes the difference in energy gradients between current and evolved samples
     for a generic energy function.
@@ -92,15 +67,15 @@ def CD1_gradient(energy_fn, samples, args, dt, D, key, num_noise_samples=1000):
         Gradient differences with respect to all parameters in args
     """
     # Compute current gradients for all parameters
-    grad_energy_curr = grad(energy_fn, argnums=range(1, len(args) + 1))
-    grad_energy_x_curr = lambda x: grad_energy_curr(x, args)
+    grad_energy_curr = grad(energy_fn, argnums=1)
+    grad_energy_x_curr = lambda x: grad_energy_curr(x, flattened_args)
     grad_batch_curr = vmap(grad_energy_x_curr)
     current_grads = grad_batch_curr(samples)
     print(current_grads.shape)
     current_grads_avg = jnp.mean(current_grads, axis=0)
     
     # Get drift for all samples
-    drift_fn = lambda x: -grad(energy_fn, argnums=0)(x, *args)
+    drift_fn = lambda x: -grad(energy_fn, argnums=0)(x, flattened_args)
     drift_batch = vmap(drift_fn)
     drifts = drift_batch(samples)
     
@@ -109,8 +84,8 @@ def CD1_gradient(energy_fn, samples, args, dt, D, key, num_noise_samples=1000):
         evolved_samples = samples + drifts * dt/2
         
         # Compute evolved gradients
-        grad_energy = grad(energy_fn, argnums=range(1, len(args) + 1))
-        grad_energy_x = lambda x: grad_energy(x, *args)
+        grad_energy = grad(energy_fn, argnums=1)
+        grad_energy_x = lambda x: grad_energy(x, flattened_args)
         grad_batch = vmap(grad_energy_x)
         evolved_grads = grad_batch(evolved_samples)
         avg_evolved_grads = jnp.mean(evolved_grads, axis=0)
@@ -124,8 +99,8 @@ def CD1_gradient(energy_fn, samples, args, dt, D, key, num_noise_samples=1000):
             noise = jr.normal(key, shape=samples.shape) * noise_std
             evolved_samples = samples + drifts * dt/2 + noise
             
-            grad_energy = grad(energy_fn, argnums=range(1, len(args) + 1))
-            grad_energy_x = lambda x: grad_energy(x, *args)
+            grad_energy = grad(energy_fn, argnums=1)
+            grad_energy_x = lambda x: grad_energy(x, flattened_args)
             grad_batch = vmap(grad_energy_x)
             return grad_batch(evolved_samples)
         
