@@ -1,5 +1,5 @@
 import jax
-from jax import grad, vmap
+from jax import grad, vmap, hessian
 import jax.numpy as jnp
 import jax.random as jr
 import diffrax
@@ -47,7 +47,41 @@ def sample_gaussian_mixture(key, n_samples, weights, means, covs):
     samples = jax.vmap(sample_one)(keys_sample, components)
     return samples
 
+def normalize_samples(samples):
+    """
+    Normalize samples to have mean 0 and variance 1 along each dimension.
+    
+    Args:
+        samples: Array of shape (n_samples, n_dimensions)
+    
+    Returns:
+        Normalized samples with same shape as input
+    """
+    # Calculate mean and std along each dimension
+    mean = jnp.mean(samples, axis=0)
+    std = jnp.std(samples, axis=0)
+    
+    # Normalize
+    normalized_samples = (samples - mean) / std
+    
+    return normalized_samples
 
+
+def setup_score_matching_loss(energy_fn, samples):
+    n_samples = samples.shape[0]
+    def loss_fn(flattened_args):
+        def log_propability_unnormalized(x):
+            return -energy_fn(x, flattened_args)
+        
+        current_score = grad(log_propability_unnormalized)
+        current_score2 = hessian(log_propability_unnormalized)
+        
+        current_score_loss_per_sample = lambda x: (jnp.trace(current_score2(x)) + 1/2 * jnp.sum(current_score(x)**2))/n_samples   
+        return jnp.sum(vmap(current_score_loss_per_sample)(samples))
+    return loss_fn
+
+def grad_loss(loss_fn, flattened_args):
+    return grad(loss_fn)(flattened_args)
 
 def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_samples=1000):
     """
@@ -71,7 +105,6 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
     grad_energy_x_curr = lambda x: grad_energy_curr(x, flattened_args)
     grad_batch_curr = vmap(grad_energy_x_curr)
     current_grads = grad_batch_curr(samples)
-    print(current_grads.shape)
     current_grads_avg = jnp.mean(current_grads, axis=0)
     
     # Get drift for all samples
@@ -110,4 +143,4 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
     
     # Compute final gradient difference
     avg_grad_diff = current_grads_avg - avg_evolved_grads
-    return -avg_grad_diff # the negative sign ensures that this is in fact the same graiden is in eq. (1) in the paper "Connections Between Score Matching, Contrastive Divergence, and Pseudolikelihood for Continuous-Valued Variables" by Hyvärinen
+    return -avg_grad_diff/(dt/2) # the negative sign ensures that this is in fact the same gradient as in eq. (1) in the paper "Connections Between Score Matching, Contrastive Divergence, and Pseudolikelihood for Continuous-Valued Variables" by Hyvärinen
