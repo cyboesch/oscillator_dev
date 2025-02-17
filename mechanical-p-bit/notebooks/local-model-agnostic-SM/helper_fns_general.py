@@ -128,7 +128,7 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
         
         # Function to compute evolved gradients for one noise realization
         def compute_evolved_grads(key):
-            noise_std = jnp.sqrt(2*D*dt)
+            noise_std = jnp.sqrt(D*dt)
             noise = jr.normal(key, shape=samples.shape) * noise_std
             evolved_samples = samples + drifts * dt/2 + noise
             
