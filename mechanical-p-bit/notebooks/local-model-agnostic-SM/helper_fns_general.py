@@ -67,9 +67,9 @@ def normalize_samples(samples):
     return normalized_samples
 
 
-def setup_score_matching_loss(energy_fn, samples):
-    n_samples = samples.shape[0]
-    def loss_fn(flattened_args):
+def setup_score_matching_loss_per_batch(energy_fn):
+    def loss_fn_per_batch(flattened_args,batch):
+        n_samples = batch.shape[0]
         def log_propability_unnormalized(x):
             return -energy_fn(x, flattened_args)
         
@@ -77,11 +77,9 @@ def setup_score_matching_loss(energy_fn, samples):
         current_score2 = hessian(log_propability_unnormalized)
         
         current_score_loss_per_sample = lambda x: (jnp.trace(current_score2(x)) + 1/2 * jnp.sum(current_score(x)**2))/n_samples   
-        return jnp.sum(vmap(current_score_loss_per_sample)(samples))
-    return loss_fn
+        return jnp.sum(vmap(current_score_loss_per_sample)(batch))
+    return loss_fn_per_batch
 
-def grad_loss(loss_fn, flattened_args):
-    return grad(loss_fn)(flattened_args)
 
 def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_samples=1000):
     """
@@ -146,31 +144,55 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
     return -avg_grad_diff/(dt/2) # the negative sign ensures that this is in fact the same gradient as in eq. (1) in the paper "Connections Between Score Matching, Contrastive Divergence, and Pseudolikelihood for Continuous-Valued Variables" by Hyvärinen
 
 
-# def run_optimization(loss,gradient, params_initial, samples,key,learning_rate=0.001,n_epochs=20000,batch_size=128):
-#     # Initialize optimizer
-#     optimizer = optax.adam(learning_rate=learning_rate)
-#     opt_state = optimizer.init(params_initial)
+def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000):
+    # Initialize optimizer
+    optimizer = optax.adam(learning_rate=learning_rate)
+    opt_state = optimizer.init(params_initial)
     
-#     @partial(jax.jit, static_argnums=(4,))
-#     def training_step(params, opt_state, samples, key, batch_size):
-#         """Single training step using batched samples"""
-#         # Get random batch of samples
-#         key, subkey = jr.split(key)
-#         n_samples = len(samples)
-#         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
-#         batch = samples[idx]
+    @partial(jax.jit, static_argnums=(3,))
+    def training_step(params, opt_state, samples, batch_size, key):
+        """Single training step using batched samples"""
+        # Get random batch of samples
+        key, subkey = jr.split(key)
+        n_samples = len(samples)
+        idx = jr.randint(subkey, (batch_size,), 0, n_samples)
+        batch = samples[idx]
         
-#         # Setup loss for this batch
-#         batch_score_matching_loss = setup_score_matching_loss(energy_fn, batch)
+        # Setup loss for this batch
+        loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
+        loss_val = loss_fn(params)
         
-#         # Get gradient of parameters for this batch
-#         dparams_sm = grad_loss(batch_score_matching_loss, params)    
+        # Get gradient of parameters for this batch
+        if gradient_fn_per_batch is None:
+            dparams = grad(loss_fn)(params) 
+        else:
+            dparams = gradient_fn_per_batch(params, batch)
+
         
-#         # Compute loss for this batch
-#         loss = batch_score_matching_loss(params)
+        # Apply updates
+        updates, opt_state = optimizer.update(dparams, opt_state)
+        params = optax.apply_updates(params, updates)
         
-#         # Apply updates
-#         updates, opt_state = optimizer.update(dparams_sm, opt_state)
-#         params = optax.apply_updates(params, updates)
+        return params, opt_state, key, loss_val
+    
+    # Training loop
+    params_history = []
+    loss_history = []
+
+    params = params_initial
+
+    for epoch in range(n_epochs):
+        key, subkey = jr.split(key)
+        params, opt_state, key, loss = training_step(
+            params, opt_state, samples, batch_size, subkey)
         
-#         return params, opt_state, key, loss
+        # Store parameters and loss
+        params_history.append(params)
+        loss_history.append(loss)
+        
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch}")
+            print(f"params:\n{params}")
+            print(f"Loss: {loss:.4f}")
+            print("---")
+    return params_history, loss_history
