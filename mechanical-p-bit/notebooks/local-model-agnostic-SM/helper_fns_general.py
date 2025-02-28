@@ -3,9 +3,9 @@ from jax import grad, vmap, hessian
 import jax.numpy as jnp
 import jax.random as jr
 import diffrax
-import matplotlib.pyplot as plt
 from functools import partial
-from jax.scipy.stats import multivariate_normal
+import optax
+
 
 def sample_gaussian_mixture(key, n_samples, weights, means, covs):
     """
@@ -144,3 +144,33 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
     # Compute final gradient difference
     avg_grad_diff = current_grads_avg - avg_evolved_grads
     return -avg_grad_diff/(dt/2) # the negative sign ensures that this is in fact the same gradient as in eq. (1) in the paper "Connections Between Score Matching, Contrastive Divergence, and Pseudolikelihood for Continuous-Valued Variables" by Hyvärinen
+
+
+# def run_optimization(loss,gradient, params_initial, samples,key,learning_rate=0.001,n_epochs=20000,batch_size=128):
+#     # Initialize optimizer
+#     optimizer = optax.adam(learning_rate=learning_rate)
+#     opt_state = optimizer.init(params_initial)
+    
+#     @partial(jax.jit, static_argnums=(4,))
+#     def training_step(params, opt_state, samples, key, batch_size):
+#         """Single training step using batched samples"""
+#         # Get random batch of samples
+#         key, subkey = jr.split(key)
+#         n_samples = len(samples)
+#         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
+#         batch = samples[idx]
+        
+#         # Setup loss for this batch
+#         batch_score_matching_loss = setup_score_matching_loss(energy_fn, batch)
+        
+#         # Get gradient of parameters for this batch
+#         dparams_sm = grad_loss(batch_score_matching_loss, params)    
+        
+#         # Compute loss for this batch
+#         loss = batch_score_matching_loss(params)
+        
+#         # Apply updates
+#         updates, opt_state = optimizer.update(dparams_sm, opt_state)
+#         params = optax.apply_updates(params, updates)
+        
+#         return params, opt_state, key, loss
