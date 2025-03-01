@@ -127,7 +127,7 @@ def solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_samples, dt0):
         y0=initial_state,
         args=(),
         saveat=saveat,
-        progress_meter=diffrax.TqdmProgressMeter(),
+        # progress_meter=diffrax.TqdmProgressMeter(),
         max_steps=1000000000,
         stepsize_controller=diffrax.PIDController(rtol=1e-3, atol=1e-6),  # Enable adaptive stepping
     )
@@ -139,19 +139,20 @@ def solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_samples, dt0):
 
 def setup_MLE_loss_per_batch(energy_fn):
     def loss_fn_per_batch(flattened_args,batch):
-        return -jnp.sum(energy_fn(batch, flattened_args))
+        _loss_fn_per_batch = lambda x: -energy_fn(x,flattened_args)
+        return jnp.sum(vmap(_loss_fn_per_batch)(batch))
     return loss_fn_per_batch
 
-def setup_MLE_gradient_per_batch(energy_fn, N_osc, gamma=1.0, k_b=1.0, T=1.0, t0=0.0, t1=1.0, N_samples=1000, dt0=0.01, initial_state=jnp.array([0.,0.])):
+def setup_MLE_gradient_per_batch(energy_fn, N_osc, gamma=1.0, k_b=1.0, T=1.0, t0=0.0, t1=10.0, N_samples=1000, dt0=0.01, initial_state=jnp.array([0.,0.])):
     
     def gradient_fn_per_batch(flattened_args,batch):
         drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma, k_b, T)
         solution = solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_samples, dt0)
         
         d_energy_d_params = lambda x: grad(energy_fn, argnums=1)(x, flattened_args)
-        expected_val_d_energy_d_params_clamped_batch = jnp.sum(vmap(d_energy_d_params)(solution.ys), axis=0)/solution.ys.shape[0]
+        expected_val_d_energy_d_params_clamped_batch = jnp.sum(vmap(d_energy_d_params)(batch), axis=0)/batch.shape[0]
         
-        expected_val_d_energy_d_params_free = jnp.sum(vmap(d_energy_d_params)(solution.ys), axis=0)/batch.shape[0]
+        expected_val_d_energy_d_params_free = jnp.sum(vmap(d_energy_d_params)(solution.ys), axis=0)/solution.ys.shape[0]
 
         return expected_val_d_energy_d_params_free-expected_val_d_energy_d_params_clamped_batch
          
@@ -248,7 +249,7 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
 # Optimization
 ########################################################################################
 
-def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000):
+def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000, maximize=False):
     """Runs gradient-based optimization using mini-batches.
     
     Args:
@@ -303,7 +304,9 @@ def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per
         else:
             dparams = gradient_fn_per_batch(params, batch)
 
-        
+        if maximize:
+            dparams = -dparams
+            
         # Apply updates
         updates, opt_state = optimizer.update(dparams, opt_state)
         params = optax.apply_updates(params, updates)
