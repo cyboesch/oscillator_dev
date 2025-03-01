@@ -3,9 +3,14 @@ from jax import grad, vmap, hessian
 import jax.numpy as jnp
 import jax.random as jr
 import diffrax
+from diffrax import ControlTerm, MultiTerm, ODETerm
 from functools import partial
 import optax
 
+
+########################################################################################
+# Sampling
+########################################################################################
 
 def sample_gaussian_mixture(key, n_samples, weights, means, covs):
     """
@@ -67,6 +72,88 @@ def normalize_samples(samples):
     return normalized_samples
 
 
+
+########################################################################################
+# Overdamped SDE
+########################################################################################
+
+def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0):
+    """
+    Sets up drift and diffusion functions for overdamped dynamics
+    
+    Args:
+        energy_fn: function taking (state, args) as input
+        flattened_args: parameters for the energy function
+        gamma: damping coefficient
+        k_b: Boltzmann constant
+        T: temperature
+        
+    Returns:
+        drift_fn: function taking (t, state, args) as input
+        diffusion_fn: function taking (t, state, args) as input
+    """
+    # Reduce energy function to only depend on state
+    energy_of_state = lambda state: energy_fn(state, flattened_args)
+    
+    def drift_fn(t, state, args):
+        """Drift function for overdamped dynamics"""
+        dE_dx = grad(energy_of_state)(state)
+        return -gamma * dE_dx
+    
+    def diffusion_fn(t, state, args):
+        """Diffusion function for overdamped dynamics"""
+        noise_strength = jnp.sqrt(2 * gamma * k_b * T)
+        return noise_strength * jnp.eye(N_osc)
+    
+    return drift_fn, diffusion_fn
+
+def solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_steps, dt0):
+    N_osc = initial_state.shape[0]
+    ts = jnp.linspace(t0, t1, N_steps)
+    w_shape = (N_osc,)  # state is just phases for each oscillator
+    brownian_motion = diffrax.VirtualBrownianTree(
+        t0, t1, 1.e-11, w_shape, jr.PRNGKey(0), diffrax.SpaceTimeLevyArea
+    )
+    terms = MultiTerm(ODETerm(drift_fn), ControlTerm(diffusion_fn, brownian_motion))
+    saveat = diffrax.SaveAt(ts=ts)
+
+
+    solution = diffrax.diffeqsolve(
+        terms,
+        solver=diffrax.SRA1(),
+        t0=t0,
+        t1=t1,
+        dt0=dt0,
+        y0=initial_state,
+        args=(),
+        saveat=saveat,
+        progress_meter=diffrax.TqdmProgressMeter(),
+        max_steps=1000000000,
+        stepsize_controller=diffrax.PIDController(rtol=1e-3, atol=1e-6),  # Enable adaptive stepping
+    )
+    return solution
+
+########################################################################################
+# Maximum log likelihood
+#####################################################################################
+
+def setup_MLE_loss_per_batch(energy_fn):
+    def loss_fn_per_batch(flattened_args,batch):
+        return -jnp.sum(energy_fn(batch, flattened_args))
+    return loss_fn_per_batch
+
+def setup_MLE_gradient_per_batch(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0, t0=0.0, t1=1.0, N_steps=1000, dt0=0.01):
+    def gradient_fn_per_batch(flattened_args,batch):
+        drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0)
+        solution = solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_steps, dt0)
+        
+        return grad(MLE_loss_per_batch(energy_fn))(flattened_args, batch)
+    return gradient_fn_per_batch
+
+########################################################################################
+# Score matching gradient
+########################################################################################
+
 def setup_score_matching_loss_per_batch(energy_fn):
     def loss_fn_per_batch(flattened_args,batch):
         n_samples = batch.shape[0]
@@ -80,6 +167,10 @@ def setup_score_matching_loss_per_batch(energy_fn):
         return jnp.sum(vmap(current_score_loss_per_sample)(batch))
     return loss_fn_per_batch
 
+
+########################################################################################
+# CD-1 gradient
+########################################################################################
 
 def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_samples=1000):
     """
@@ -144,7 +235,44 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
     return -avg_grad_diff/(dt/2) # the negative sign ensures that this is in fact the same gradient as in eq. (1) in the paper "Connections Between Score Matching, Contrastive Divergence, and Pseudolikelihood for Continuous-Valued Variables" by Hyvärinen
 
 
+
+
+########################################################################################
+# Optimization
+########################################################################################
+
 def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000):
+    """Runs gradient-based optimization using mini-batches.
+    
+    Args:
+        loss_fn_per_batch: Callable that computes the loss for a batch of samples.
+            Must have signature: loss_fn_per_batch(params, batch) -> scalar_loss
+            where params contains the parameters to optimize and batch is a subset of samples.
+        
+        params_initial: Initial parameters to optimize. Can be any pytree structure 
+            (nested lists/tuples/dicts of arrays).
+        
+        samples: Array of training samples with shape [n_samples, ...].
+        
+        gradient_fn_per_batch: Optional callable to compute gradients for a batch.
+            If None, gradients are computed using jax.grad(loss_fn_per_batch).
+            If provided, must have signature: gradient_fn_per_batch(params, batch) -> gradients
+            where gradients has the same structure as params.
+        
+        key: PRNG key for random batch sampling.
+        
+        batch_size: Number of samples to use per optimization step.
+        
+        learning_rate: Step size for the Adam optimizer.
+        
+        n_epochs: Number of optimization steps to perform.
+
+    Returns:
+        params_history: List of parameter values at each optimization step.
+        loss_history: List of loss values at each optimization step.
+    """
+    
+    
     # Initialize optimizer
     optimizer = optax.adam(learning_rate=learning_rate)
     opt_state = optimizer.init(params_initial)
