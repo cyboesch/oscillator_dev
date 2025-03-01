@@ -107,9 +107,9 @@ def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T
     
     return drift_fn, diffusion_fn
 
-def solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_steps, dt0):
+def solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_samples, dt0):
     N_osc = initial_state.shape[0]
-    ts = jnp.linspace(t0, t1, N_steps)
+    ts = jnp.linspace(t0, t1, N_samples)
     w_shape = (N_osc,)  # state is just phases for each oscillator
     brownian_motion = diffrax.VirtualBrownianTree(
         t0, t1, 1.e-11, w_shape, jr.PRNGKey(0), diffrax.SpaceTimeLevyArea
@@ -142,12 +142,19 @@ def setup_MLE_loss_per_batch(energy_fn):
         return -jnp.sum(energy_fn(batch, flattened_args))
     return loss_fn_per_batch
 
-def setup_MLE_gradient_per_batch(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0, t0=0.0, t1=1.0, N_steps=1000, dt0=0.01):
+def setup_MLE_gradient_per_batch(energy_fn, N_osc, gamma=1.0, k_b=1.0, T=1.0, t0=0.0, t1=1.0, N_samples=1000, dt0=0.01, initial_state=jnp.array([0.,0.])):
+    
     def gradient_fn_per_batch(flattened_args,batch):
-        drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0)
-        solution = solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_steps, dt0)
+        drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma, k_b, T)
+        solution = solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_samples, dt0)
         
-        return grad(MLE_loss_per_batch(energy_fn))(flattened_args, batch)
+        d_energy_d_params = lambda x: grad(energy_fn, argnums=1)(x, flattened_args)
+        expected_val_d_energy_d_params_clamped_batch = jnp.sum(vmap(d_energy_d_params)(solution.ys), axis=0)/solution.ys.shape[0]
+        
+        expected_val_d_energy_d_params_free = jnp.sum(vmap(d_energy_d_params)(solution.ys), axis=0)/batch.shape[0]
+
+        return expected_val_d_energy_d_params_free-expected_val_d_energy_d_params_clamped_batch
+         
     return gradient_fn_per_batch
 
 ########################################################################################
