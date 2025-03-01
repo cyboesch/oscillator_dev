@@ -100,7 +100,7 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
     plt.show()
     
     
-def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, slicing=10, figsize=(6, 6), title="Parameter Evolution"):
+def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False):
     """
     Plot the evolution of parameters during optimization.
     
@@ -134,7 +134,10 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, sli
     loss_history = jnp.array(loss_history[::slicing])
 
     # Find index of lowest loss
-    best_idx = jnp.argmin(loss_history)
+    if maximize:
+        best_idx = jnp.argmax(loss_history)
+    else:
+        best_idx = jnp.argmin(loss_history)
 
     # Get parameters corresponding to lowest loss
     k_lin_best = k_lin_history[best_idx]
