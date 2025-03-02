@@ -72,7 +72,7 @@ def normalize_samples(samples):
     return normalized_samples
 
 ########################################################################################
-# Forward diffusion process
+# Forward diffusion process - sampling from marginal distribution
 ########################################################################################
 def sample_forward_process_minusx_plus_sqrt2D_dw(t, n_samples, D, samples0, key):
     """
