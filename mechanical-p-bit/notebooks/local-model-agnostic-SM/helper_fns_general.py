@@ -71,7 +71,48 @@ def normalize_samples(samples):
     
     return normalized_samples
 
-
+########################################################################################
+# Forward diffusion process
+########################################################################################
+def sample_forward_process_minusx_plus_sqrt2D_dw(t, n_samples, D, samples0, key):
+    """
+    Samples from the marginal distribution 
+    p_t(x_t) = (1/M) * sum_{i=1}^M p(x_t|x0^{(i)})
+    where
+      p(x_t|x0) = N(e^{-t} x0, D * (1 - e^{-2t}) * I)
+    
+    Parameters:
+      t         : time (scalar)
+      n_samples : number of samples to generate from p_t
+      D         : noise strength
+      samples0  : array of shape (M, N) containing the dataset {x0}
+      key       : JAX random key
+      
+    Returns:
+      x_t_samples : array of shape (n_samples, N) of samples from p_t(x_t)
+    """
+    # Split key for reproducibility
+    key_idx, key_noise = jax.random.split(key)
+    
+    # Number of initial samples in the dataset
+    M = samples0.shape[0]
+    
+    # Select n_samples indices uniformly at random from the dataset
+    indices = jax.random.choice(key_idx, M, shape=(n_samples,), replace=True)
+    x0_samples = samples0[indices]
+    
+    # Compute the deterministic transformation
+    mean_factor = jnp.exp(-t)
+    
+    # Compute the variance factor for the Gaussian noise
+    var_factor = D * (1 - jnp.exp(-2*t))
+    
+    # Sample standard Gaussian noise with the same shape as x0_samples
+    noise = jax.random.normal(key_noise, shape=x0_samples.shape)
+    
+    # Compute the evolved samples
+    x_t_samples = mean_factor * x0_samples + jnp.sqrt(var_factor) * noise
+    return x_t_samples
 
 ########################################################################################
 # Overdamped SDE
