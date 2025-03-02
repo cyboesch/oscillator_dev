@@ -118,7 +118,7 @@ def sample_forward_process_minusx_plus_sqrt2D_dw(t, n_samples, D, samples0, key)
 # Overdamped SDE
 ########################################################################################
 
-def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0):
+def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0, time_dependent_parms=False):
     """
     Sets up drift and diffusion functions for overdamped dynamics
     
@@ -134,11 +134,14 @@ def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T
         diffusion_fn: function taking (t, state, args) as input
     """
     # Reduce energy function to only depend on state
-    energy_of_state = lambda state: energy_fn(state, flattened_args)
+    if time_dependent_parms:
+        energy_of_state_time = lambda t, state: energy_fn(state, flattened_args(t))
+    else:
+        energy_of_state_time = lambda t, state: energy_fn(state, flattened_args) 
     
     def drift_fn(t, state, args):
         """Drift function for overdamped dynamics"""
-        dE_dx = grad(energy_of_state)(state)
+        dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
         return -gamma * dE_dx
     
     def diffusion_fn(t, state, args):
@@ -168,7 +171,7 @@ def solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_samples, dt0):
         y0=initial_state,
         args=(),
         saveat=saveat,
-        # progress_meter=diffrax.TqdmProgressMeter(),
+        progress_meter=diffrax.TqdmProgressMeter(),
         max_steps=1000000000,
         stepsize_controller=diffrax.PIDController(rtol=1e-3, atol=1e-6),  # Enable adaptive stepping
     )
