@@ -98,24 +98,8 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
     if suptitle:
         plt.suptitle(suptitle, y=1.02, fontsize=fontsize+4)
     plt.show()
-    
-    
-def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False):
-    """
-    Plot the evolution of parameters during optimization.
-    
-    Args:
-        params_history: History of flattened parameters
-        loss_history: History of loss values
-        unflatten: Function to unflatten parameters
-        N_osc: Number of oscillators
-        slicing: Plot every nth point (default: 10)
-        figsize: Figure size as (width, height) tuple (default: (6, 6))
-        title: Super title for the plot (default: "Parameter Evolution")
-    
-    Returns:
-        tuple: Best parameters (k_lin_best, k_duff_best, c_lin_best, c_optomech_best)
-    """
+
+def reformat_optimization_results(params_history, loss_history, unflatten, N_osc, slicing=1, maximize=False):
     # Convert histories to arrays for plotting
     params_history = jnp.array(params_history[::slicing])
     k_lin_history = jnp.zeros((len(params_history), N_osc))
@@ -133,17 +117,35 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, sli
 
     loss_history = jnp.array(loss_history[::slicing])
 
+    return k_lin_history, k_duff_history, c_lin_history, c_optomech_history, loss_history
+
+def get_best_params(params_history, loss_history, maximize=False):
+    loss_history = jnp.array(loss_history)
     # Find index of lowest loss
     if maximize:
         best_idx = jnp.argmax(loss_history)
     else:
         best_idx = jnp.argmin(loss_history)
-
-    # Get parameters corresponding to lowest loss
-    k_lin_best = k_lin_history[best_idx]
-    k_duff_best = k_duff_history[best_idx]
-    c_lin_best = c_lin_history[best_idx]
-    c_optomech_best = c_optomech_history[best_idx]
+    return loss_history[best_idx], params_history[best_idx], best_idx
+    
+def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False):
+    """
+    Plot the evolution of parameters during optimization.
+    
+    Args:
+        params_history: History of flattened parameters
+        loss_history: History of loss values
+        unflatten: Function to unflatten parameters
+        N_osc: Number of oscillators
+        slicing: Plot every nth point (default: 10)
+        figsize: Figure size as (width, height) tuple (default: (6, 6))
+        title: Super title for the plot (default: "Parameter Evolution")
+    """
+    
+    best_loss, best_params, best_idx = get_best_params(params_history, loss_history, maximize)
+    k_lin_best, k_duff_best, c_lin_best, c_optomech_best = unflatten(best_params)
+    
+    k_lin_history, k_duff_history, c_lin_history, c_optomech_history, loss_history = reformat_optimization_results(params_history, loss_history, unflatten, N_osc, slicing=slicing, maximize=maximize)
 
     print(f"Best loss: {loss_history[best_idx]:.4e}")
     print(f"Found at epoch: {best_idx * slicing}")
@@ -186,7 +188,7 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, sli
 
     # Plot loss evolution
     axes[1, 1].plot(loss_history, label='Loss')
-    axes[1, 1].set_title(f'Evolution of Loss\nBest value: {loss_history[best_idx]:.3e}')
+    axes[1, 1].set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
     axes[1, 1].set_xlabel('Epoch')
     axes[1, 1].set_ylabel('Loss')
     axes[1, 1].legend()
@@ -195,5 +197,3 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, sli
     plt.tight_layout()
     plt.suptitle(title, y=1.02)
     plt.show()
-
-    return k_lin_best, k_duff_best, c_lin_best, c_optomech_best
