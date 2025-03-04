@@ -12,7 +12,9 @@ jax.config.update("jax_enable_x64", True)
 
 
 def plot_energy_and_distributions(energy_fn, param_list, samples, 
-                                x1_range=(-2, 2), x2_range=(-2, 2), n_points=100,
+                                x1_range=(-2, 2), 
+                                x2_range=(-2, 2), 
+                                n_points=100,
                                 titles=None, 
                                 figsize=None,
                                 fontsize=12,
