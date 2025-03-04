@@ -293,7 +293,7 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
 # Optimization
 ########################################################################################
 
-def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000, maximize=False):
+def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, mask = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000, maximize=False):
     """Runs gradient-based optimization using mini-batches.
     
     Args:
@@ -328,6 +328,8 @@ def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per
     # Initialize optimizer
     optimizer = optax.adam(learning_rate=learning_rate)
     opt_state = optimizer.init(params_initial)
+    if mask is None:
+        mask = jnp.ones(params_initial.shape[0])
     
     @partial(jax.jit, static_argnums=(3,))
     def training_step(params, opt_state, samples, batch_size, key):
@@ -351,6 +353,7 @@ def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per
         if maximize:
             dparams = -dparams
             
+        dparams = dparams * mask
         # Apply updates
         updates, opt_state = optimizer.update(dparams, opt_state)
         params = optax.apply_updates(params, updates)
