@@ -74,22 +74,23 @@ def normalize_samples(samples):
 ########################################################################################
 # Forward diffusion process - sampling from marginal distribution
 ########################################################################################
-def sample_forward_process_minusx_plus_sqrt2D_dw(t, n_samples, D, samples0, key):
+def sample_forward_process(t, n_samples, D, samples0, key, diffusion_rate=1.0):
     """
     Samples from the marginal distribution 
     p_t(x_t) = (1/M) * sum_{i=1}^M p(x_t|x0^{(i)})
     where
-      p(x_t|x0) = N(e^{-t} x0, D * (1 - e^{-2t}) * I)
+      p(x_t|x0) = N(e^(-diffusion_rate*t) * x0, D*(1 - e^(-2*diffusion_rate*t))*I)
     
     Parameters:
-      t         : time (scalar)
-      n_samples : number of samples to generate from p_t
-      D         : noise strength
-      samples0  : array of shape (M, N) containing the dataset {x0}
-      key       : JAX random key
+      t             : time (scalar)
+      n_samples   : number of samples to generate from p_t
+      D             : noise strength
+      samples0      : array of shape (M, N) containing the dataset {x0}
+      key           : JAX random key
+      diffusion_rate: controls how fast the diffusion happens
       
     Returns:
-      x_t_samples : array of shape (n_samples, N) of samples from p_t(x_t)
+      x_t_samples   : array of shape (n_samples, N) of samples from p_t(x_t)
     """
     # Split key for reproducibility
     key_idx, key_noise = jax.random.split(key)
@@ -101,11 +102,11 @@ def sample_forward_process_minusx_plus_sqrt2D_dw(t, n_samples, D, samples0, key)
     indices = jax.random.choice(key_idx, M, shape=(n_samples,), replace=True)
     x0_samples = samples0[indices]
     
-    # Compute the deterministic transformation
-    mean_factor = jnp.exp(-t)
+    # Compute the deterministic transformation with the diffusion_rate parameter
+    mean_factor = jnp.exp(-diffusion_rate * t)
     
     # Compute the variance factor for the Gaussian noise
-    var_factor = D * (1 - jnp.exp(-2*t))
+    var_factor = D * (1 - jnp.exp(-2 * diffusion_rate * t))
     
     # Sample standard Gaussian noise with the same shape as x0_samples
     noise = jax.random.normal(key_noise, shape=x0_samples.shape)
