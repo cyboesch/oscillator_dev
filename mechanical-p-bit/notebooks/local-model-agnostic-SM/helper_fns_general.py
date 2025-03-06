@@ -69,7 +69,7 @@ def normalize_samples(samples):
     # Normalize
     normalized_samples = (samples - mean) / std
     
-    return normalized_samples
+    return normalized_samples, mean, std
 
 ########################################################################################
 # Forward diffusion process - sampling from marginal distribution
