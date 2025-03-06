@@ -74,47 +74,52 @@ def normalize_samples(samples):
 ########################################################################################
 # Forward diffusion process - sampling from marginal distribution
 ########################################################################################
-def sample_forward_process(t, n_samples, D, samples0, key, diffusion_rate=1.0):
+def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0):
     """
     Samples from the marginal distribution 
-    p_t(x_t) = (1/M) * sum_{i=1}^M p(x_t|x0^{(i)})
-    where
-      p(x_t|x0) = N(e^(-diffusion_rate*t) * x0, D*(1 - e^(-2*diffusion_rate*t))*I)
+      p_t(x_t) = (1/M) sum_{i=1}^M p(x_t|x0^{(i)})
+    where for the SDE
+         dx = -beta/sigma_final^2 * x dt + sqrt(2*D*beta) dw,
+    the solution is:
+         x_t = exp(-beta*t/sigma_final^2) * x0 + sqrt(D*sigma_final^2*(1 - exp(-2*beta*t/sigma_final^2))) * epsilon,
+         with epsilon ~ N(0, I).
     
     Parameters:
-      t             : time (scalar)
-      n_samples   : number of samples to generate from p_t
-      D             : noise strength
-      samples0      : array of shape (M, N) containing the dataset {x0}
-      key           : JAX random key
-      diffusion_rate: controls how fast the diffusion happens
+      t          : time (scalar)
+      n_samples  : number of samples to generate from p_t
+      D          : noise strength parameter (affects the variance)
+      sigma_final: parameter such that the final variance is (ideally) sigma_final^2 
+                   (if parameters are chosen so that at final time t_final: 
+                   D*(1 - exp(-2*beta*t_final/sigma_final^2)) = 1).
+      beta       : diffusion rate
+      samples0   : array of shape (M, N) containing the initial data points {x0}
+      key        : JAX random key
       
     Returns:
-      x_t_samples   : array of shape (n_samples, N) of samples from p_t(x_t)
+      x_t_samples: array of shape (n_samples, N) of samples from p_t(x_t)
     """
-    # Split key for reproducibility
+    # Split the random key for index selection and noise generation.
     key_idx, key_noise = jax.random.split(key)
     
-    # Number of initial samples in the dataset
+    # Number of initial samples in the dataset.
     M = samples0.shape[0]
     
-    # Select n_samples indices uniformly at random from the dataset
+    # Randomly choose indices (with replacement) from the dataset.
     indices = jax.random.choice(key_idx, M, shape=(n_samples,), replace=True)
     x0_samples = samples0[indices]
     
-    # Compute the deterministic transformation with the diffusion_rate parameter
-    mean_factor = jnp.exp(-diffusion_rate * t)
+    # Compute the deterministic decay factor.
+    mean_factor = jnp.exp(-beta * t / (sigma_final**2))
     
-    # Compute the variance factor for the Gaussian noise
-    var_factor = D * (1 - jnp.exp(-2 * diffusion_rate * t))
+    # Compute the variance factor for the added noise.
+    var_factor = D * (sigma_final**2) * (1 - jnp.exp(-2 * beta * t / (sigma_final**2)))
     
-    # Sample standard Gaussian noise with the same shape as x0_samples
+    # Sample standard Gaussian noise with the same shape as the selected initial samples.
     noise = jax.random.normal(key_noise, shape=x0_samples.shape)
     
-    # Compute the evolved samples
+    # Combine the deterministic and stochastic parts.
     x_t_samples = mean_factor * x0_samples + jnp.sqrt(var_factor) * noise
     return x_t_samples
-
 ########################################################################################
 # Overdamped SDE
 ########################################################################################
