@@ -383,7 +383,7 @@ def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per
         
         if epoch % 100 == 0:
             print(f"Epoch {epoch}")
-            print(f"params:\n{params}")
+            # print(f"params:\n{params}")
             print(f"Loss: {loss:.4f}")
             print("---")
     return params_history, loss_history
