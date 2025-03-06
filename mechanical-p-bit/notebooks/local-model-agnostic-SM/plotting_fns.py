@@ -101,13 +101,13 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
         plt.suptitle(suptitle, y=1.02, fontsize=fontsize+4)
     plt.show()
 
-def reformat_optimization_results(params_history, loss_history, unflatten, N_osc, slicing=1, maximize=False):
+def reformat_optimization_results(params_history, loss_history, unflatten, N_osc, N_connections, slicing=1, maximize=False):
     # Convert histories to arrays for plotting
     params_history = jnp.array(params_history[::slicing])
     k_lin_history = jnp.zeros((len(params_history), N_osc))
     k_duff_history = jnp.zeros((len(params_history), N_osc))
-    c_lin_history = jnp.zeros((len(params_history), 1))
-    c_optomech_history = jnp.zeros((len(params_history), 1))
+    c_lin_history = jnp.zeros((len(params_history), N_connections))
+    c_optomech_history = jnp.zeros((len(params_history), N_connections))
 
     for i in range(len(params_history)):
         unflattened_params = unflatten(params_history[i])
@@ -130,7 +130,7 @@ def get_best_params(params_history, loss_history, maximize=False):
         best_idx = jnp.argmin(loss_history)
     return loss_history[best_idx], params_history[best_idx], best_idx
     
-def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False):
+def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, N_connections=1, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False, labels_on=True):
     """
     Plot the evolution of parameters during optimization.
     
@@ -145,57 +145,80 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, sli
     """
     
     best_loss, best_params, best_idx = get_best_params(params_history, loss_history, maximize)
-    k_lin_best, k_duff_best, c_lin_best, c_optomech_best = unflatten(best_params)
     
-    k_lin_history, k_duff_history, c_lin_history, c_optomech_history, loss_history = reformat_optimization_results(params_history, loss_history, unflatten, N_osc, slicing=slicing, maximize=maximize)
+    k_lin_history, k_duff_history, c_lin_history, c_optomech_history, loss_history = reformat_optimization_results(params_history, loss_history, unflatten, N_osc, N_connections, slicing=slicing, maximize=maximize)
 
     print(f"Best loss: {loss_history[best_idx]:.4e}")
     print(f"Found at epoch: {best_idx * slicing}")
 
-    # Create figure with 4 rows and 2 columns
-    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    # Create figure with 3x2 subplots
+    fig, axes = plt.subplots(3, 2, figsize=figsize)
 
     # Plot k_lin evolution
-    for i in range(N_osc):
-        axes[0, 0].plot(k_lin_history[:, i], label=f'k_lin[{i}]')
-    axes[0, 0].set_title(f'Evolution of k_lin\nBest values:\n' + 
-                         '\n'.join([f'k_lin[{i}] = {k_lin_best[i]:.3f}' 
-                                   for i in range(N_osc)]))
+    if labels_on:
+        for i in range(N_osc):
+            axes[0, 0].plot(k_lin_history[:, i], label=f'k_lin[{i}]')
+    else:
+        axes[0, 0].plot(k_lin_history)
+    axes[0, 0].set_title(f'Evolution of k_lin')
     axes[0, 0].set_xlabel('Epoch')
     axes[0, 0].set_ylabel('Linear Strength')
-    axes[0, 0].legend()
+    if labels_on:
+        axes[0, 0].legend()
     axes[0, 0].grid(True)
 
     # Plot k_duff evolution
-    for i in range(N_osc):
-        axes[0, 1].plot(k_duff_history[:, i], label=f'k_duff[{i}]')
-    axes[0, 1].set_title(f'Evolution of k_duff\nBest values:\n' + 
-                         '\n'.join([f'k_duff[{i}] = {k_duff_best[i]:.3f}' 
-                                   for i in range(N_osc)]))
+    if labels_on:
+        for i in range(N_osc):
+            axes[0, 1].plot(k_duff_history[:, i], label=f'k_duff[{i}]')
+    else:
+        axes[0, 1].plot(k_duff_history)
+    axes[0, 1].set_title(f'Evolution of k_duff')
     axes[0, 1].set_xlabel('Epoch')
     axes[0, 1].set_ylabel('Duffing Strength')
-    axes[0, 1].legend()
+    if labels_on:
+        axes[0, 1].legend()
     axes[0, 1].grid(True)
 
-    # Plot c_lin and c_optomech evolution
-    axes[1, 0].plot(c_lin_history, label='c_lin')
-    axes[1, 0].plot(c_optomech_history, label='c_optomech')
-    axes[1, 0].set_title(f'Evolution of Coupling Parameters\nBest values:\n' +
-                         f'c_lin = {c_lin_best[0]:.3f}\n' +
-                         f'c_optomech = {c_optomech_best[0]:.3f}')
+    # Plot c_lin evolution
+    if labels_on:
+        for i in range(N_connections):
+            axes[1, 0].plot(c_lin_history[:, i], label=f'c_lin[{i}]')
+    else:
+        axes[1, 0].plot(c_lin_history)
+    axes[1, 0].set_title(f'Evolution of Linear Coupling')
     axes[1, 0].set_xlabel('Epoch')
-    axes[1, 0].set_ylabel('Coupling Strength')
-    axes[1, 0].legend()
+    axes[1, 0].set_ylabel('Linear Coupling Strength')
+    if labels_on:
+        axes[1, 0].legend()
     axes[1, 0].grid(True)
 
-    # Plot loss evolution
-    axes[1, 1].plot(loss_history, label='Loss')
-    axes[1, 1].set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
+    # Plot c_optomech evolution
+    if labels_on:
+        for i in range(N_connections):
+            axes[1, 1].plot(c_optomech_history[:, i], label=f'c_optomech[{i}]')
+    else:
+        axes[1, 1].plot(c_optomech_history)
+    axes[1, 1].set_title(f'Evolution of Optomechanical Coupling')
     axes[1, 1].set_xlabel('Epoch')
-    axes[1, 1].set_ylabel('Loss')
-    axes[1, 1].legend()
+    axes[1, 1].set_ylabel('Optomechanical Coupling Strength')
+    if labels_on:
+        axes[1, 1].legend()
     axes[1, 1].grid(True)
+
+    # Plot loss evolution
+    axes[2, 0].plot(loss_history, label='Loss')
+    axes[2, 0].set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
+    axes[2, 0].set_xlabel('Epoch')
+    axes[2, 0].set_ylabel('Loss')
+    axes[2, 0].legend()
+    axes[2, 0].grid(True)
+
+    # Hide the empty subplot
+    axes[2, 1].set_visible(False)
 
     plt.tight_layout()
     plt.suptitle(title, y=1.02)
     plt.show()
+
+    return best_loss, best_params, best_idx
