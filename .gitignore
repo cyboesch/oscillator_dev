@@ -14,6 +14,7 @@ mechanical-p-bit/out/*
 *.so
 
 out/
+data/
 
 # Distribution / packaging
 .Python
