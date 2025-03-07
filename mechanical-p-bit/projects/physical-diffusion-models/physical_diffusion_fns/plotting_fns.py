@@ -124,7 +124,7 @@ def get_best_params(params_history, loss_history, maximize=False):
         best_idx = jnp.argmin(loss_history)
     return loss_history[best_idx], params_history[best_idx], best_idx
     
-def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, N_connections=1, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False, labels_on=True):
+def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten, N_osc, N_connections=1, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False, labels_on=True, save_fig=False, path=None):
     """
     Plot the evolution of parameters during optimization.
     
@@ -213,6 +213,9 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, N_c
 
     plt.tight_layout()
     plt.suptitle(title, y=1.02)
+    if save_fig and path is not None:
+        print(f"Saving figure to {path}")
+        plt.savefig(path + f"/parameter_evolution_timeidx{time_index}_time{time}.png", dpi=300, bbox_inches='tight')
     plt.show()
 
     return best_loss, best_params, best_idx
