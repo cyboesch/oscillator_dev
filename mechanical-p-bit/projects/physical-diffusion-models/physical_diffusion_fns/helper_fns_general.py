@@ -299,7 +299,7 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
 # Optimization
 ########################################################################################
 
-def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, mask = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000, maximize=False):
+def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, mask = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000, maximize=False, decaying_learning_rate=False, transition_steps=100):
     """Runs gradient-based optimization using mini-batches.
     
     Args:
@@ -329,10 +329,19 @@ def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per
         params_history: List of parameter values at each optimization step.
         loss_history: List of loss values at each optimization step.
     """
-    
+    # Define an exponential decay schedule
+    scheduler = optax.exponential_decay(
+        init_value=learning_rate,     # starting learning rate (e.g., 0.001)
+        transition_steps=transition_steps,          # decay frequency (in steps)
+        decay_rate=0.99,                # decay rate per transition step
+        staircase=True                # if True, learning rate decays in discrete intervals
+    )
     
     # Initialize optimizer
-    optimizer = optax.adam(learning_rate=learning_rate)
+    if decaying_learning_rate:
+        optimizer = optax.adam(learning_rate=scheduler)
+    else:
+        optimizer = optax.adam(learning_rate=learning_rate)
     opt_state = optimizer.init(params_initial)
     if mask is None:
         mask = jnp.ones(params_initial.shape[0])
