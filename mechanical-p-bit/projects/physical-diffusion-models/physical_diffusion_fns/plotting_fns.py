@@ -209,7 +209,7 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, N_c
     # Plot loss evolution
     axes[2, 0].plot(loss_history, label='Loss')
     axes[2, 0].set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
-    axes[2, 0].set_xlabel('Epoch')
+    axes[2, 0].set_xlabel(f'Epoch (x {slicing})')
     axes[2, 0].set_ylabel('Loss')
     axes[2, 0].legend()
     axes[2, 0].grid(True)
