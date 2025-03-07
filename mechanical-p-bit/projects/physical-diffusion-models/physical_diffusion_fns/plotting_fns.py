@@ -218,7 +218,7 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, N_c
     return best_loss, best_params, best_idx
 
 
-def plot_forward_marginals(samples_t, t_forward, sigma_final, filename=None, save_fig=False, fontsize=16):
+def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=None, save_fig=False, fontsize=16):
     """
     Plot marginal distributions of samples at forward time t.
     
@@ -226,7 +226,7 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, filename=None, sav
         samples_t: Array of samples shape (n_samples, 2)
         t_forward: Forward time value
         sigma_final: Final sigma value for Gaussian comparison
-        filename: Base filename to use if saving (default: None)
+        path: Path to save figure (default: None)
         save_fig: Boolean flag to save figure (default: False)
         fontsize: Base font size for the plot (default: 16)
     """
@@ -253,12 +253,36 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, filename=None, sav
 
     plt.tight_layout()
     
-    if save_fig and filename is not None:
-        plt.savefig(filename + "_final_forward_distribution.png", dpi=300, bbox_inches='tight')
+    if save_fig and path is not None:
+        print(f"Saving figure to {path}")
+        plt.savefig(path + f"/final_forward_distribution_sigma_{sigma_final:.2f}_beta_{beta:.2f}.png", dpi=300, bbox_inches='tight')
     
     plt.show()
     
-    if save_fig and filename is not None:
-        plt.savefig(filename + "_final_forward_distribution.png", dpi=300, bbox_inches='tight')
     
+    
+def visualize_connectivity(connectivity, grid_size_x=8, grid_size_y=8):
+    """
+    Visualize the connectivity pattern of the grid.
+    
+    Args:
+        connectivity (jnp.ndarray): Connectivity matrix
+        grid_size (int): Size of the square grid
+    """    
+    plt.figure(figsize=(3, 3))
+    
+    # Plot oscillators
+    for i in range(grid_size_y):
+        for j in range(grid_size_x):
+            plt.plot(j, i, 'ko')
+    
+    # Plot connections
+    for conn in connectivity:
+        i1, j1 = divmod(conn[0], grid_size_y)
+        i2, j2 = divmod(conn[1], grid_size_x)
+        plt.plot([j1, j2], [i1, i2], 'b-', alpha=0.3)
+    
+    plt.grid(True)
+    plt.axis('equal')
+    plt.title(f'2D Grid Connectivity ({grid_size_x}x{grid_size_y})')
     plt.show()
