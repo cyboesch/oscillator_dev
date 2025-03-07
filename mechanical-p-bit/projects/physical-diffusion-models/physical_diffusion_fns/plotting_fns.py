@@ -1,13 +1,7 @@
 import jax
-from jax import flatten_util, vmap, grad 
 import jax.numpy as jnp
-import jax.random as jr
-import diffrax
-from diffrax import ControlTerm, MultiTerm, ODETerm
 import matplotlib.pyplot as plt
-from functools import partial
-import optax
-from physical_diffusion_fns.helper_fns_general import sample_gaussian_mixture, normalize_samples, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
+
 jax.config.update("jax_enable_x64", True)
 
 
