@@ -1,6 +1,7 @@
 import jax
 import jax.numpy as jnp
 import jax.random as jr
+from scipy.signal import savgol_filter
 
 ########################################################################################
 # Sampling
@@ -123,7 +124,6 @@ def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0
 def reformat_optimization_results(params_history, loss_history, unflatten, slicing=1, maximize=False):
     # Unflatten the first set of parameters to determine the structure
     first_params = unflatten(params_history[0])
-    num_params = len(first_params)
     param_histories = [jnp.zeros((len(params_history[::slicing]), *param.shape)) for param in first_params]
 
     # Convert histories to arrays for plotting
@@ -136,7 +136,7 @@ def reformat_optimization_results(params_history, loss_history, unflatten, slici
 
     loss_history = jnp.array(loss_history[::slicing])
 
-    return param_histories, loss_history
+    return (*param_histories, loss_history)
 
 ########################################################################################
 # Getting best parameters
@@ -149,3 +149,61 @@ def get_best_params(params_history, loss_history, maximize=False):
     else:
         best_idx = jnp.argmin(loss_history)
     return loss_history[best_idx], params_history[best_idx], best_idx
+########################################################################################
+# Smoothing parameters
+########################################################################################
+def smooth_parameters(params, window_lengths, poly_orders):
+    """
+    Smooths multiple parameter trajectories using Savitzky-Golay filter
+    
+    Args:
+        params: Array of shape (n_timesteps, n_params) containing parameter trajectories
+        window_lengths: List/array of window lengths for each parameter dimension
+        poly_orders: List/array of polynomial orders for each parameter dimension
+    
+    Returns:
+        Array of shape (n_timesteps, n_params) containing smoothed parameter trajectories
+    """
+    n_params = params.shape[1]
+    smoothed = []
+    
+    for i in range(n_params):
+        # Ensure window length is odd and valid
+        window_length = min(window_lengths[i], len(params) - (1 - len(params) % 2))
+        if window_length % 2 == 0:
+            window_length -= 1
+            
+        # Smooth using Savitzky-Golay filter
+        smoothed.append(savgol_filter(params[:, i], window_length, poly_orders[i]))
+    
+    return jnp.column_stack(smoothed)
+
+########################################################################################
+# Interpolating parameters
+########################################################################################
+
+def interpolate_parameters(params, time_points):
+    """
+    Interpolates parameter trajectories using jnp.interp in a vectorized fashion.
+
+    Args:
+        params: Array of shape (n_timesteps, n_params) containing parameter trajectories.
+        time_points: 1D array of shape (n_timesteps,) corresponding to the time points.
+
+    Returns:
+        A function that takes time points `t` (scalar or 1D array) and returns
+        the interpolated parameters. For scalar `t`, the result is shape (n_params,);
+        for vector `t`, the result is shape (len(t), n_params).
+    """
+    
+    def _interpolator(t):
+        # Transpose params to shape (n_params, n_timesteps) so that each row is a trajectory.
+        # Use vmap to apply jnp.interp over each parameter trajectory.
+        interpolated = jax.vmap(lambda param: jnp.interp(t, time_points, param))(params.T)
+        # If t is an array, jnp.interp returns an array for each parameter, resulting in a
+        # (n_params, len(t)) array. Transpose it so that each row corresponds to a time point.
+        if jnp.ndim(t) > 0:
+            return interpolated.T
+        return interpolated
+
+    return _interpolator

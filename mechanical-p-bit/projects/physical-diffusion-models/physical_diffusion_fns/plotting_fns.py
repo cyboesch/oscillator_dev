@@ -102,8 +102,8 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
 ########################################################################################
 # Plotting parameter evolution
 ########################################################################################
-    
-def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten, N_osc, N_connections=1, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False, labels_on=True, save_fig=False, path=None):
+
+def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten, N_osc, param_names, slicing=10, figsize=(4, 14), title="Parameter Evolution", maximize=False, labels_on=True, save_fig=False, path=None):
     """
     Plot the evolution of parameters during optimization.
     
@@ -115,80 +115,43 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
         slicing: Plot every nth point (default: 10)
         figsize: Figure size as (width, height) tuple (default: (6, 6))
         title: Super title for the plot (default: "Parameter Evolution")
+        param_names: List of parameter names for plotting
     """
     
     best_loss, best_params, best_idx = get_best_params(params_history, loss_history, maximize)
     
-    k_lin_history, k_duff_history, c_lin_history, c_optomech_history, loss_history = reformat_optimization_results(params_history, loss_history, unflatten, N_osc, N_connections, slicing=slicing, maximize=maximize)
+    # Unpack parameter histories
+    param_histories = reformat_optimization_results(params_history, loss_history, unflatten, slicing=slicing, maximize=maximize)
 
     print(f"Best loss: {loss_history[best_idx]:.4e}")
     print(f"Found at epoch: {best_idx * slicing}")
 
-    # Create figure with 3x2 subplots
-    fig, axes = plt.subplots(3, 2, figsize=figsize)
+    # Create figure with (num_params + 1) x 1 subplots
+    n_params = len(param_names)
+    fig, axes = plt.subplots(n_params + 1, 1, figsize=figsize)
 
-    # Plot k_lin evolution
-    if labels_on:
-        for i in range(N_osc):
-            axes[0, 0].plot(k_lin_history[:, i], label=f'k_lin[{i}]')
-    else:
-        axes[0, 0].plot(k_lin_history)
-    axes[0, 0].set_title(f'Evolution of k_lin')
-    axes[0, 0].set_xlabel('Epoch')
-    axes[0, 0].set_ylabel('Linear Strength')
-    if labels_on:
-        axes[0, 0].legend()
-    axes[0, 0].grid(True)
-
-    # Plot k_duff evolution
-    if labels_on:
-        for i in range(N_osc):
-            axes[0, 1].plot(k_duff_history[:, i], label=f'k_duff[{i}]')
-    else:
-        axes[0, 1].plot(k_duff_history)
-    axes[0, 1].set_title(f'Evolution of k_duff')
-    axes[0, 1].set_xlabel('Epoch')
-    axes[0, 1].set_ylabel('Duffing Strength')
-    if labels_on:
-        axes[0, 1].legend()
-    axes[0, 1].grid(True)
-
-    # Plot c_lin evolution
-    if labels_on:
-        for i in range(N_connections):
-            axes[1, 0].plot(c_lin_history[:, i], label=f'c_lin[{i}]')
-    else:
-        axes[1, 0].plot(c_lin_history)
-    axes[1, 0].set_title(f'Evolution of Linear Coupling')
-    axes[1, 0].set_xlabel('Epoch')
-    axes[1, 0].set_ylabel('Linear Coupling Strength')
-    if labels_on:
-        axes[1, 0].legend()
-    axes[1, 0].grid(True)
-
-    # Plot c_optomech evolution
-    if labels_on:
-        for i in range(N_connections):
-            axes[1, 1].plot(c_optomech_history[:, i], label=f'c_optomech[{i}]')
-    else:
-        axes[1, 1].plot(c_optomech_history)
-    axes[1, 1].set_title(f'Evolution of Optomechanical Coupling')
-    axes[1, 1].set_xlabel('Epoch')
-    axes[1, 1].set_ylabel('Optomechanical Coupling Strength')
-    if labels_on:
-        axes[1, 1].legend()
-    axes[1, 1].grid(True)
+    # Plot each parameter evolution
+    for idx, param_name in enumerate(param_names):
+        param_history = param_histories[idx]
+        if labels_on and N_osc <= 2:
+            for i in range(param_history.shape[1]):
+                axes[idx].plot(param_history[:, i], label=f'{param_name}[{i}]')
+        else:
+            axes[idx].plot(param_history)
+        axes[idx].set_title(f'Evolution of {param_name}')
+        axes[idx].set_xlabel(f'Epoch (x {slicing})')
+        axes[idx].set_ylabel(f'{param_name} Value')
+        if labels_on and N_osc <= 2:
+            axes[idx].legend()
+        axes[idx].grid(True)
 
     # Plot loss evolution
-    axes[2, 0].plot(loss_history, label='Loss')
-    axes[2, 0].set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
-    axes[2, 0].set_xlabel(f'Epoch (x {slicing})')
-    axes[2, 0].set_ylabel('Loss')
-    axes[2, 0].legend()
-    axes[2, 0].grid(True)
-
-    # Hide the empty subplot
-    axes[2, 1].set_visible(False)
+    axes[-1].plot(loss_history, label='Loss')
+    axes[-1].set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
+    axes[-1].set_xlabel(f'Epoch (x {slicing})')
+    axes[-1].set_ylabel('Loss')
+    axes[-1].legend()
+    axes[-1].grid(True)
 
     plt.tight_layout()
     plt.suptitle(title, y=1.02)
