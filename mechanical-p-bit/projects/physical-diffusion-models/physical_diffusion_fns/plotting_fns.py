@@ -216,3 +216,49 @@ def plot_parameter_evolution(params_history, loss_history, unflatten, N_osc, N_c
     plt.show()
 
     return best_loss, best_params, best_idx
+
+
+def plot_forward_marginals(samples_t, t_forward, sigma_final, filename=None, save_fig=False, fontsize=16):
+    """
+    Plot marginal distributions of samples at forward time t.
+    
+    Args:
+        samples_t: Array of samples shape (n_samples, 2)
+        t_forward: Forward time value
+        sigma_final: Final sigma value for Gaussian comparison
+        filename: Base filename to use if saving (default: None)
+        save_fig: Boolean flag to save figure (default: False)
+        fontsize: Base font size for the plot (default: 16)
+    """
+    # Create figure
+    plt.figure(figsize=(8, 6))
+    
+    # Plot marginal distributions
+    plt.hist(samples_t[:, 0], bins=50, density=True, alpha=0.7, label='X distribution')
+    plt.hist(samples_t[:, 1], bins=50, density=True, alpha=0.7, label='Y distribution')
+
+    # Add Gaussian N(0,sigma) for comparison
+    x = jnp.linspace(-1, 1, 1000)  # Adjust range as needed
+    gaussian_pdf = (1 / jnp.sqrt(2 * jnp.pi*sigma_final**2)) * jnp.exp(-0.5 * x**2/sigma_final**2)
+    plt.plot(x, gaussian_pdf, 'r--', linewidth=2, label=r'Gaussian N(0,$\sigma$)')
+
+    plt.title(f'Marginal Distributions at t = {t_forward}, $\sigma$ = {sigma_final:.2f}', fontsize=fontsize+2)
+    plt.xlabel('Value', fontsize=fontsize)
+    plt.ylabel('Density', fontsize=fontsize)
+    plt.legend(fontsize=fontsize-2)
+    
+    # Set tick label sizes
+    plt.xticks(fontsize=fontsize-2)
+    plt.yticks(fontsize=fontsize-2)
+
+    plt.tight_layout()
+    
+    if save_fig and filename is not None:
+        plt.savefig(filename + "_final_forward_distribution.png", dpi=300, bbox_inches='tight')
+    
+    plt.show()
+    
+    if save_fig and filename is not None:
+        plt.savefig(filename + "_final_forward_distribution.png", dpi=300, bbox_inches='tight')
+    
+    plt.show()
