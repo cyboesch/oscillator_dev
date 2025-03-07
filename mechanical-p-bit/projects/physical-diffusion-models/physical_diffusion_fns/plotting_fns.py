@@ -1,9 +1,13 @@
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
+from physical_diffusion_fns.helper_fns import get_best_params, reformat_optimization_results
 
 jax.config.update("jax_enable_x64", True)
 
+########################################################################################
+# Plotting energy, distributions, and samples
+########################################################################################
 
 def plot_energy_and_distributions(energy_fn, param_list, samples, 
                                 x1_range=(-2, 2), 
@@ -95,34 +99,9 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
         plt.suptitle(suptitle, y=1.02, fontsize=fontsize+4)
     plt.show()
 
-def reformat_optimization_results(params_history, loss_history, unflatten, N_osc, N_connections, slicing=1, maximize=False):
-    # Convert histories to arrays for plotting
-    params_history = jnp.array(params_history[::slicing])
-    k_lin_history = jnp.zeros((len(params_history), N_osc))
-    k_duff_history = jnp.zeros((len(params_history), N_osc))
-    c_lin_history = jnp.zeros((len(params_history), N_connections))
-    c_optomech_history = jnp.zeros((len(params_history), N_connections))
-
-    for i in range(len(params_history)):
-        unflattened_params = unflatten(params_history[i])
-        k_lin, k_duff, c_lin, c_optomech = unflattened_params
-        k_lin_history = k_lin_history.at[i].set(k_lin)
-        k_duff_history = k_duff_history.at[i].set(k_duff)
-        c_lin_history = c_lin_history.at[i].set(c_lin)
-        c_optomech_history = c_optomech_history.at[i].set(c_optomech)
-
-    loss_history = jnp.array(loss_history[::slicing])
-
-    return k_lin_history, k_duff_history, c_lin_history, c_optomech_history, loss_history
-
-def get_best_params(params_history, loss_history, maximize=False):
-    loss_history = jnp.array(loss_history)
-    # Find index of lowest loss
-    if maximize:
-        best_idx = jnp.argmax(loss_history)
-    else:
-        best_idx = jnp.argmin(loss_history)
-    return loss_history[best_idx], params_history[best_idx], best_idx
+########################################################################################
+# Plotting parameter evolution
+########################################################################################
     
 def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten, N_osc, N_connections=1, slicing=10, figsize=(6, 6), title="Parameter Evolution", maximize=False, labels_on=True, save_fig=False, path=None):
     """
@@ -220,7 +199,9 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
 
     return best_loss, best_params, best_idx
 
-
+########################################################################################
+# Plotting forward diffusion process
+########################################################################################
 def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=None, save_fig=False, fontsize=16):
     """
     Plot marginal distributions of samples at forward time t.
@@ -263,7 +244,9 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
     plt.show()
     
     
-    
+########################################################################################
+# Plotting connectivity
+########################################################################################   
 def visualize_connectivity(connectivity, grid_size_x=8, grid_size_y=8):
     """
     Visualize the connectivity pattern of the grid.

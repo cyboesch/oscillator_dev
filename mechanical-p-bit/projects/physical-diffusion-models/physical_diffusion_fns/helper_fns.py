@@ -116,5 +116,36 @@ def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0
     x_t_samples = mean_factor * x0_samples + jnp.sqrt(var_factor) * noise
     return x_t_samples
 
+########################################################################################
+# Reformatting optimization results
+########################################################################################
 
+def reformat_optimization_results(params_history, loss_history, unflatten, slicing=1, maximize=False):
+    # Unflatten the first set of parameters to determine the structure
+    first_params = unflatten(params_history[0])
+    num_params = len(first_params)
+    param_histories = [jnp.zeros((len(params_history[::slicing]), *param.shape)) for param in first_params]
 
+    # Convert histories to arrays for plotting
+    params_history = jnp.array(params_history[::slicing])
+
+    for i in range(len(params_history)):
+        unflattened_params = unflatten(params_history[i])
+        for j, param in enumerate(unflattened_params):
+            param_histories[j] = param_histories[j].at[i].set(param)
+
+    loss_history = jnp.array(loss_history[::slicing])
+
+    return param_histories, loss_history
+
+########################################################################################
+# Getting best parameters
+########################################################################################
+def get_best_params(params_history, loss_history, maximize=False):
+    loss_history = jnp.array(loss_history)
+    # Find index of lowest loss
+    if maximize:
+        best_idx = jnp.argmax(loss_history)
+    else:
+        best_idx = jnp.argmin(loss_history)
+    return loss_history[best_idx], params_history[best_idx], best_idx
