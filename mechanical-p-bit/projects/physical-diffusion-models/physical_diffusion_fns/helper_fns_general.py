@@ -6,7 +6,7 @@ import diffrax
 from diffrax import ControlTerm, MultiTerm, ODETerm
 from functools import partial
 import optax
-
+from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE
 
 ########################################################################################
 # Sampling
@@ -120,68 +120,7 @@ def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0
     # Combine the deterministic and stochastic parts.
     x_t_samples = mean_factor * x0_samples + jnp.sqrt(var_factor) * noise
     return x_t_samples
-########################################################################################
-# Overdamped SDE
-########################################################################################
 
-def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0, time_dependent_parms=False):
-    """
-    Sets up drift and diffusion functions for overdamped dynamics
-    
-    Args:
-        energy_fn: function taking (state, args) as input
-        flattened_args: parameters for the energy function
-        gamma: damping coefficient
-        k_b: Boltzmann constant
-        T: temperature
-        
-    Returns:
-        drift_fn: function taking (t, state, args) as input
-        diffusion_fn: function taking (t, state, args) as input
-    """
-    # Reduce energy function to only depend on state
-    if time_dependent_parms:
-        energy_of_state_time = lambda t, state: energy_fn(state, flattened_args(t))
-    else:
-        energy_of_state_time = lambda t, state: energy_fn(state, flattened_args) 
-    
-    def drift_fn(t, state, args):
-        """Drift function for overdamped dynamics"""
-        dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
-        return -gamma * dE_dx
-    
-    def diffusion_fn(t, state, args):
-        """Diffusion function for overdamped dynamics"""
-        noise_strength = jnp.sqrt(2 * gamma * k_b * T)
-        return noise_strength * jnp.eye(N_osc)
-    
-    return drift_fn, diffusion_fn
-
-def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_samples, dt0, rtol=1e-3, atol=1e-6):
-    N_osc = initial_state.shape[0]
-    ts = jnp.linspace(t0, t1, N_samples)
-    w_shape = (N_osc,)  # state is just phases for each oscillator
-    brownian_motion = diffrax.VirtualBrownianTree(
-        t0, t1, 1.e-11, w_shape, key_brownian, diffrax.SpaceTimeLevyArea
-    )
-    terms = MultiTerm(ODETerm(drift_fn), ControlTerm(diffusion_fn, brownian_motion))
-    saveat = diffrax.SaveAt(ts=ts)
-
-
-    solution = diffrax.diffeqsolve(
-        terms,
-        solver=diffrax.SRA1(),
-        t0=t0,
-        t1=t1,
-        dt0=dt0,
-        y0=initial_state,
-        args=(),
-        saveat=saveat,
-        progress_meter=diffrax.TqdmProgressMeter(),
-        max_steps=1000000000,
-        stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),  # Enable adaptive stepping
-    )
-    return solution
 
 ########################################################################################
 # Maximum log likelihood
@@ -299,100 +238,187 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
 # Optimization
 ########################################################################################
 
-def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, mask = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000, maximize=False, decaying_learning_rate=False, transition_steps=100):
-    """Runs gradient-based optimization using mini-batches.
+# def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch = None, mask = None, key = jr.PRNGKey(0),batch_size=128, learning_rate=0.001, n_epochs=20000, maximize=False, decaying_learning_rate=False, transition_steps=100):
+#     """Runs gradient-based optimization using mini-batches.
     
+#     Args:
+#         loss_fn_per_batch: Callable that computes the loss for a batch of samples.
+#             Must have signature: loss_fn_per_batch(params, batch) -> scalar_loss
+#             where params contains the parameters to optimize and batch is a subset of samples.
+        
+#         params_initial: Initial parameters to optimize. Can be any pytree structure 
+#             (nested lists/tuples/dicts of arrays).
+        
+#         samples: Array of training samples with shape [n_samples, ...].
+        
+#         gradient_fn_per_batch: Optional callable to compute gradients for a batch.
+#             If None, gradients are computed using jax.grad(loss_fn_per_batch).
+#             If provided, must have signature: gradient_fn_per_batch(params, batch) -> gradients
+#             where gradients has the same structure as params.
+        
+#         key: PRNG key for random batch sampling.
+        
+#         batch_size: Number of samples to use per optimization step.
+        
+#         learning_rate: Step size for the Adam optimizer.
+        
+#         n_epochs: Number of optimization steps to perform.
+
+#     Returns:
+#         params_history: List of parameter values at each optimization step.
+#         loss_history: List of loss values at each optimization step.
+#     """
+#     # Define an exponential decay schedule
+#     scheduler = optax.exponential_decay(
+#         init_value=learning_rate,     # starting learning rate (e.g., 0.001)
+#         transition_steps=transition_steps,          # decay frequency (in steps)
+#         decay_rate=0.99,                # decay rate per transition step
+#         staircase=True                # if True, learning rate decays in discrete intervals
+#     )
+    
+#     # Initialize optimizer
+#     if decaying_learning_rate:
+#         optimizer = optax.adam(learning_rate=scheduler)
+#     else:
+#         optimizer = optax.adam(learning_rate=learning_rate)
+#     opt_state = optimizer.init(params_initial)
+#     if mask is None:
+#         mask = jnp.ones(params_initial.shape[0])
+    
+#     @partial(jax.jit, static_argnums=(3,))
+#     def training_step(params, opt_state, samples, batch_size, key):
+#         """Single training step using batched samples"""
+#         # Get random batch of samples
+#         key, subkey = jr.split(key)
+#         n_samples = len(samples)
+#         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
+#         batch = samples[idx]
+        
+#         # Setup loss for this batch
+#         loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
+#         loss_val = loss_fn(params)
+        
+#         # Get gradient of parameters for this batch
+#         if gradient_fn_per_batch is None:
+#             dparams = grad(loss_fn)(params) 
+#         else:
+#             dparams = gradient_fn_per_batch(params, batch)
+
+#         if maximize:
+#             dparams = -dparams
+            
+#         dparams = dparams * mask
+#         # Apply updates
+#         updates, opt_state = optimizer.update(dparams, opt_state)
+#         params = optax.apply_updates(params, updates)
+        
+#         return params, opt_state, key, loss_val
+    
+#     # Training loop
+#     params_history = []
+#     loss_history = []
+
+#     params = params_initial
+
+#     for epoch in range(n_epochs):
+#         key, subkey = jr.split(key)
+#         params, opt_state, key, loss = training_step(
+#             params, opt_state, samples, batch_size, subkey)
+        
+#         # Store parameters and loss
+#         params_history.append(params)
+#         loss_history.append(loss)
+        
+#         if epoch % 100 == 0:
+#             print(f"Epoch {epoch}")
+#             # print(f"params:\n{params}")
+#             print(f"Loss: {loss:.4f}")
+#             print("---")
+#     return params_history, loss_history
+
+def run_optimization(loss_fn_per_batch, params_initial, samples, gradient_fn_per_batch=None,
+                     mask=None, key=jr.PRNGKey(0), batch_size=128, learning_rate=0.001,
+                     n_epochs=20000, maximize=False, window_size=1000, tolerance=1e-16, patience=50):
+    """
+    Runs gradient-based optimization using mini-batches with an early stopping criterion based
+    on the moving average of the loss.
+
     Args:
         loss_fn_per_batch: Callable that computes the loss for a batch of samples.
-            Must have signature: loss_fn_per_batch(params, batch) -> scalar_loss
-            where params contains the parameters to optimize and batch is a subset of samples.
-        
-        params_initial: Initial parameters to optimize. Can be any pytree structure 
-            (nested lists/tuples/dicts of arrays).
-        
-        samples: Array of training samples with shape [n_samples, ...].
-        
-        gradient_fn_per_batch: Optional callable to compute gradients for a batch.
-            If None, gradients are computed using jax.grad(loss_fn_per_batch).
-            If provided, must have signature: gradient_fn_per_batch(params, batch) -> gradients
-            where gradients has the same structure as params.
-        
+        params_initial: Initial parameters (any pytree).
+        samples: Array of training samples.
+        gradient_fn_per_batch: Optional callable to compute gradients.
+        mask: Optional mask to apply to the gradients.
         key: PRNG key for random batch sampling.
-        
-        batch_size: Number of samples to use per optimization step.
-        
+        batch_size: Number of samples per optimization step.
         learning_rate: Step size for the Adam optimizer.
-        
-        n_epochs: Number of optimization steps to perform.
+        n_epochs: Maximum number of optimization steps.
+        maximize: Whether to maximize (rather than minimize) the loss.
+        window_size: Number of recent epochs over which to compute the moving average.
+        tolerance: Minimum improvement required in the moving average to reset the patience counter.
+        patience: Number of consecutive windows without sufficient improvement before stopping.
 
     Returns:
         params_history: List of parameter values at each optimization step.
         loss_history: List of loss values at each optimization step.
     """
-    # Define an exponential decay schedule
-    scheduler = optax.exponential_decay(
-        init_value=learning_rate,     # starting learning rate (e.g., 0.001)
-        transition_steps=transition_steps,          # decay frequency (in steps)
-        decay_rate=0.99,                # decay rate per transition step
-        staircase=True                # if True, learning rate decays in discrete intervals
-    )
     
     # Initialize optimizer
-    if decaying_learning_rate:
-        optimizer = optax.adam(learning_rate=scheduler)
-    else:
-        optimizer = optax.adam(learning_rate=learning_rate)
+    optimizer = optax.adam(learning_rate=learning_rate)
     opt_state = optimizer.init(params_initial)
     if mask is None:
         mask = jnp.ones(params_initial.shape[0])
-    
+
     @partial(jax.jit, static_argnums=(3,))
     def training_step(params, opt_state, samples, batch_size, key):
-        """Single training step using batched samples"""
-        # Get random batch of samples
         key, subkey = jr.split(key)
         n_samples = len(samples)
         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
         batch = samples[idx]
-        
-        # Setup loss for this batch
+        # Define loss for current batch
         loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
         loss_val = loss_fn(params)
-        
-        # Get gradient of parameters for this batch
+        # Compute gradients
         if gradient_fn_per_batch is None:
-            dparams = grad(loss_fn)(params) 
+            dparams = jax.grad(loss_fn)(params)
         else:
             dparams = gradient_fn_per_batch(params, batch)
-
         if maximize:
             dparams = -dparams
-            
         dparams = dparams * mask
-        # Apply updates
         updates, opt_state = optimizer.update(dparams, opt_state)
         params = optax.apply_updates(params, updates)
-        
         return params, opt_state, key, loss_val
-    
-    # Training loop
+
     params_history = []
     loss_history = []
+    best_moving_avg = jnp.inf
+    patience_counter = 0
 
     params = params_initial
 
     for epoch in range(n_epochs):
         key, subkey = jr.split(key)
-        params, opt_state, key, loss = training_step(
-            params, opt_state, samples, batch_size, subkey)
-        
-        # Store parameters and loss
+        params, opt_state, key, loss = training_step(params, opt_state, samples, batch_size, subkey)
         params_history.append(params)
         loss_history.append(loss)
-        
+
+        # Check convergence if we have enough history
+        if epoch % 100 == 0 and len(loss_history) >= window_size:
+            current_moving_avg = jnp.mean(jnp.array(loss_history[-window_size:]))
+            # If the moving average hasn't improved by the tolerance, increase the counter
+            if current_moving_avg < best_moving_avg - tolerance:
+                best_moving_avg = current_moving_avg
+                patience_counter = 0
+            else:
+                patience_counter += 1
+
+        # Optionally print progress every 100 epochs
         if epoch % 100 == 0:
-            print(f"Epoch {epoch}")
-            # print(f"params:\n{params}")
-            print(f"Loss: {loss:.4f}")
-            print("---")
+            print(f"Epoch {epoch} - Loss: {loss:.4f}")
+        # If we haven't seen sufficient improvement for 'patience' consecutive windows, stop training
+        if patience_counter >= patience:
+            print(f"Convergence reached at epoch {epoch}. Stopping optimization.")
+            break
+
     return params_history, loss_history
