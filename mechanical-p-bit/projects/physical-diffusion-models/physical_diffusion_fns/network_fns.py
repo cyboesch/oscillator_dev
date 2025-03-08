@@ -156,7 +156,7 @@ def setup_general_polynomial_network_with_external_force_energy_fn(connectivity,
 # Overdamped SDE
 ########################################################################################
 
-def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0, time_dependent_parms=False):
+def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0, time_dependent_parms=False, debug=False):
     """
     Sets up drift and diffusion functions for overdamped dynamics
     
@@ -177,10 +177,17 @@ def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T
     else:
         energy_of_state_time = lambda t, state: energy_fn(state, flattened_args) 
     
-    def drift_fn(t, state, args):
-        """Drift function for overdamped dynamics"""
-        dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
-        return -gamma * dE_dx
+    if debug:   
+        def drift_fn(t, state, args):
+            jax.debug.print("Current time: {}", t)
+            """Drift function for overdamped dynamics"""
+            dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
+            return -gamma * dE_dx
+    else:
+        def drift_fn(t, state, args):
+            """Drift function for overdamped dynamics"""
+            dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
+            return -gamma * dE_dx
     
     def diffusion_fn(t, state, args):
         """Diffusion function for overdamped dynamics"""
