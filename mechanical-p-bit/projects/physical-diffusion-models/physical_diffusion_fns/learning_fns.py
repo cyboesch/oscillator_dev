@@ -137,7 +137,8 @@ def run_optimization(loss_fn_per_batch,
                      maximize=False, 
                      window_size=1000, 
                      tolerance=1e-16, 
-                     patience=50):
+                     patience=50,
+                     constraint_indices=None):
     """
     Runs gradient-based optimization using mini-batches with an early stopping criterion based
     on the moving average of the loss.
@@ -199,6 +200,13 @@ def run_optimization(loss_fn_per_batch,
     for epoch in range(n_epochs):
         key, subkey = jr.split(key)
         params, opt_state, key, loss = training_step(params, opt_state, samples, batch_size, subkey)
+        
+        if constraint_indices is not None:
+            # Define a small positive constant epsilon to ensure strict positivity.
+            epsilon = 1e-3
+            # Project the subset of parameters (e.g., those at index 0:10) to be at least epsilon:
+            params = params.at[constraint_indices].set(jnp.maximum(params[constraint_indices], epsilon))
+
         params_history.append(params)
         loss_history.append(loss)
 
