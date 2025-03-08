@@ -170,7 +170,7 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
     Plot marginal distributions of samples at forward time t.
     
     Args:
-        samples_t: Array of samples shape (n_samples, 2)
+        samples_t: Array of samples shape (n_samples, n_dim)
         t_forward: Forward time value
         sigma_final: Final sigma value for Gaussian comparison
         path: Path to save figure (default: None)
@@ -180,19 +180,26 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
     # Create figure
     plt.figure(figsize=(8, 6))
     
-    # Plot marginal distributions
-    plt.hist(samples_t[:, 0], bins=50, density=True, alpha=0.7, label='X distribution')
-    plt.hist(samples_t[:, 1], bins=50, density=True, alpha=0.7, label='Y distribution')
+    # Get number of dimensions
+    n_dim = samples_t.shape[1]
+    show_labels = n_dim <= 2
+    
+    # Plot marginal distributions for all dimensions
+    colors = plt.cm.tab10(jnp.linspace(0, 1, n_dim))  # Get distinct colors
+    for i in range(n_dim):
+        label = f'Dimension {i} distribution' if show_labels else None
+        plt.hist(samples_t[:, i], bins=50, density=True, alpha=0.3, color=colors[i], label=label)
 
     # Add Gaussian N(0,sigma) for comparison
-    x = jnp.linspace(-1, 1, 1000)  # Adjust range as needed
+    x = jnp.linspace(-3, 3, 1000)  # Adjust range as needed
     gaussian_pdf = (1 / jnp.sqrt(2 * jnp.pi*sigma_final**2)) * jnp.exp(-0.5 * x**2/sigma_final**2)
     plt.plot(x, gaussian_pdf, 'r--', linewidth=2, label=r'Gaussian N(0,$\sigma$)')
 
     plt.title(f'Marginal Distributions at t = {t_forward}, $\sigma$ = {sigma_final:.2f}', fontsize=fontsize+2)
     plt.xlabel('Value', fontsize=fontsize)
     plt.ylabel('Density', fontsize=fontsize)
-    plt.legend(fontsize=fontsize-2)
+    if show_labels:
+        plt.legend(fontsize=fontsize-2)
     
     # Set tick label sizes
     plt.xticks(fontsize=fontsize-2)

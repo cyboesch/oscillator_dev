@@ -6,6 +6,27 @@ import diffrax
 from diffrax import ControlTerm, MultiTerm, ODETerm
 
 ########################################################################################
+# Connectivity functions
+########################################################################################
+
+# Create 2D grid connectivity for 8x8 oscillators
+def create_2d_square_grid_connectivity(grid_size):
+    connections = []
+    
+    for i in range(grid_size):
+        for j in range(grid_size):
+            current = i * grid_size + j
+            
+            # Connect to right neighbor
+            if j < grid_size - 1:
+                connections.append([current, current + 1])
+            
+            # Connect to bottom neighbor
+            if i < grid_size - 1:
+                connections.append([current, current + grid_size])
+    
+    return jnp.array(connections)
+########################################################################################
 # Energy functions
 ########################################################################################
 
