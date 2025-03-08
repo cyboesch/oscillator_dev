@@ -94,8 +94,6 @@ def setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten)
 
 # general polynomial network
 def setup_general_polynomial_network_with_external_force_energy_fn(connectivity, unflatten):
-    import jax.numpy as jnp
-    from jax import vmap
 
     # Self oscillator energy: here only a linear bias is used to mimic an external force.
     def energy_self_oscillator(x, bias):
