@@ -47,6 +47,10 @@ def sample_gaussian_mixture(key, n_samples, weights, means, covs):
     samples = jax.vmap(sample_one)(keys_sample, components)
     return samples
 
+########################################################################################
+# Normalizing samples
+########################################################################################
+
 def normalize_samples(samples):
     """
     Normalize samples to have mean 0 and variance 1 along each dimension.
