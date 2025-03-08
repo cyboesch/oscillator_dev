@@ -92,9 +92,9 @@ forward_time_pts = forward_time_pts.at[0].set(0.)
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-learning_rate = .1
+learning_rate = 10.
 n_epochs = 100000//2
-batch_size = 2*128
+batch_size = 128
 window_size=1000
 tolerance=1e-8
 patience=50

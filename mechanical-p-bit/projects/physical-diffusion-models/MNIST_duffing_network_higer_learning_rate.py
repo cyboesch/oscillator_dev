@@ -50,6 +50,7 @@ biases_0 = jnp.zeros(N_osc)
 params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, biases_0)
 params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'biases']
 params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
+constraint_indices = jnp.arange(N_osc,2*N_osc)
 
 #####################################
 # Bringe energy into correct form
@@ -92,15 +93,15 @@ forward_time_pts = forward_time_pts.at[0].set(0.)
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-learning_rate = .01
+learning_rate = 100.
 n_epochs = 100000//2
-batch_size = 2*128
+batch_size = 128
 window_size=1000
 tolerance=1e-8
 patience=50
 
 
-comment = "with_external_force"
+comment = "with_external_force_and_duff_constraint_positive_only"
 optimization_folder = (f"{training_method}_"
            f"t_forward_{t_forward}_"
            f"n_timesteps_{n_time_steps}_"
@@ -174,7 +175,8 @@ for t_idx, t_curr in enumerate(forward_time_pts):
         maximize=maximize,
         window_size=window_size,
         tolerance=tolerance,
-        patience=patience
+        patience=patience,
+        constraint_indices=constraint_indices
     )
     
     _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
