@@ -280,12 +280,13 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
         if len(param_shape) > 0 and param_shape[0] == N_osc:
             for osc in range(N_osc):
                 color = colors[osc % len(colors)]
+                # If N_osc <= 2, add labels; otherwise, no labels are used.
                 if N_osc <= 2:
                     raw_label = f'{params_names[j]} (osc {osc+1}, optimization)'
                     interp_label = f'{params_names[j]} (osc {osc+1}, interpolated)'
                 else:
-                    raw_label = f'{params_names[j]} (osc {osc+1}, optimization)' if osc == 0 else None
-                    interp_label = f'{params_names[j]} (osc {osc+1}, interpolated)' if osc == 0 else None
+                    raw_label = None
+                    interp_label = None
                 
                 ax.plot(forward_time_pts, hist_arrays[j][:, osc],
                         color + '-', alpha=0.3, label=raw_label)
@@ -305,12 +306,13 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
         ax.set_ylabel('Value')
         ax.grid(True)
         
-        # Show legend if either single-curve or when N_osc <= 2 (i.e. every oscillator gets a label).
-        if (len(param_shape) == 0) or (len(param_shape) > 0 and param_shape[0] != N_osc) or (N_osc <= 2):
+        # For non per-oscillator parameters or when N_osc <=2, show legend.
+        if not (len(param_shape) > 0 and param_shape[0] == N_osc and N_osc > 2):
             ax.legend()
     
     plt.tight_layout(rect=[0, 0, 1, 0.96])
     plt.show()
+
 
 ########################################################################################
 # Plotting connectivity
