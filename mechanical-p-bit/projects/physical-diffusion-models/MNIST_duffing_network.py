@@ -84,7 +84,7 @@ else:
 ## Optimization parameters and filenames
 
 # Forward process parameters
-n_time_steps = 50
+n_time_steps = 5
 t_forward = 1.0
 sigma_forward = .5
 forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-9), jnp.log(t_forward), n_time_steps))
@@ -92,11 +92,11 @@ forward_time_pts = forward_time_pts.at[0].set(0.)
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-learning_rate = .01
+learning_rate = .1
 n_epochs = 100000//2
 batch_size = 2*128
 window_size=1000
-tolerance=1e-12
+tolerance=1e-8
 patience=50
 
 
