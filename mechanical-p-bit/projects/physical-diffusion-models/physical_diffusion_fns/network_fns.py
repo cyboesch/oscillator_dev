@@ -78,7 +78,6 @@ def setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten)
             )
         )
 
-
     def _energy_duffing_network(x, k_lin, k_duff, c_lin, c_optomech, bias, connectivity):
         # returns energy of network of oscillators given input parameters
         return (
@@ -92,6 +91,47 @@ def setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten)
 
     energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
     return energy_fn
+
+# general polynomial network
+def setup_general_polynomial_network_with_external_force_energy_fn(connectivity, unflatten):
+    import jax.numpy as jnp
+    from jax import vmap
+
+    # Self oscillator energy: here only a linear bias is used to mimic an external force.
+    def energy_self_oscillator(x, bias):
+        return bias * x
+
+    def energy_self_network(x, bias):
+        # Apply the self oscillator energy to each oscillator.
+        # Here we create a bias array of the same shape as x.
+        bias_array = jnp.full_like(x, bias)
+        return jnp.sum(vmap(energy_self_oscillator)(x, bias_array))
+
+    # Coupling energy for a pair (x, y)
+    def energy_coupling_pair(x, y, a1, a2, a3):
+        z = a1 * x + a2 * y + a3 * x**2
+        return z**4 - z**2
+
+    def energy_coupling_network(x, a1, a2, a3, connectivity):
+        # For every pair given in connectivity, compute the pair energy.
+        def _coupling_energy_pair(x, a1, a2, a3, pair):
+            i, j = pair
+            return energy_coupling_pair(x[i], x[j], a1, a2, a3)
+        return jnp.sum(vmap(_coupling_energy_pair, in_axes=(None, 0, 0, 0, 0))(
+    x, a1, a2, a3, connectivity))
+
+    # Total energy is the sum of the self energies and the coupling energies.
+    def _energy_general_polynomial_network(x, a1, a2, a3, bias, connectivity):
+        return energy_self_network(x, bias) + energy_coupling_network(x, a1, a2, a3, connectivity)
+
+    def energy_general_polynomial_network(x, flattened_args, connectivity):
+        # Unflatten to get the coupling parameters a1, a2, a3.
+        a1, a2, a3, bias = unflatten(flattened_args)
+        return _energy_general_polynomial_network(x, a1, a2, a3, bias, connectivity)
+
+    energy_fn = lambda x, flattened_args: energy_general_polynomial_network(x, flattened_args, connectivity)
+    return energy_fn
+
 
 ########################################################################################
 # Overdamped SDE
