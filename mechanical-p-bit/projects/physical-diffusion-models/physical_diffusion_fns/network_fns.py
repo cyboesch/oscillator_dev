@@ -9,6 +9,7 @@ from diffrax import ControlTerm, MultiTerm, ODETerm
 # Energy functions
 ########################################################################################
 
+# without external force
 def setup_duffing_network_energy_fn(connectivity, unflatten):
     def energy_self_oscillator(x, k_lin, k_duff):
         return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4
@@ -50,6 +51,7 @@ def setup_duffing_network_energy_fn(connectivity, unflatten):
     energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
     return energy_fn
 
+# with external force
 def setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten):
     def energy_self_oscillator(x, k_lin, k_duff, bias):
         return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4 + bias * x
