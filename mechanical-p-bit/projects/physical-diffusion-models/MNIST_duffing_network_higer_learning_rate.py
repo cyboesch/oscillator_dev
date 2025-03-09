@@ -28,7 +28,16 @@ print("Data shape:", images_flat_raw.shape)
 
 mean = jnp.mean(images_flat_raw)  # This calculates mean over all samples and pixels
 std = jnp.std(images_flat_raw)    # This calculates std over all samples and pixels
-samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw)
+normalize_MNIST = True
+if normalize_MNIST:
+    samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw)
+    additional_rescaling = 1/100.
+    samples_target = samples_target*additional_rescaling
+else:
+    samples_target = images_flat_raw
+    mean_MNIST = 0.
+    std_MNIST = 1.
+
 
 ##################################### 
 # Setup network
@@ -87,7 +96,7 @@ else:
 # Forward process parameters
 n_time_steps = 50
 t_forward = 1.0
-sigma_forward = .5
+sigma_forward = .1
 forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-9), jnp.log(t_forward), n_time_steps))
 forward_time_pts = forward_time_pts.at[0].set(0.)
 print('forward_time_pts', forward_time_pts)
@@ -101,10 +110,11 @@ tolerance=1e-8
 patience=50
 
 
-comment = "with_external_force_and_duff_constraint_positive_only"
+comment = f"with_external_force_and_duff_constraint_positive_only_rescaling_{additional_rescaling}"
 optimization_folder = (f"{training_method}_"
            f"t_forward_{t_forward}_"
            f"n_timesteps_{n_time_steps}_"
+           f"sigma_forward_{sigma_forward}_"
            f"lr_{learning_rate}_"
            f"epochs_{n_epochs}_"
            f"batch_{batch_size}_"
