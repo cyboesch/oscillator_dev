@@ -85,7 +85,7 @@ else:
 ## Optimization parameters and filenames
 
 # Forward process parameters
-n_time_steps = 5
+n_time_steps = 50
 t_forward = 1.0
 sigma_forward = .5
 forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-9), jnp.log(t_forward), n_time_steps))
