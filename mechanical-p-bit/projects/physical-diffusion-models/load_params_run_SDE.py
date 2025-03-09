@@ -36,8 +36,6 @@ samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw)
 N_osc = 64
 connectivity = create_2d_square_grid_connectivity(grid_size=8)
 num_connections = connectivity.shape[0]
-visualize_connectivity(connectivity, grid_size_x=8, grid_size_y=8)
-
 
 ##############################
 # Define initial parameters
@@ -180,34 +178,38 @@ initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=s
 # Generate a key for each initial condition
 key, subkey = jr.split(key)
 keys_brownian = jr.split(subkey, n_trajectories)
-
-# Vectorize solve_SDE across both initial states and keys
-vectorized_solve_SDE = vmap(
-    lambda init_state, key_b: solve_SDE(
-        drift_fn, 
-        diffusion_fn, 
-        init_state,
-        key_b, 
-        t0, 
-        t1, 
-        ts.shape[0], 
-        dt0,
-        rtol=1e-3,
-        atol=1e-6
-    ),
-    in_axes=(0, 0)
-)
-
-
-# Run SDE for all initial states at once
-solutions = vectorized_solve_SDE(initial_states, keys_brownian)
-all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
-np.save(f"{output_dir}/diffusion_trajectories.npy", all_trajectories)
+load_trajectories = True
+if load_trajectories:
+    print("loading trajectories")
+    all_trajectories = jnp.load(f"{output_dir}/diffusion_trajectories.npy")
+else:
+    print("solving reverse SDE")
+    # Vectorize solve_SDE across both initial states and keys
+    print("solving reverse SDE")
+    vectorized_solve_SDE = vmap(
+        lambda init_state, key_b: solve_SDE(
+            drift_fn, 
+            diffusion_fn, 
+            init_state,
+            key_b, 
+            t0, 
+            t1, 
+            ts.shape[0], 
+            dt0,
+            rtol=1e-2,
+            atol=1e-4
+        ),
+        in_axes=(0, 0)
+    )
+    # Run SDE for all initial states at once
+    solutions = vectorized_solve_SDE(initial_states, keys_brownian)
+    all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
+    np.save(f"{output_dir}/diffusion_trajectories.npy", all_trajectories)
 
 # Save the final states as diffusion samples
 
 final_states = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
-final_states_rescaled = (final_states + mean_MNIST) * std_MNIST
+final_states_rescaled = final_states * std_MNIST + mean_MNIST
 
 
 images_generated = final_states_rescaled.reshape(-1, 8, 8)
@@ -229,50 +231,51 @@ plt.show()
 
 
 
-##############################
-# Equillibirum Sampling
+# ##############################
+# # Equillibirum Sampling
 
-params_for_equillibrium_sampling = params_history_all_t[0,:]
-# Setup SDE functions
-drift_equilibrium_fn, diffusion_equilibrium_fn = setup_overdamped_SDE(energy_fn, params_for_equillibrium_sampling, N_osc, time_dependent_parms=False)
+# params_for_equillibrium_sampling = params_history_all_t[0,:]
+# # Setup SDE functions
+# drift_equilibrium_fn, diffusion_equilibrium_fn = setup_overdamped_SDE(energy_fn, params_for_equillibrium_sampling, N_osc, time_dependent_parms=False)
 
 
-t0 = 0.0
-t1 = 10
-ts = jnp.linspace(t0, t1, 100)
-dt0 = 0.00000001
+# t0 = 0.0
+# t1 = 10
+# ts = jnp.linspace(t0, t1, 100)
+# dt0 = 0.00000001
 
-key, subkey = jr.split(key)
+# key, subkey = jr.split(key)
 
-# Select random initial states from samples_target
-initial_states_indices = jr.randint(subkey, (n_trajectories,), 0, samples_target.shape[0])
-initial_states = samples_target[initial_states_indices]
+# # Select random initial states from samples_target
+# initial_states_indices = jr.randint(subkey, (n_trajectories,), 0, samples_target.shape[0])
+# initial_states = samples_target[initial_states_indices]
 
-# Generate a key for each initial condition
-key, subkey = jr.split(key)
-keys_brownian = jr.split(subkey, n_trajectories)
+# # Generate a key for each initial condition
+# key, subkey = jr.split(key)
+# keys_brownian = jr.split(subkey, n_trajectories)
 
-# Vectorize solve_SDE across both initial states and keys
-vectorized_solve_SDE_equilibrium = vmap(
-    lambda init_state, key_b: solve_SDE(
-        drift_equilibrium_fn, 
-        diffusion_equilibrium_fn, 
-        init_state,
-        key_b, 
-        t0, 
-        t1, 
-        ts.shape[0], 
-        dt0,
-        rtol=1e-6,
-        atol=1e-9
-    ),
-    in_axes=(0, 0)
-)
+# # Vectorize solve_SDE across both initial states and keys
+# print("solving SDE for equilibrium")
+# vectorized_solve_SDE_equilibrium = vmap(
+#     lambda init_state, key_b: solve_SDE(
+#         drift_equilibrium_fn, 
+#         diffusion_equilibrium_fn, 
+#         init_state,
+#         key_b, 
+#         t0, 
+#         t1, 
+#         ts.shape[0], 
+#         dt0,
+#         rtol=1e-9,
+#         atol=1e-11
+#     ),
+#     in_axes=(0, 0)
+# )
 
-# Run SDE for all initial states at once
-solutions = vectorized_solve_SDE_equilibrium(initial_states, keys_brownian)
-all_trajectories_equilibrium = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
-np.save(f"{output_dir}/diffusion_trajectories_equilibrium.npy", all_trajectories_equilibrium)
+# # Run SDE for all initial states at once
+# solutions = vectorized_solve_SDE_equilibrium(initial_states, keys_brownian)
+# all_trajectories_equilibrium = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
+# np.save(f"{output_dir}/diffusion_trajectories_equilibrium.npy", all_trajectories_equilibrium)
 
 
 
