@@ -112,8 +112,8 @@ patience=50
 
 
 data_folder = ("normalized_data_"
-    f"{f'adding_noise_{sigma_images}' if adding_noise else 'NO_added_noise_'}"
-    f"{f'rescaling_{additional_rescaling}' if rescaling else 'NO_additional_rescaling_'}"
+    f"{f'adding_noise_{sigma_images}' if adding_noise else '_NO_added_noise_'}"
+    f"{f'rescaling_{additional_rescaling}' if rescaling else '_NO_additional_rescaling_'}"
 ).strip('_')
 
 comment = f""
