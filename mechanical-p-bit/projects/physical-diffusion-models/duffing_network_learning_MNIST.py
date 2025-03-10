@@ -10,7 +10,6 @@ from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time
 from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_grid_connectivity
 
-
 jax.config.update("jax_enable_x64", True)
 
 
@@ -96,19 +95,19 @@ else:
 ## Optimization parameters and filenames
 
 # Forward process parameters
-n_time_steps = 50
+n_time_steps = 30
 t_forward = 1.0
-sigma_forward = .1
+sigma_forward = 1.
 forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-9), jnp.log(t_forward), n_time_steps))
 forward_time_pts = forward_time_pts.at[0].set(0.)
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-learning_rate = 1.
+learning_rate = 0.1
 n_epochs = 100000//2
 batch_size = 128
 window_size=1000
-tolerance=1e-12
+tolerance=1e-8
 patience=50
 
 
@@ -225,3 +224,14 @@ params_history_all_t = jnp.array(params_history_all_t)
 jnp.save(f"{output_dir}/params_history.npy", params_history_all_t)
 
 print('Optimization complete; saved parameters to', output_dir)
+
+import pickle
+
+# Filter out built-in and module variables
+variables_to_save = {k: v for k, v in globals().items() if not k.startswith("__") and not callable(v)}
+
+# Save the variables to a file
+with open(f"{output_dir}/saved_variables.pkl", "wb") as f:
+    pickle.dump(variables_to_save, f)
+
+print('All variables saved to', f"{output_dir}/saved_variables.pkl")
