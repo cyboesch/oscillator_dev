@@ -219,25 +219,6 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
 def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval, 
                                  params_history_all_t, params_interpolator, 
                                  unflatten, N_osc, log_scale=True):
-    """
-    Plots the evolution of parameters over time using unflattened data.
-    The unflatten function converts a flattened parameter vector into a list
-    of parameter arrays. The routine reconstructs histories for both raw (optimization)
-    data and interpolated data.
-
-    Args:
-        params_names: List of names for parameter groups. This list should have the same
-                      length as the list returned by unflatten.
-        forward_time_pts: 1D array/list of time points for the raw/optimization process.
-        time_eval: 1D array/list of time points for the interpolated data.
-        params_history_all_t: Array of flattened parameter values from history, shape (n_time, M).
-        params_interpolator: Function that takes a time value and returns the flattened
-                             parameter vector at that time.
-        unflatten: Function that converts a flattened parameter vector to a list of parameter arrays.
-        N_osc: Number of oscillators (if a parameter is defined per oscillator, its first dimension
-               will be N_osc).
-        log_scale: Boolean flag to set the x-axis to logarithmic scale.
-    """
     # --- Reconstruct Historical Data ---
     first_params = unflatten(params_history_all_t[0])
     n_groups = len(first_params)
@@ -260,7 +241,7 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
         unflattened = unflatten(params_interpolator(time_eval[i]))
         for j, param in enumerate(unflattened):
             interp_arrays[j] = interp_arrays[j].at[i].set(param)
-    
+
     # --- Plotting ---
     fig, axes = plt.subplots(n_groups, 1, figsize=(6, 3 * n_groups))
     if n_groups == 1:
@@ -280,24 +261,16 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
         if len(param_shape) > 0 and param_shape[0] == N_osc:
             for osc in range(N_osc):
                 color = colors[osc % len(colors)]
-                # If N_osc <= 2, add labels; otherwise, no labels are used.
-                if N_osc <= 2:
-                    raw_label = f'{params_names[j]} (osc {osc+1}, optimization)'
-                    interp_label = f'{params_names[j]} (osc {osc+1}, interpolated)'
-                else:
-                    raw_label = None
-                    interp_label = None
-                
                 ax.plot(forward_time_pts, hist_arrays[j][:, osc],
-                        color + '-', alpha=0.3, label=raw_label)
+                        color + '-', alpha=0.3)
                 ax.plot(time_eval, interp_arrays[j][:, osc],
-                        color + '-', linewidth=2, label=interp_label)
+                        color + '-', linewidth=2)
         else:
             # Otherwise, plot a single curve.
             ax.plot(forward_time_pts, hist_arrays[j],
-                    colors[0] + '-', alpha=0.3, label=f'{params_names[j]} (optimization)')
+                    colors[0] + '-', alpha=0.3)
             ax.plot(time_eval, interp_arrays[j],
-                    colors[0] + '-', linewidth=2, label=f'{params_names[j]} (interpolated)')
+                    colors[0] + '-', linewidth=2)
         
         ax.set_title(f'{params_names[j]} Evolution')
         ax.set_xlabel('Time')
@@ -305,14 +278,9 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
             ax.set_xscale('log')
         ax.set_ylabel('Value')
         ax.grid(True)
-        
-        # For non per-oscillator parameters or when N_osc <=2, show legend.
-        if not (len(param_shape) > 0 and param_shape[0] == N_osc and N_osc > 2):
-            ax.legend()
     
-    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust rect to reduce gap
     plt.show()
-
 
 ########################################################################################
 # Plotting connectivity
