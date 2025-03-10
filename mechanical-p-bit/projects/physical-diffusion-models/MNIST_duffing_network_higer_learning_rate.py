@@ -26,18 +26,20 @@ images_flat_raw = jnp.array(data_np)
 n_samples = images_flat_raw.shape[0]
 print("Data shape:", images_flat_raw.shape)
 
-mean = jnp.mean(images_flat_raw)  # This calculates mean over all samples and pixels
-std = jnp.std(images_flat_raw)    # This calculates std over all samples and pixels
-normalize_MNIST = True
-if normalize_MNIST:
+rescaling = False
+adding_noise = True
+if rescaling:
     samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw)
-    additional_rescaling = 1/100.
+    additional_rescaling = 1.
     samples_target = samples_target*additional_rescaling
+elif adding_noise:    
+    key_images =  jr.PRNGKey(0)  # Seed for reproducibility
+    sigma_images = 0.05
+    gaussian_noise = jr.normal(key_images, images_flat_raw.shape) * sigma_images 
+    images_flat_raw_noised = images_flat_raw + gaussian_noise
+    samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw_noised)
 else:
-    samples_target = images_flat_raw
-    mean_MNIST = 0.
-    std_MNIST = 1.
-
+    samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw)
 
 ##################################### 
 # Setup network
@@ -102,15 +104,21 @@ forward_time_pts = forward_time_pts.at[0].set(0.)
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-learning_rate = 100.
+learning_rate = .1
 n_epochs = 100000//2
 batch_size = 128
 window_size=1000
-tolerance=1e-8
+tolerance=1e-12
 patience=50
 
 
-comment = f"with_external_force_and_duff_constraint_positive_only_rescaling_{additional_rescaling}"
+data_folder = ("normalized_data_"
+    f"{f'adding_noise_{sigma_images}' if adding_noise else 'NO_added_noise_'}"
+    f"{f'rescaling_{additional_rescaling}' if rescaling else 'NO_additional_rescaling_'}"
+).strip('_')
+
+comment = f""
+
 optimization_folder = (f"{training_method}_"
            f"t_forward_{t_forward}_"
            f"n_timesteps_{n_time_steps}_"
@@ -126,13 +134,13 @@ optimization_folder = (f"{training_method}_"
 # Setup output directories
 base_dir = "out/problems"
 problem_type_folder = "MNIST"
-problem_folder = f"only_0_and_1_resol_8x8"  # Replace with your actual parameters
+problem_folder = f"only_0_and_1_resol_8x8/{data_folder}"  # Replace with your actual parameters
 
 output_dir = os.path.join(base_dir, problem_type_folder, problem_folder,optimization_folder)
 
 # Create directories if they don't exist
 os.makedirs(output_dir, exist_ok=True)
-
+print(f"Output directory: {output_dir}")
 
 #####################################
 # Print final distribution of the forward
