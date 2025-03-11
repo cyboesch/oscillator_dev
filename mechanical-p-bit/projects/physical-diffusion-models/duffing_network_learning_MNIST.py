@@ -1,4 +1,3 @@
-
 import jax
 from jax import flatten_util, vmap 
 import jax.numpy as jnp
@@ -14,6 +13,78 @@ jax.config.update("jax_enable_x64", True)
 
 
 ##################################### 
+# Set parameters
+##################################### 
+
+
+rescaling = False
+sigma_images = 0.05
+additional_rescaling = 1.
+# Forward process parameters
+n_time_steps = 5
+t_forward = 1.0
+sigma_forward = 1.
+exponential_time_pts = True
+if exponential_time_pts:
+    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-9), jnp.log(t_forward), n_time_steps))
+    forward_time_pts = forward_time_pts.at[0].set(0.)
+else:
+    forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
+print('forward_time_pts', forward_time_pts)
+
+
+
+# Optimization parameters
+training_method = "SM"
+learning_rate = 0.1
+n_epochs = 100000//2//1000
+batch_size = 128
+window_size=1000
+tolerance=1e-8
+patience=50
+
+key_seed = 0
+N_osc = 64
+connectivity = create_2d_square_grid_connectivity(grid_size=8)
+
+problem_type_folder = "MNIST"
+prefix_data_folder = "only_0s_and_1s_resol_8x8"
+prefix_data = "normalized_data_"
+
+
+use_smoothed_params = True
+
+#####################################
+## Optimization parameters and filenames
+
+
+data_folder = f"added_noise_{sigma_images}_additional_rescaling_{additional_rescaling}"
+problem_folder = f"only_0s_and_1s_resol_8x8/{data_folder}"
+
+optimization_folder = (f"{training_method}_"
+           f"exponential_time_pts_{exponential_time_pts}_"
+           f"t_forward_{t_forward}_"
+           f"n_timesteps_{n_time_steps}_"
+           f"sigma_forward_{sigma_forward}_"
+           f"lr_{learning_rate}_"
+           f"epochs_{n_epochs}_"
+           f"batch_{batch_size}_"
+           f"window_{window_size}_"
+           f"tol_{tolerance}_"
+           f"patience_{patience}")
+
+# Setup output directories
+base_dir = "out/problems"
+ # Replace with your actual parameters
+
+output_dir = os.path.join(base_dir, problem_type_folder, problem_folder,optimization_folder)
+
+# Create directories if they don't exist
+os.makedirs(output_dir, exist_ok=True)
+print(f"Output directory: {output_dir}")
+
+
+##################################### 
 # Load MNIST data
 ##################################### 
 import numpy as np
@@ -25,20 +96,16 @@ images_flat_raw = jnp.array(data_np)
 n_samples = images_flat_raw.shape[0]
 print("Data shape:", images_flat_raw.shape)
 
-rescaling = False
-adding_noise = True
-if rescaling:
-    samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw)
-    additional_rescaling = 1.
-    samples_target = samples_target*additional_rescaling
-elif adding_noise:    
-    key_images =  jr.PRNGKey(0)  # Seed for reproducibility
-    sigma_images = 0.05
-    gaussian_noise = jr.normal(key_images, images_flat_raw.shape) * sigma_images 
-    images_flat_raw_noised = images_flat_raw + gaussian_noise
-    samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw_noised)
-else:
-    samples_target, mean_MNIST, std_MNIST = normalize_samples(images_flat_raw)
+# Add noise to the data for regularization
+key =  jr.PRNGKey(key_seed)  
+key, subkey =  jr.split(key)  # Seed for reproducibility
+gaussian_noise = jr.normal(subkey, images_flat_raw.shape) * sigma_images 
+images_flat_true = images_flat_raw + gaussian_noise
+
+# Normalize the data
+samples_target_unscaled, mean_MNIST, std_MNIST = normalize_samples(images_flat_true)
+samples_target = samples_target_unscaled*additional_rescaling
+
 
 ##################################### 
 # Setup network
@@ -46,8 +113,6 @@ else:
 
 #####################################
 # Network size and topology
-N_osc = 64
-connectivity = create_2d_square_grid_connectivity(grid_size=8)
 num_connections = connectivity.shape[0]
 
 #####################################
@@ -71,9 +136,6 @@ energy_fn = setup_duffing_network_with_external_force_energy_fn(connectivity, un
 ##################################### 
 
 ##################################### 
-# Choose training method
-training_method = "SM"  # Options: "SM" (Score Matching), "CD1" (Contrastive Divergence), "MLE" (Maximum Likelihood)
-
 # Setup loss and gradient functions based on selected method
 if training_method == "SM":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
@@ -91,147 +153,205 @@ else:
     raise ValueError(f"Unknown training method: {training_method}. Choose from 'SM', 'CD1', or 'MLE'.")
 
 
-#####################################
-## Optimization parameters and filenames
 
-# Forward process parameters
-n_time_steps = 30
-t_forward = 1.0
-sigma_forward = 1.
-forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-9), jnp.log(t_forward), n_time_steps))
-forward_time_pts = forward_time_pts.at[0].set(0.)
-print('forward_time_pts', forward_time_pts)
-
-# Optimization parameters
-learning_rate = 0.1
-n_epochs = 100000//2
-batch_size = 128
-window_size=1000
-tolerance=1e-8
-patience=50
-
-
-data_folder = ("normalized_data_"
-    f"{f'adding_noise_{sigma_images}' if adding_noise else '_NO_added_noise_'}"
-    f"{f'rescaling_{additional_rescaling}' if rescaling else '_NO_additional_rescaling_'}"
-).strip('_')
-
-comment = f""
-
-optimization_folder = (f"{training_method}_"
-           f"t_forward_{t_forward}_"
-           f"n_timesteps_{n_time_steps}_"
-           f"sigma_forward_{sigma_forward}_"
-           f"lr_{learning_rate}_"
-           f"epochs_{n_epochs}_"
-           f"batch_{batch_size}_"
-           f"window_{window_size}_"
-           f"tol_{tolerance}_"
-           f"patience_{patience}_"
-           f"{comment}")
-
-# Setup output directories
-base_dir = "out/problems"
-problem_type_folder = "MNIST"
-problem_folder = f"only_0_and_1_resol_8x8/{data_folder}"  # Replace with your actual parameters
-
-output_dir = os.path.join(base_dir, problem_type_folder, problem_folder,optimization_folder)
-
-# Create directories if they don't exist
-os.makedirs(output_dir, exist_ok=True)
-print(f"Output directory: {output_dir}")
-
-#####################################
-# Print final distribution of the forward
-
-key = jr.PRNGKey(0)
-key, subkey = jr.split(key)
-samples_t = sample_forward_process(t_forward, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=subkey)
-plot_forward_marginals(samples_t, t_forward, sigma_forward, beta=1.0, path=output_dir, save_fig=True, fontsize=16)
 
 
 #####################################
 # Optimization
 #####################################
-
-# Setup optimization parameters
-mask = jnp.ones(params_flattened_initial.shape[0])
-
-# Plotting parameters
-plot_steps = True  # Flag to control whether to plot during optimization
-plot_slice = 1     # Plot every nth step
-
-
-# Initialize storage for parameters at each time step
-params_history_all_t = []
-current_params = params_flattened_initial
-
-# Loop over time points
-for t_idx, t_curr in enumerate(forward_time_pts):
-    print(f"Optimization for time {t_curr}")
-    
-    # Generate samples at current time
-    key, subkey = jr.split(key)
-    samples_t = sample_forward_process(
-        t_curr, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=subkey
-    )
-    
-    # Perform optimization starting from previous best parameters
+params_history_path = f"{output_dir}/params_history.npy"
+if os.path.exists(params_history_path):
+    # Load existing parameters
+    print('Loading existing parameters from', params_history_path)
+    params_history_all_t = jnp.load(params_history_path)
+else:
+    print('No existing parameters found, running optimization')
     key, subkey = jr.split(key)
     
-    params_history, loss_history = run_optimization(
-        loss_fn_per_batch=loss_fn_per_batch,
-        params_initial=current_params,
-        samples=samples_t,
-        mask=mask,
-        gradient_fn_per_batch=gradient_fn_per_batch,
-        key=subkey,
-        batch_size=batch_size,
-        learning_rate=learning_rate,
-        n_epochs=n_epochs,
-        maximize=maximize,
-        window_size=window_size,
-        tolerance=tolerance,
-        patience=patience,
-        constraint_indices=constraint_indices
-    )
+    samples_t = sample_forward_process(t_forward, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=subkey)
+    plot_forward_marginals(samples_t, t_forward, sigma_forward, beta=1.0, path=output_dir, save_fig=True, fontsize=16)
     
-    _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
-    
-    params_history_all_t.append(current_params)
-    
-    if plot_steps:
-        if t_idx % plot_slice == 0:
-            # Plot optimization progress
-            plot_parameter_evolution(
-                params_history=params_history,
-                loss_history=loss_history,
-                time = t_curr,
-                time_index = t_idx,
-                unflatten=unflatten,
-                N_osc=N_osc,
-                slicing=10,
-                title=f"{training_method} (t = {t_curr:.3f})",
-                maximize=maximize,
-                labels_on=True,
-                save_fig=True,
-                path=output_dir,
-                param_names=params_names
-            )
+    # Setup optimization parameters
+    mask = jnp.ones(params_flattened_initial.shape[0])
+
+    # Plotting parameters
+    plot_steps = True  # Flag to control whether to plot during optimization
+    plot_slice = 1     # Plot every nth step
+
+
+    # Initialize storage for parameters at each time step
+    params_history_all_t = []
+    current_params = params_flattened_initial
+
+    # Loop over time points
+    for t_idx, t_curr in enumerate(forward_time_pts):
+        print(f"Optimization for time {t_curr}")
         
-# Convert params_history_all_t to array for easier analysis
-params_history_all_t = jnp.array(params_history_all_t)
-jnp.save(f"{output_dir}/params_history.npy", params_history_all_t)
+        # Generate samples at current time
+        key, subkey = jr.split(key)
+        samples_t = sample_forward_process(
+            t_curr, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=subkey
+        )
+        
+        # Perform optimization starting from previous best parameters
+        key, subkey = jr.split(key)
+        
+        params_history, loss_history = run_optimization(
+            loss_fn_per_batch=loss_fn_per_batch,
+            params_initial=current_params,
+            samples=samples_t,
+            mask=mask,
+            gradient_fn_per_batch=gradient_fn_per_batch,
+            key=subkey,
+            batch_size=batch_size,
+            learning_rate=learning_rate,
+            n_epochs=n_epochs,
+            maximize=maximize,
+            window_size=window_size,
+            tolerance=tolerance,
+            patience=patience,
+            constraint_indices=constraint_indices
+        )
+        
+        _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
+        
+        params_history_all_t.append(current_params)
+        
+        if plot_steps:
+            if t_idx % plot_slice == 0:
+                # Plot optimization progress
+                plot_parameter_evolution(
+                    params_history=params_history,
+                    loss_history=loss_history,
+                    time = t_curr,
+                    time_index = t_idx,
+                    unflatten=unflatten,
+                    N_osc=N_osc,
+                    slicing=10,
+                    title=f"{training_method} (t = {t_curr:.3f})",
+                    maximize=maximize,
+                    labels_on=True,
+                    save_fig=True,
+                    path=output_dir,
+                    param_names=params_names
+                )
+            
+    # Convert params_history_all_t to array for easier analysis
+    params_history_all_t = jnp.array(params_history_all_t)
+    jnp.save(f"{output_dir}/params_history.npy", params_history_all_t)
 
-print('Optimization complete; saved parameters to', output_dir)
+    print('Optimization complete; saved parameters to', output_dir)
 
-import pickle
+#####################################
+# Interpolating parameters as function of time
+#####################################
 
-# Filter out built-in and module variables
-variables_to_save = {k: v for k, v in globals().items() if not k.startswith("__") and not callable(v)}
+if use_smoothed_params:
+    # First smooth the parameters
+    smoothed_params = smooth_parameters(params_history_all_t, window_lengths = [10] * params_history_all_t.shape[1], poly_orders = [3] * params_history_all_t.shape[1])
+    # Get interpolator function
+    params_interpolator = interpolate_parameters(smoothed_params, forward_time_pts)
+else:
+    # Get interpolator function
+    params_interpolator = interpolate_parameters(params_history_all_t, forward_time_pts)
 
-# Save the variables to a file
-with open(f"{output_dir}/saved_variables.pkl", "wb") as f:
-    pickle.dump(variables_to_save, f)
+# Then interpolate the smoothed parameters
+time_eval = jnp.linspace(forward_time_pts[0],forward_time_pts[-1],200)
+# interpolated_params = interpolate_parameters(smoothed_params, forward_time_pts, time_dense)
+interpolated_params = params_interpolator(time_eval)
 
-print('All variables saved to', f"{output_dir}/saved_variables.pkl")
+
+plot_parameter_as_fn_of_time(params_names, forward_time_pts,forward_time_pts, params_history_all_t, params_interpolator, unflatten, N_osc, save_fig=True, path=output_dir) 
+
+#####################################
+# Run reverse process
+#####################################
+forward_params = jnp.zeros_like(params_flattened_initial)
+forward_params = forward_params.at[0:N_osc].set(1.)
+params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1/sigma_forward**2 * forward_params
+# Setup SDE functions
+drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True)
+
+t0 = 0.0
+t1 = t_forward
+ts = jnp.linspace(t0, t1, 100)
+dt0 = 0.00000001
+
+# Generate multiple initial states
+n_trajectories = 10
+key, subkey = jr.split(key)
+initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
+
+# Generate a key for each initial condition
+key, subkey = jr.split(key)
+keys_brownian = jr.split(subkey, n_trajectories)
+
+rtol = 1e-4
+atol = 1e-7
+# Vectorize solve_SDE across both initial states and keys
+vectorized_solve_SDE = vmap(
+    lambda init_state, key_b: solve_SDE(
+        drift_fn, 
+        diffusion_fn, 
+        init_state,
+        key_b, 
+        t0, 
+        t1, 
+        ts.shape[0], 
+        dt0,
+        rtol=rtol,
+        atol=atol
+    ),
+    in_axes=(0, 0)
+)
+
+
+# Run SDE for all initial states at once
+solutions = vectorized_solve_SDE(initial_states, keys_brownian)
+all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
+reverse_trajectories_path = f"{output_dir}/reverse_trajectories_using_smoothed_params_{use_smoothed_params}_{rtol}_{atol}.npy"
+jnp.save(reverse_trajectories_path, all_trajectories)
+print(f"Reverse trajectories saved to {reverse_trajectories_path}")
+
+final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
+final_samples = final_samples_scaled/additional_rescaling
+images_generated_flat = final_samples  * std_MNIST + mean_MNIST
+images_generated = images_generated_flat.reshape(-1, 8, 8)
+
+
+#####################################
+# Plotting
+#####################################
+images_true = images_flat_true.reshape(-1, 8, 8)
+# Plot a few examples
+num_examples = n_trajectories  # number of examples to display
+fig, axes = plt.subplots(2, num_examples, figsize=(15, 4))  # Create a 2-row grid
+
+# Plot true images
+for i in range(num_examples):
+    img = images_true[i]
+    if img.shape[-1] == 1:
+        img = img.squeeze(-1)
+    im = axes[0, i].imshow(np.array(img), cmap='gray')
+    axes[0, i].axis('off')
+
+# Add color bar for true images
+# fig.colorbar(im, ax=axes[0, :], orientation='horizontal', fraction=0.02, pad=0.04)
+
+# Plot generated images
+for i in range(num_examples):
+    img_generated = images_generated[i]
+    if img_generated.shape[-1] == 1:
+        img_generated = img_generated.squeeze(-1)
+    im = axes[1, i].imshow(np.array(img_generated), cmap='gray')
+    axes[1, i].axis('off')
+
+# Add color bar for generated images
+# fig.colorbar(im, ax=axes[1, :], orientation='horizontal', fraction=0.02, pad=0.04)
+
+# Add titles
+axes[0, 0].set_title("True images", loc='left', fontsize=12)
+axes[1, 0].set_title("Generated images", loc='left', fontsize=12)
+
+plt.tight_layout()
+plt.savefig(f'{output_dir}/true_vs_generated_images_using_smoothed_params_{use_smoothed_params}_{rtol}_{atol}.png')
