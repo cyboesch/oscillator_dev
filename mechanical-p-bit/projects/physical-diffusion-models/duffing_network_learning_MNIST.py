@@ -15,18 +15,15 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-##################################### 
-# Set parameters
-##################################### 
-std_of_added_noise = 0.03
+std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 30
-t_forward = 1.0
-sigma_forward = .1
+t_forward = 3.0
+sigma_forward = 1.
 exponential_time_pts = True
 if exponential_time_pts:
-    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-5), jnp.log(t_forward), n_time_steps))
+    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-3), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
     forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
@@ -50,11 +47,10 @@ problem_type_folder = "MNIST"
 
 # prefix_data_folder = "only_0s_and_1s_resol_8x8"
 # load_data_folder = "MNIST_0_1_8x8pix/mnist_0_1_8x8pix.npy"
-problem_specific_folder = "only_1s_resol_8x8"
-MNIST_images_path = "MNIST_1s_8x8pix/mnist_1s_8x8pix.npy"
-
-
-
+# problem_specific_folder = "only_1s_resol_8x8"
+# MNIST_images_path = "MNIST_1s_8x8pix/mnist_1s_8x8pix.npy"
+problem_specific_folder = "only_0s_resol_8x8"
+MNIST_images_path = "MNIST_0s_8x8pix/mnist_0s_8x8pix.npy"
 
 # SDE parameters
 n_trajectories = 10
