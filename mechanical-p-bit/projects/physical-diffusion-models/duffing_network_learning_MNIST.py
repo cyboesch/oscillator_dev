@@ -15,10 +15,7 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-
-
-rescaling = False
-sigma_images = 0.05
+std_of_added_noise = 0.05
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 5
@@ -32,18 +29,17 @@ else:
     forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
 print('forward_time_pts', forward_time_pts)
 
-
-
 # Optimization parameters
 training_method = "SM"
 learning_rate = 0.1
-n_epochs = 100000//2//1000
+n_epochs = 100000//2//100
 batch_size = 128
 window_size=1000
 tolerance=1e-8
 patience=50
 
 key_seed = 0
+
 N_osc = 64
 connectivity = create_2d_square_grid_connectivity(grid_size=8)
 
@@ -51,18 +47,21 @@ problem_type_folder = "MNIST"
 prefix_data_folder = "only_0s_and_1s_resol_8x8"
 prefix_data = "normalized_data_"
 
-
+# SDE parameters
+n_trajectories = 10
+rtol = 1e-3
+atol = 1e-6
 use_smoothed_params = True
 
 #####################################
-## Optimization parameters and filenames
+## Filenames
+#####################################
 
-
-data_folder = f"added_noise_{sigma_images}_additional_rescaling_{additional_rescaling}"
+data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}"
 problem_folder = f"only_0s_and_1s_resol_8x8/{data_folder}"
 
-optimization_folder = (f"{training_method}_"
-           f"exponential_time_pts_{exponential_time_pts}_"
+optimization_folder = (
+           f"exp_time_pts_{exponential_time_pts}_"
            f"t_forward_{t_forward}_"
            f"n_timesteps_{n_time_steps}_"
            f"sigma_forward_{sigma_forward}_"
@@ -99,7 +98,7 @@ print("Data shape:", images_flat_raw.shape)
 # Add noise to the data for regularization
 key =  jr.PRNGKey(key_seed)  
 key, subkey =  jr.split(key)  # Seed for reproducibility
-gaussian_noise = jr.normal(subkey, images_flat_raw.shape) * sigma_images 
+gaussian_noise = jr.normal(subkey, images_flat_raw.shape) * std_of_added_noise 
 images_flat_true = images_flat_raw + gaussian_noise
 
 # Normalize the data
@@ -278,7 +277,6 @@ ts = jnp.linspace(t0, t1, 100)
 dt0 = 0.00000001
 
 # Generate multiple initial states
-n_trajectories = 10
 key, subkey = jr.split(key)
 initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
 
@@ -286,8 +284,7 @@ initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=s
 key, subkey = jr.split(key)
 keys_brownian = jr.split(subkey, n_trajectories)
 
-rtol = 1e-4
-atol = 1e-7
+
 # Vectorize solve_SDE across both initial states and keys
 vectorized_solve_SDE = vmap(
     lambda init_state, key_b: solve_SDE(
@@ -309,7 +306,7 @@ vectorized_solve_SDE = vmap(
 # Run SDE for all initial states at once
 solutions = vectorized_solve_SDE(initial_states, keys_brownian)
 all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
-reverse_trajectories_path = f"{output_dir}/reverse_trajectories_using_smoothed_params_{use_smoothed_params}_{rtol}_{atol}.npy"
+reverse_trajectories_path = f"{output_dir}/reverse_trajectories_using_smoothed_params_{use_smoothed_params}_rtol_{rtol}_atol_{atol}.npy"
 jnp.save(reverse_trajectories_path, all_trajectories)
 print(f"Reverse trajectories saved to {reverse_trajectories_path}")
 
@@ -325,7 +322,7 @@ images_generated = images_generated_flat.reshape(-1, 8, 8)
 images_true = images_flat_true.reshape(-1, 8, 8)
 # Plot a few examples
 num_examples = n_trajectories  # number of examples to display
-fig, axes = plt.subplots(2, num_examples, figsize=(15, 4))  # Create a 2-row grid
+fig, axes = plt.subplots(2, num_examples, figsize=(15, 10))  # Create a 2-row grid
 
 # Plot true images
 for i in range(num_examples):
@@ -349,9 +346,9 @@ for i in range(num_examples):
 # Add color bar for generated images
 # fig.colorbar(im, ax=axes[1, :], orientation='horizontal', fraction=0.02, pad=0.04)
 
-# Add titles
-axes[0, 0].set_title("True images", loc='left', fontsize=12)
-axes[1, 0].set_title("Generated images", loc='left', fontsize=12)
+# Add titles with increased font size
+axes[0, 0].set_title("True images", loc='left', fontsize=16)  # Increased font size
+axes[1, 0].set_title("Generated images", loc='left', fontsize=16)  # Increased font size
 
-plt.tight_layout()
-plt.savefig(f'{output_dir}/true_vs_generated_images_using_smoothed_params_{use_smoothed_params}_{rtol}_{atol}.png')
+plt.tight_layout(pad=1.0)  # Adjust padding to bring subfigures closer
+plt.savefig(f'{output_dir}/true_vs_generated_images_using_smoothed_params_{use_smoothed_params}_rtol_{rtol}_atol_{atol}.png')
