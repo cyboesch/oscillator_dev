@@ -15,12 +15,15 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.04
+##################################### 
+# Set parameters
+##################################### 
+std_of_added_noise = 0.03
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 50
-t_forward = 2.0
-sigma_forward = 1.
+n_time_steps = 30
+t_forward = 1.0
+sigma_forward = .1
 exponential_time_pts = True
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-5), jnp.log(t_forward), n_time_steps))
@@ -44,21 +47,25 @@ N_osc = 64
 connectivity = create_2d_square_grid_connectivity(grid_size=8)
 
 problem_type_folder = "MNIST"
-prefix_data_folder = "only_0s_and_1s_resol_8x8"
-prefix_data = "normalized_data_"
+
+# prefix_data_folder = "only_0s_and_1s_resol_8x8"
+# load_data_folder = "MNIST_0_1_8x8pix/mnist_0_1_8x8pix.npy"
+problem_specific_folder = "only_1s_resol_8x8"
+MNIST_images_path = "MNIST_1s_8x8pix/mnist_1s_8x8pix.npy"
+
+
+
 
 # SDE parameters
 n_trajectories = 10
 rtol = 1e-3
 atol = 1e-6
-use_smoothed_params = False
 
 #####################################
 ## Filenames
 #####################################
 
 data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}"
-problem_folder = f"only_0s_and_1s_resol_8x8/{data_folder}"
 
 optimization_folder = (
            f"exp_time_pts_{exponential_time_pts}_"
@@ -74,13 +81,14 @@ optimization_folder = (
 
 # Setup output directories
 base_dir = "out/problems"
- # Replace with your actual parameters
-
-output_dir = os.path.join(base_dir, problem_type_folder, problem_folder,optimization_folder)
+output_dir = os.path.join(base_dir, problem_type_folder, problem_specific_folder, data_folder, optimization_folder)
+plot_folder = os.path.join(output_dir, 'aaa_final_plots')
 
 # Create directories if they don't exist
 os.makedirs(output_dir, exist_ok=True)
+os.makedirs(plot_folder, exist_ok=True)
 print(f"Output directory: {output_dir}")
+print(f"Plot directory: {plot_folder}")
 
 
 ##################################### 
@@ -88,7 +96,7 @@ print(f"Output directory: {output_dir}")
 ##################################### 
 import numpy as np
 # Load the saved .npy file
-data_np = np.load("data/MNIST/MNIST_0_1_8x8pix/mnist_0_1_8x8pix.npy")
+data_np = np.load(f"data/MNIST/{MNIST_images_path}")
 
 # Optionally convert to a JAX array
 images_flat_raw = jnp.array(data_np)
@@ -245,76 +253,80 @@ else:
 # Interpolating parameters as function of time
 #####################################
 
-if use_smoothed_params:
-    # First smooth the parameters
-    smoothed_params = smooth_parameters(params_history_all_t, window_lengths = [10] * params_history_all_t.shape[1], poly_orders = [3] * params_history_all_t.shape[1])
-    # Get interpolator function
-    params_interpolator = interpolate_parameters(smoothed_params, forward_time_pts)
-else:
-    # Get interpolator function
-    params_interpolator = interpolate_parameters(params_history_all_t, forward_time_pts)
+# First smooth the parameters
+smoothed_params = smooth_parameters(params_history_all_t, window_lengths=[10] * params_history_all_t.shape[1], poly_orders=[3] * params_history_all_t.shape[1])
+
+# Get interpolator functions
+params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts)
+params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts)
 
 # Then interpolate the smoothed parameters
-time_eval = jnp.linspace(forward_time_pts[0],forward_time_pts[-1],200)
-# interpolated_params = interpolate_parameters(smoothed_params, forward_time_pts, time_dense)
-interpolated_params = params_interpolator(time_eval)
+time_eval = jnp.linspace(forward_time_pts[0], forward_time_pts[-1], 200)
+interpolated_params_smoothed = params_interpolator_smoothed(time_eval)
+interpolated_params_non_smoothed = params_interpolator_non_smoothed(time_eval)
 
-
-plot_parameter_as_fn_of_time(params_names, forward_time_pts,forward_time_pts, params_history_all_t, params_interpolator, unflatten, N_osc, save_fig=True, path=output_dir) 
+plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder)
 
 #####################################
 # Run reverse process
 #####################################
-forward_params = jnp.zeros_like(params_flattened_initial)
-forward_params = forward_params.at[0:N_osc].set(1.)
-params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1/sigma_forward**2 * forward_params
-# Setup SDE functions
-drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True)
 
-t0 = 0.0
-t1 = t_forward
-ts = jnp.linspace(t0, t1, 100)
-dt0 = 0.00000001
+def run_reverse_process(params_interpolator, suffix,key):
+    forward_params = jnp.zeros_like(params_flattened_initial)
+    forward_params = forward_params.at[0:N_osc].set(1.)
+    params_interpolator_reverse_plus_linear = lambda t: 2 * params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
-# Generate multiple initial states
+    # Setup SDE functions
+    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True)
+
+    t0 = 0.0
+    t1 = t_forward
+    ts = jnp.linspace(t0, t1, 100)
+    dt0 = 0.00000001
+
+    # Generate multiple initial states
+    key, subkey = jr.split(key)
+    initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
+
+    # Generate a key for each initial condition
+    key, subkey = jr.split(key)
+    keys_brownian = jr.split(subkey, n_trajectories)
+
+    # Vectorize solve_SDE across both initial states and keys
+    vectorized_solve_SDE = vmap(
+        lambda init_state, key_b: solve_SDE(
+            drift_fn,
+            diffusion_fn,
+            init_state,
+            key_b,
+            t0,
+            t1,
+            ts.shape[0],
+            dt0,
+            rtol=rtol,
+            atol=atol
+        ),
+        in_axes=(0, 0)
+    )
+
+    # Run SDE for all initial states at once
+    solutions = vectorized_solve_SDE(initial_states, keys_brownian)
+    all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
+    reverse_trajectories_path = f"{output_dir}/reverse_trajectories_{suffix}.npy"
+    jnp.save(reverse_trajectories_path, all_trajectories)
+    print(f"Reverse trajectories saved to {reverse_trajectories_path}")
+
+    final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
+    final_samples = final_samples_scaled / additional_rescaling
+    images_generated_flat = final_samples * std_MNIST + mean_MNIST
+    return images_generated_flat.reshape(-1, 8, 8)
+
+# Run reverse process for both smoothed and non-smoothed parameters
 key, subkey = jr.split(key)
-initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
+images_generated_non_smoothed = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed",subkey)
+images_generated_smoothed = run_reverse_process(params_interpolator_smoothed, "smoothed",subkey)
 
-# Generate a key for each initial condition
-key, subkey = jr.split(key)
-keys_brownian = jr.split(subkey, n_trajectories)
-
-
-# Vectorize solve_SDE across both initial states and keys
-vectorized_solve_SDE = vmap(
-    lambda init_state, key_b: solve_SDE(
-        drift_fn, 
-        diffusion_fn, 
-        init_state,
-        key_b, 
-        t0, 
-        t1, 
-        ts.shape[0], 
-        dt0,
-        rtol=rtol,
-        atol=atol
-    ),
-    in_axes=(0, 0)
-)
-
-
-# Run SDE for all initial states at once
-solutions = vectorized_solve_SDE(initial_states, keys_brownian)
-all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
-reverse_trajectories_path = f"{output_dir}/reverse_trajectories_using_smoothed_params_{use_smoothed_params}_rtol_{rtol}_atol_{atol}.npy"
-jnp.save(reverse_trajectories_path, all_trajectories)
-print(f"Reverse trajectories saved to {reverse_trajectories_path}")
-
-final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
-final_samples = final_samples_scaled/additional_rescaling
-images_generated_flat = final_samples  * std_MNIST + mean_MNIST
-images_generated = images_generated_flat.reshape(-1, 8, 8)
-
+# ... existing code ...
 
 #####################################
 # Plotting
@@ -322,7 +334,7 @@ images_generated = images_generated_flat.reshape(-1, 8, 8)
 images_true = images_flat_true.reshape(-1, 8, 8)
 # Plot a few examples
 num_examples = n_trajectories  # number of examples to display
-fig, axes = plt.subplots(2, num_examples, figsize=(15, 10))  # Create a 2-row grid
+fig, axes = plt.subplots(3, num_examples, figsize=(15, 6))  # Increase the height to make images larger
 
 # Plot true images
 for i in range(num_examples):
@@ -332,23 +344,31 @@ for i in range(num_examples):
     im = axes[0, i].imshow(np.array(img), cmap='gray')
     axes[0, i].axis('off')
 
-# Add color bar for true images
-# fig.colorbar(im, ax=axes[0, :], orientation='horizontal', fraction=0.02, pad=0.04)
-
-# Plot generated images
+# Plot generated images without smoothed params
 for i in range(num_examples):
-    img_generated = images_generated[i]
+    img_generated = images_generated_non_smoothed[i]
     if img_generated.shape[-1] == 1:
         img_generated = img_generated.squeeze(-1)
     im = axes[1, i].imshow(np.array(img_generated), cmap='gray')
     axes[1, i].axis('off')
 
-# Add color bar for generated images
-# fig.colorbar(im, ax=axes[1, :], orientation='horizontal', fraction=0.02, pad=0.04)
+# Plot generated images with smoothed params
+for i in range(num_examples):
+    img_generated_smoothed = images_generated_smoothed[i]
+    if img_generated_smoothed.shape[-1] == 1:
+        img_generated_smoothed = img_generated_smoothed.squeeze(-1)
+    im = axes[2, i].imshow(np.array(img_generated_smoothed), cmap='gray')
+    axes[2, i].axis('off')
 
 # Add titles with increased font size
-axes[0, 0].set_title("True images", loc='left', fontsize=16)  # Increased font size
-axes[1, 0].set_title("Generated images", loc='left', fontsize=16)  # Increased font size
+axes[0, 0].set_title("True images", loc='left', fontsize=16)
+axes[1, 0].set_title("Generated images", loc='left', fontsize=16)
+axes[2, 0].set_title("Generated images (smoothed parameters)", loc='left', fontsize=16)
 
-plt.tight_layout(pad=1.0)  # Adjust padding to bring subfigures closer
-plt.savefig(f'{output_dir}/true_vs_generated_images_using_smoothed_params_{use_smoothed_params}_rtol_{rtol}_atol_{atol}.png')
+# Adjust the vertical and horizontal spacing
+# plt.subplots_adjust(hspace=0.3, wspace=0.1)  # Adjust these values to reduce spacing
+# plt.tight_layout(pad=0.5)
+plt.subplots_adjust(wspace=0.1, hspace=0)
+plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison.png')
+
+
