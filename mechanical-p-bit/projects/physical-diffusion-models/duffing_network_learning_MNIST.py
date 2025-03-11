@@ -15,15 +15,15 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.05
+std_of_added_noise = 0.04
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 5
-t_forward = 1.0
+n_time_steps = 50
+t_forward = 2.0
 sigma_forward = 1.
 exponential_time_pts = True
 if exponential_time_pts:
-    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-9), jnp.log(t_forward), n_time_steps))
+    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-5), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
     forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
@@ -32,7 +32,7 @@ print('forward_time_pts', forward_time_pts)
 # Optimization parameters
 training_method = "SM"
 learning_rate = 0.1
-n_epochs = 100000//2//100
+n_epochs = 10000
 batch_size = 128
 window_size=1000
 tolerance=1e-8
@@ -51,7 +51,7 @@ prefix_data = "normalized_data_"
 n_trajectories = 10
 rtol = 1e-3
 atol = 1e-6
-use_smoothed_params = True
+use_smoothed_params = False
 
 #####################################
 ## Filenames
@@ -281,7 +281,9 @@ key, subkey = jr.split(key)
 initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
 
 # Generate a key for each initial condition
-keys_brownian = jr.split(key, n_trajectories)
+key, subkey = jr.split(key)
+keys_brownian = jr.split(subkey, n_trajectories)
+
 
 # Vectorize solve_SDE across both initial states and keys
 vectorized_solve_SDE = vmap(
