@@ -281,9 +281,7 @@ key, subkey = jr.split(key)
 initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
 
 # Generate a key for each initial condition
-key, subkey = jr.split(key)
-keys_brownian = jr.split(subkey, n_trajectories)
-
+keys_brownian = jr.split(key, n_trajectories)
 
 # Vectorize solve_SDE across both initial states and keys
 vectorized_solve_SDE = vmap(
