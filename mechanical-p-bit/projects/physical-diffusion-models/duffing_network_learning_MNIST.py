@@ -15,11 +15,11 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 30
-t_forward = 3.0
+t_forward = 2.5
 sigma_forward = 1.
 exponential_time_pts = True
 if exponential_time_pts:
@@ -40,17 +40,15 @@ patience=50
 
 key_seed = 0
 
-N_osc = 64
-connectivity = create_2d_square_grid_connectivity(grid_size=8)
+labels = [0]
+resolution = (16, 16)
+
+N_osc = resolution[0]**2
+connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
 
 problem_type_folder = "MNIST"
 
-# prefix_data_folder = "only_0s_and_1s_resol_8x8"
-# load_data_folder = "MNIST_0_1_8x8pix/mnist_0_1_8x8pix.npy"
-# problem_specific_folder = "only_1s_resol_8x8"
-# MNIST_images_path = "MNIST_1s_8x8pix/mnist_1s_8x8pix.npy"
-problem_specific_folder = "only_0s_resol_8x8"
-MNIST_images_path = "MNIST_0s_8x8pix/mnist_0s_8x8pix.npy"
+
 
 # SDE parameters
 n_trajectories = 10
@@ -77,7 +75,7 @@ optimization_folder = (
 
 # Setup output directories
 base_dir = "out/problems"
-output_dir = os.path.join(base_dir, problem_type_folder, problem_specific_folder, data_folder, optimization_folder)
+output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
 
 # Create directories if they don't exist
@@ -92,7 +90,7 @@ print(f"Plot directory: {plot_folder}")
 ##################################### 
 import numpy as np
 # Load the saved .npy file
-data_np = np.load(f"data/MNIST/{MNIST_images_path}")
+data_np = np.load(f"data/MNIST/mnist_labels_{labels}_resolution_{resolution}.npy")
 
 # Optionally convert to a JAX array
 images_flat_raw = jnp.array(data_np)
@@ -315,19 +313,17 @@ def run_reverse_process(params_interpolator, suffix,key):
     final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
     final_samples = final_samples_scaled / additional_rescaling
     images_generated_flat = final_samples * std_MNIST + mean_MNIST
-    return images_generated_flat.reshape(-1, 8, 8)
+    return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
 # Run reverse process for both smoothed and non-smoothed parameters
 key, subkey = jr.split(key)
 images_generated_non_smoothed = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed",subkey)
 images_generated_smoothed = run_reverse_process(params_interpolator_smoothed, "smoothed",subkey)
 
-# ... existing code ...
-
 #####################################
 # Plotting
 #####################################
-images_true = images_flat_true.reshape(-1, 8, 8)
+images_true = images_flat_true.reshape(-1, resolution[0], resolution[1])
 # Plot a few examples
 num_examples = n_trajectories  # number of examples to display
 fig, axes = plt.subplots(3, num_examples, figsize=(15, 6))  # Increase the height to make images larger
