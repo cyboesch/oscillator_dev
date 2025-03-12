@@ -43,7 +43,7 @@ key_seed = 0
 labels = [1,7]
 resolution = (8,8)
 
-with_diagonals = True
+with_diagonal_connections = True
 
 problem_type_folder = "MNIST"
 
@@ -112,7 +112,7 @@ samples_target = samples_target_unscaled*additional_rescaling
 #####################################
 # Network size and topology
 N_osc = resolution[0]**2
-if with_diagonals:
+if with_diagonal_connections:
     connectivity = create_2d_square_grid_connectivity_with_diagonals(grid_size=resolution[0])
 else:
     connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
