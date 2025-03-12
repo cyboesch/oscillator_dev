@@ -15,7 +15,7 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 30
@@ -40,8 +40,8 @@ patience=50
 
 key_seed = 0
 
-labels = [1,7]
-resolution = (8, 8)
+labels = [0]
+resolution = (16, 16)
 
 N_osc = resolution[0]**2
 connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
@@ -154,9 +154,6 @@ else:
     raise ValueError(f"Unknown training method: {training_method}. Choose from 'SM', 'CD1', or 'MLE'.")
 
 
-
-
-
 #####################################
 # Optimization
 #####################################
@@ -181,12 +178,20 @@ else:
 
 
     # Initialize storage for parameters at each time step
-    params_history_all_t = []
-    current_params = params_flattened_initial
+    if os.path.exists(f"{output_dir}/params_history_all_up_to_t.npy"):
+        tuple_current_params_and_tidx_to_load = jnp.load(f"{output_dir}/params_history_all_up_to_t.npy")
+        current_params = tuple_current_params_and_tidx_to_load[0][-1]
+        t_idx_loaded = tuple_current_params_and_tidx_to_load[1]
+        print(f"Loading parameters from t_idx {t_idx_loaded}")
+        forward_time_pts_loaded = forward_time_pts[t_idx_loaded:]
+    else:
+        print(f"No parameters found, starting from t_idx 0")
+        params_history_all_t = []
+        current_params = params_flattened_initial
+        forward_time_pts_loaded = forward_time_pts
 
     # Loop over time points
-    for t_idx, t_curr in enumerate(forward_time_pts):
-        print(f"Optimization for time {t_curr}")
+    for t_idx, t_curr in enumerate(forward_time_pts_loaded):
         
         # Generate samples at current time
         key, subkey = jr.split(key)
@@ -217,6 +222,10 @@ else:
         _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
         
         params_history_all_t.append(current_params)
+        
+        params_history_all_up_to_t = params_history_all_t
+        tuple_current_params_and_tidx_to_save = (params_history_all_up_to_t, t_idx)
+        jnp.save(f"{output_dir}/params_history_all_up_to_t.npy", tuple_current_params_and_tidx_to_save)
         
         if plot_steps:
             if t_idx % plot_slice == 0:
