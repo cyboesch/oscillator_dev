@@ -34,14 +34,14 @@ training_method = "SM"
 learning_rate = 0.1
 n_epochs = 10000
 batch_size = 128
-window_size=1000
-tolerance=1e-8
+window_size=100
+tolerance=1e-6
 patience=50
 
 key_seed = 0
 
-labels = [0]
-resolution = (16, 16)
+labels = [1,7]
+resolution = (16,16)
 
 N_osc = resolution[0]**2
 connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
