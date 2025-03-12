@@ -26,6 +26,31 @@ def create_2d_square_grid_connectivity(grid_size):
                 connections.append([current, current + grid_size])
     
     return jnp.array(connections)
+
+def create_2d_square_grid_connectivity_with_diagonals(grid_size):
+    connections = []
+    
+    for i in range(grid_size):
+        for j in range(grid_size):
+            current = i * grid_size + j
+            
+            # Connect to right neighbor
+            if j < grid_size - 1:
+                connections.append([current, current + 1])
+            
+            # Connect to bottom neighbor
+            if i < grid_size - 1:
+                connections.append([current, current + grid_size])
+            
+            # Connect to right-bottom diagonal neighbor
+            if i < grid_size - 1 and j < grid_size - 1:
+                connections.append([current, current + grid_size + 1])
+            
+            # Connect to left-bottom diagonal neighbor
+            if i < grid_size - 1 and j > 0:
+                connections.append([current, current + grid_size - 1])
+    return jnp.array(connections)
+
 ########################################################################################
 # Energy functions
 ########################################################################################
