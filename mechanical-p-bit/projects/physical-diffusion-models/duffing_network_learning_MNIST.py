@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
 from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time
-from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_grid_connectivity
+from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_grid_connectivity, create_2d_square_grid_connectivity_with_diagonals
 
 jax.config.update("jax_enable_x64", True)
 
@@ -15,15 +15,15 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.02
+std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 30
+n_time_steps = 20
 t_forward = 2.5
 sigma_forward = 1.
 exponential_time_pts = True
 if exponential_time_pts:
-    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-3), jnp.log(t_forward), n_time_steps))
+    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-4), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
     forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
@@ -41,25 +41,22 @@ patience=50
 key_seed = 0
 
 labels = [1,7]
-resolution = (10,10)
+resolution = (8,8)
 
-N_osc = resolution[0]**2
-connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
+with_diagonals = True
 
 problem_type_folder = "MNIST"
 
-
-
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-3
-atol = 1e-6
+rtol = 1e-4
+atol = 1e-7
 
 #####################################
 ## Filenames
 #####################################
 
-data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}"
+data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}_network_with_diagonals_{with_diagonals}"
 
 optimization_folder = (
            f"exp_time_pts_{exponential_time_pts}_"
@@ -114,6 +111,11 @@ samples_target = samples_target_unscaled*additional_rescaling
 
 #####################################
 # Network size and topology
+N_osc = resolution[0]**2
+if with_diagonals:
+    connectivity = create_2d_square_grid_connectivity_with_diagonals(grid_size=resolution[0])
+else:
+    connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
 num_connections = connectivity.shape[0]
 
 #####################################
