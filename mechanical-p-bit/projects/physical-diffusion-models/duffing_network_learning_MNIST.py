@@ -41,7 +41,7 @@ patience=50
 key_seed = 0
 
 labels = [1,7]
-resolution = (16,16)
+resolution = (10,10)
 
 N_osc = resolution[0]**2
 connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
@@ -176,22 +176,11 @@ else:
     plot_steps = True  # Flag to control whether to plot during optimization
     plot_slice = 1     # Plot every nth step
 
-
-    # Initialize storage for parameters at each time step
-    if os.path.exists(f"{output_dir}/params_history_all_up_to_t.npy"):
-        tuple_current_params_and_tidx_to_load = jnp.load(f"{output_dir}/params_history_all_up_to_t.npy")
-        current_params = tuple_current_params_and_tidx_to_load[0][-1]
-        t_idx_loaded = tuple_current_params_and_tidx_to_load[1]
-        print(f"Loading parameters from t_idx {t_idx_loaded}")
-        forward_time_pts_loaded = forward_time_pts[t_idx_loaded:]
-    else:
-        print(f"No parameters found, starting from t_idx 0")
-        params_history_all_t = []
-        current_params = params_flattened_initial
-        forward_time_pts_loaded = forward_time_pts
+    params_history_all_t = []
+    current_params = params_flattened_initial
 
     # Loop over time points
-    for t_idx, t_curr in enumerate(forward_time_pts_loaded):
+    for t_idx, t_curr in enumerate(forward_time_pts):
         
         # Generate samples at current time
         key, subkey = jr.split(key)
@@ -220,12 +209,7 @@ else:
         )
         
         _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
-        
         params_history_all_t.append(current_params)
-        
-        params_history_all_up_to_t = params_history_all_t
-        tuple_current_params_and_tidx_to_save = (params_history_all_up_to_t, t_idx)
-        jnp.save(f"{output_dir}/params_history_all_up_to_t.npy", tuple_current_params_and_tidx_to_save)
         
         if plot_steps:
             if t_idx % plot_slice == 0:
