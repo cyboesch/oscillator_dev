@@ -40,8 +40,8 @@ patience=50
 
 key_seed = 0
 
-labels = [1,7]
-resolution = (8,8)
+labels = [0]
+resolution = (10,10)
 
 with_diagonal_connections = True
 
@@ -56,7 +56,7 @@ atol = 1e-7
 ## Filenames
 #####################################
 
-data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}_network_with_diagonals_{with_diagonals}"
+data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}_network_with_diagonals_{with_diagonal_connections}"
 
 optimization_folder = (
            f"exp_time_pts_{exponential_time_pts}_"
