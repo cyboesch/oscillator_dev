@@ -15,7 +15,7 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.02
+std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 30
@@ -40,8 +40,8 @@ patience=50
 
 key_seed = 0
 
-labels = [0]
-resolution = (16, 16)
+labels = [1,7]
+resolution = (8, 8)
 
 N_osc = resolution[0]**2
 connectivity = create_2d_square_grid_connectivity(grid_size=resolution[0])
