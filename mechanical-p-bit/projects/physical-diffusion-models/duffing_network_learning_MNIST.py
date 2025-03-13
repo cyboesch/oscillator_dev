@@ -15,7 +15,7 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 20
@@ -40,7 +40,7 @@ patience=50
 
 key_seed = 0
 
-labels = [0]
+labels = [7]
 resolution = (10,10)
 
 with_diagonal_connections = True
@@ -49,8 +49,8 @@ problem_type_folder = "MNIST"
 
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-4
-atol = 1e-7
+rtol = 1e-3
+atol = 1e-6
 
 #####################################
 ## Filenames
@@ -313,15 +313,13 @@ def run_reverse_process(params_interpolator, suffix,key):
 # Run reverse process for both smoothed and non-smoothed parameters
 key, subkey = jr.split(key)
 images_generated_non_smoothed = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed",subkey)
-images_generated_smoothed = run_reverse_process(params_interpolator_smoothed, "smoothed",subkey)
-
 #####################################
 # Plotting
 #####################################
 images_true = images_flat_true.reshape(-1, resolution[0], resolution[1])
 # Plot a few examples
 num_examples = n_trajectories  # number of examples to display
-fig, axes = plt.subplots(3, num_examples, figsize=(15, 6))  # Increase the height to make images larger
+fig, axes = plt.subplots(2, num_examples, figsize=(15, 4))  # Increase the height to make images larger
 
 # Plot true images
 for i in range(num_examples):
@@ -339,18 +337,10 @@ for i in range(num_examples):
     im = axes[1, i].imshow(np.array(img_generated), cmap='gray')
     axes[1, i].axis('off')
 
-# Plot generated images with smoothed params
-for i in range(num_examples):
-    img_generated_smoothed = images_generated_smoothed[i]
-    if img_generated_smoothed.shape[-1] == 1:
-        img_generated_smoothed = img_generated_smoothed.squeeze(-1)
-    im = axes[2, i].imshow(np.array(img_generated_smoothed), cmap='gray')
-    axes[2, i].axis('off')
 
 # Add titles with increased font size
 axes[0, 0].set_title("True images", loc='left', fontsize=16)
 axes[1, 0].set_title("Generated images", loc='left', fontsize=16)
-axes[2, 0].set_title("Generated images (smoothed parameters)", loc='left', fontsize=16)
 
 # Adjust the vertical and horizontal spacing
 # plt.subplots_adjust(hspace=0.3, wspace=0.1)  # Adjust these values to reduce spacing
