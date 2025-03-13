@@ -127,7 +127,7 @@ c_optomech_0 = jnp.zeros(num_connections)
 c_duff_0 = jnp.zeros(num_connections)
 biases_0 = jnp.zeros(N_osc)
 params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, c_duff_0, biases_0)
-params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'biases']
+params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'c_duff', 'biases']
 params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
 constraint_indices = jnp.arange(N_osc,2*N_osc)
 
