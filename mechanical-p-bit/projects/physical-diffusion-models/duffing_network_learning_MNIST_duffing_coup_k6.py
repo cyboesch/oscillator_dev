@@ -40,7 +40,7 @@ patience=50
 
 key_seed = 0
 
-labels = [1,7]
+labels = [0,8]
 resolution = (12,12)
 
 with_diagonal_connections = True
