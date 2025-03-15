@@ -158,7 +158,7 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
     if save_fig and path is not None:
         print(f"Saving figure to {path}")
         plt.savefig(path + f"/parameter_opt_evolution_at_timeidx_{time_index}_time_{time:.5f}.png", dpi=300, bbox_inches='tight')
-    plt.show()
+    # plt.show()
 
     return best_loss, best_params, best_idx
 
@@ -211,7 +211,7 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
         print(f"Saving figure to {path}")
         plt.savefig(path + f"/final_forward_distribution_sigma_{sigma_final:.2f}_beta_{beta:.2f}.png", dpi=300, bbox_inches='tight')
     
-    plt.show()
+    # plt.show()
     
 ########################################################################################
 # Plotting parameter as function of time
@@ -283,7 +283,7 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
     if save_fig and path is not None:
         plt.savefig(f"{path}/parameter_evolution_over_time.png", dpi=300, bbox_inches='tight')
     
-    plt.show()
+    # plt.show()
 
 ########################################################################################
 # Plotting connectivity
