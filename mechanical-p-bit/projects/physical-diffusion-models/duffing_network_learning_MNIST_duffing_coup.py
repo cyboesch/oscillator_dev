@@ -41,14 +41,14 @@ patience=50
 key_seed = 0
 
 labels = [1,7]
-resolution = (8,8)
+resolution = (10,10)
 
 with_diagonal_connections = True
 
 problem_type_folder = "MNIST_with_duffing_coupling"
 
 # SDE parameters
-n_trajectories = 10
+n_trajectories = 20
 rtol = 1e-3
 atol = 1e-6
 
@@ -129,7 +129,10 @@ biases_0 = jnp.zeros(N_osc)
 params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, c_duff_0, biases_0)
 params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'c_duff', 'biases']
 params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
-constraint_indices = jnp.arange(N_osc,2*N_osc)
+constraint_indices_duff_self = jnp.arange(N_osc,2*N_osc)
+constraint_indices_duff_coupling = jnp.arange(2*N_osc+2*num_connections,2*N_osc+3*num_connections)
+
+constraint_indices = jnp.concatenate([constraint_indices_duff_self, constraint_indices_duff_coupling])
 
 #####################################
 # Bringe energy into correct form
@@ -320,7 +323,7 @@ images_generated_non_smoothed = run_reverse_process(params_interpolator_non_smoo
 images_true = images_flat_true.reshape(-1, resolution[0], resolution[1])
 # Plot a few examples
 num_examples = n_trajectories  # number of examples to display
-fig, axes = plt.subplots(2, num_examples, figsize=(15, 4))  # Increase the height to make images larger
+fig, axes = plt.subplots(2, num_examples, figsize=(30, 4))  # Increase the height to make images larger
 
 # Plot true images
 for i in range(num_examples):
