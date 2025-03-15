@@ -180,6 +180,48 @@ def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_ene
     energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
     return energy_fn
 
+
+# with external force and duffing nonlinear coupling
+def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn(connectivity, unflatten):
+    def energy_self_oscillator(x, k_lin, k_duff, k_6, bias):
+        return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4 + 1 / 6 * k_6 * x**6 + bias * x
+
+    def energy_self_network(x, k_lin, k_duff, k_6, bias):
+        return jnp.sum(vmap(energy_self_oscillator)(x, k_lin, k_duff, k_6, bias))
+
+
+    def energy_coupling_pair(x, y, c_lin, c_optomech, c_duff):
+        return c_lin * x * (x - y) + c_lin * y * (y - x) + c_optomech * (x**2) * y + c_duff/4 * (x-y)**4
+
+    def energy_coupling_network(x, c_lin, c_optomech, c_duff, connectivity):
+        # get contribution to total energy from each pair of oscillators
+        
+        def _coupling_energy_pair(x, c_lin, c_optomech, c_duff, pair):
+            # get energy of one pair of oscillators
+            i, j = pair
+            return energy_coupling_pair(x[i], x[j], c_lin, c_optomech, c_duff)
+
+        # get energy of all pairs of oscillators
+        return jnp.sum(
+            vmap(_coupling_energy_pair, in_axes=(None, 0, 0, 0, 0))(
+                x, c_lin, c_optomech, c_duff, connectivity
+            )
+        )
+
+    def _energy_duffing_network(x, k_lin, k_duff, k_6, c_lin, c_optomech, c_duff, bias, connectivity):
+        # returns energy of network of oscillators given input parameters
+        return (
+            energy_self_network(x, k_lin, k_duff, k_6, bias) +
+            energy_coupling_network(x, c_lin, c_optomech,c_duff, connectivity)
+        ) 
+
+    def energy_duffing_network(x, flattened_args, connectivity):
+        k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
+        return _energy_duffing_network(x, k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias, connectivity)
+
+    energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
+    return energy_fn
+
 # general polynomial network
 def setup_general_polynomial_network_with_external_force_energy_fn(connectivity, unflatten):
 
