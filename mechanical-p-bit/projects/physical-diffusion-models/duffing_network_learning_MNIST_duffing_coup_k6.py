@@ -31,8 +31,8 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "SM"
-learning_rate = 0.1
-n_epochs = 10000
+learning_rate = 0.01
+n_epochs = 1000000
 batch_size = 128
 window_size=100
 tolerance=1e-6
@@ -40,8 +40,8 @@ patience=50
 
 key_seed = 0
 
-labels = [0,8]
-resolution = (12,12)
+labels = [1,7]
+resolution = (8,8)
 
 with_diagonal_connections = True
 
@@ -49,8 +49,8 @@ problem_type_folder = "MNIST_with_duffing_coupling_and_6th_order_self_coupling"
 
 # SDE parameters
 n_trajectories = 20
-rtol = 1e-3
-atol = 1e-6
+rtol = 1e-7
+atol = 1e-10
 
 #####################################
 ## Filenames
