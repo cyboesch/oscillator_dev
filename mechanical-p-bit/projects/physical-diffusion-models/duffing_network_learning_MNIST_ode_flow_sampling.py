@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
 from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time
-from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_grid_connectivity, create_2d_square_grid_connectivity_with_diagonals, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn, setup_overdamped_ODE, solve_ODE
+from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_grid_connectivity, create_2d_square_grid_connectivity_with_diagonals, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
 jax.config.update("jax_enable_x64", True)
 
@@ -15,10 +15,10 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 20 
+n_time_steps = 20
 t_forward = 2.5
 sigma_forward = 1.
 exponential_time_pts = True
@@ -47,13 +47,12 @@ with_diagonal_connections = True
 
 energy_fn_type = "6th_order_duffing_coupling"
 
-# problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}"
-problem_type_folder = f"MNIST_with_duffing_coupling_and_6th_order_self_coupling"
+problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}"
 
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-5
-atol = 1e-8
+rtol = 1e-6
+atol = 1e-9
 
 #####################################
 ## Filenames
@@ -298,10 +297,10 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, p
 def run_reverse_process(params_interpolator, suffix,key):
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
-    params_interpolator_reverse_plus_linear = lambda t:  params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    params_interpolator_reverse_plus_linear = lambda t: 2 * params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
-    drift_fn, diffusion_fn = setup_overdamped_ODE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, T=0.0)
+    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True)
 
     t0 = 0.0
     t1 = t_forward
@@ -316,11 +315,13 @@ def run_reverse_process(params_interpolator, suffix,key):
     key, subkey = jr.split(key)
     keys_brownian = jr.split(subkey, n_trajectories)
 
-    # Vectorize solve_ODE across both initial states and keys
-    vectorized_solve_ODE = vmap(
-        lambda init_state: solve_ODE(
+    # Vectorize solve_SDE across both initial states and keys
+    vectorized_solve_SDE = vmap(
+        lambda init_state, key_b: solve_SDE(
             drift_fn,
+            diffusion_fn,
             init_state,
+            key_b,
             t0,
             t1,
             ts.shape[0],
@@ -332,7 +333,7 @@ def run_reverse_process(params_interpolator, suffix,key):
     )
 
     # Run SDE for all initial states at once
-    solutions = vectorized_solve_ODE(initial_states)
+    solutions = vectorized_solve_SDE(initial_states, keys_brownian)
     all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
     reverse_trajectories_path = f"{output_dir}/reverse_trajectories_{suffix}.npy"
     jnp.save(reverse_trajectories_path, all_trajectories)
@@ -379,6 +380,6 @@ axes[1, 0].set_title("Generated images", loc='left', fontsize=16)
 # plt.subplots_adjust(hspace=0.3, wspace=0.1)  # Adjust these values to reduce spacing
 # plt.tight_layout(pad=0.5)
 plt.subplots_adjust(wspace=0.1, hspace=0)
-plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_{rtol}_atol_{atol}_ODE_flow_sampling.png')
+plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_{rtol}_atol_{atol}.png')
 
 
