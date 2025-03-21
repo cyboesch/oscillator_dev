@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
 from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time
-from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_grid_connectivity, create_2d_square_grid_connectivity_with_diagonals
+from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_grid_connectivity, create_2d_square_grid_connectivity_with_diagonals, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
 jax.config.update("jax_enable_x64", True)
 
@@ -31,8 +31,8 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "SM"
-learning_rate = 0.1
-n_epochs = 10000
+learning_rate = 0.01
+n_epochs = 1000000
 batch_size = 128
 window_size=100
 tolerance=1e-6
@@ -40,17 +40,19 @@ patience=50
 
 key_seed = 0
 
-labels = [7]
-resolution = (10,10)
+labels = [1,7]
+resolution = (8,8)
 
 with_diagonal_connections = True
 
-problem_type_folder = "MNIST"
+energy_fn_type = "6th_order_duffing_coupling"
+
+problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}"
 
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-3
-atol = 1e-6
+rtol = 1e-6
+atol = 1e-9
 
 #####################################
 ## Filenames
@@ -119,20 +121,52 @@ else:
 num_connections = connectivity.shape[0]
 
 #####################################
-# Define initial parameters
-k_lin_0 = -1.*jnp.ones(N_osc)
-k_duff_0 = jnp.ones(N_osc)
-c_lin_0 = jnp.zeros(num_connections)
-c_optomech_0 = jnp.zeros(num_connections)
-biases_0 = jnp.zeros(N_osc)
-params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, biases_0)
-params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'biases']
-params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
-constraint_indices = jnp.arange(N_osc,2*N_osc)
+# Define initial parameters and energy fn
+if energy_fn_type == "6th_order_duffing_coupling":
+    k_lin_0 = -1.*jnp.ones(N_osc)
+    k_duff_0 = jnp.ones(N_osc)
+    k_6_0 = jnp.ones(N_osc)
+    c_lin_0 = jnp.zeros(num_connections)
+    c_optomech_0 = jnp.zeros(num_connections)
+    c_duff_0 = jnp.zeros(num_connections)
+    biases_0 = jnp.zeros(N_osc)
+    params_initial = (k_lin_0, k_duff_0, k_6_0, c_lin_0, c_optomech_0, c_duff_0, biases_0)
+    params_names = ['k_lin', 'k_duff', 'k_6', 'c_lin', 'c_optomech', 'c_duff', 'biases']
+    params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
+    constraint_indices_k6_self = jnp.arange(2*N_osc,3*N_osc)
+    constraint_indices = constraint_indices_k6_self
 
-#####################################
-# Bringe energy into correct form
-energy_fn = setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten)
+    # Set up energy fn
+    energy_fn = setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn(connectivity, unflatten)
+elif energy_fn_type == "duffing_coupling":
+    k_lin_0 = -1.*jnp.ones(N_osc)
+    k_duff_0 = jnp.ones(N_osc)
+    c_lin_0 = jnp.zeros(num_connections)
+    c_optomech_0 = jnp.zeros(num_connections)
+    c_duff_0 = jnp.zeros(num_connections)
+    biases_0 = jnp.zeros(N_osc)
+    params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, c_duff_0, biases_0)
+    params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'c_duff', 'biases']
+    params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
+    constraint_indices_duff_self = jnp.arange(N_osc,2*N_osc)
+    constraint_indices_duff_coupling = jnp.arange(2*N_osc+2*num_connections,2*N_osc+3*num_connections)
+    constraint_indices = jnp.concatenate([constraint_indices_duff_self, constraint_indices_duff_coupling])
+    # Set up energy fn
+    energy_fn = setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn(connectivity, unflatten)
+elif energy_fn_type == "duffing_optomech_coupling":
+    k_lin_0 = -1.*jnp.ones(N_osc)
+    k_duff_0 = jnp.ones(N_osc)
+    c_lin_0 = jnp.zeros(num_connections)
+    c_optomech_0 = jnp.zeros(num_connections)
+    biases_0 = jnp.zeros(N_osc)
+    params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, biases_0)
+    params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'biases']
+    params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
+    constraint_indices = jnp.arange(N_osc,2*N_osc)
+    # Set up energy fn
+    energy_fn = setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten)
+else:
+    raise ValueError(f"Unknown energy function type: {energy_fn_type}. Choose from '6th_order_duffing_coupling' or 'duffing_coupling'.")
 
 ##################################### 
 # Learning
@@ -319,7 +353,7 @@ images_generated_non_smoothed = run_reverse_process(params_interpolator_non_smoo
 images_true = images_flat_true.reshape(-1, resolution[0], resolution[1])
 # Plot a few examples
 num_examples = n_trajectories  # number of examples to display
-fig, axes = plt.subplots(2, num_examples, figsize=(15, 4))  # Increase the height to make images larger
+fig, axes = plt.subplots(2, num_examples, figsize=(30, 4))  # Increase the height to make images larger
 
 # Plot true images
 for i in range(num_examples):
@@ -346,6 +380,6 @@ axes[1, 0].set_title("Generated images", loc='left', fontsize=16)
 # plt.subplots_adjust(hspace=0.3, wspace=0.1)  # Adjust these values to reduce spacing
 # plt.tight_layout(pad=0.5)
 plt.subplots_adjust(wspace=0.1, hspace=0)
-plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison.png')
+plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_{rtol}_atol_{atol}.png')
 
 
