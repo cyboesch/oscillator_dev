@@ -291,23 +291,23 @@ def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T
             jax.debug.print("Current time: {}", t)
             """Drift function for overdamped dynamics"""
             dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
-            return -gamma * dE_dx
+            return -1/gamma * dE_dx
     else:
         def drift_fn(t, state, args):
             """Drift function for overdamped dynamics"""
             dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
-            return -gamma * dE_dx
+            return -1/gamma * dE_dx
     
     def diffusion_fn(t, state, args):
         """Diffusion function for overdamped dynamics"""
-        noise_strength = jnp.sqrt(2 * gamma * k_b * T)
+        noise_strength = jnp.sqrt(2 * 1/gamma * k_b * T)
         return noise_strength * jnp.eye(N_osc)
     
     return drift_fn, diffusion_fn
 
-def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_samples, dt0, rtol=1e-3, atol=1e-6):
+def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6):
     N_osc = initial_state.shape[0]
-    ts = jnp.linspace(t0, t1, N_samples)
+    ts = jnp.linspace(t0, t1, N_save)
     w_shape = (N_osc,)  # state is just phases for each oscillator
     brownian_motion = diffrax.VirtualBrownianTree(
         t0, t1, 1.e-11, w_shape, key_brownian, diffrax.SpaceTimeLevyArea
@@ -328,5 +328,44 @@ def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_sam
         progress_meter=diffrax.TqdmProgressMeter(),
         max_steps=1000000000,
         stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),  # Enable adaptive stepping
+    )
+    return solution
+
+
+########################################################################################
+# Overdamped ODE
+########################################################################################
+
+def setup_overdamped_ODE(energy_fn, flattened_args, gamma=1.0, time_dependent_parms=False):
+    
+        # Reduce energy function to only depend on state
+    if time_dependent_parms:
+        energy_of_state_time = lambda t, state: energy_fn(state, flattened_args(t))
+    else:
+        energy_of_state_time = lambda t, state: energy_fn(state, flattened_args) 
+
+    def force_fn(t, state, args):
+        """Drift function for overdamped dynamics"""
+        dE_dx = grad(energy_of_state_time, argnums=1)(t, state)
+        return -1/gamma * dE_dx
+
+    return force_fn
+
+def solve_ODE(force_fn, initial_state, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6):
+    term = diffrax.ODETerm(force_fn)
+    saveat = diffrax.SaveAt(ts=jnp.linspace(t0, t1, N_save))
+    controller = diffrax.PIDController(rtol=rtol, atol=atol)
+    solver = diffrax.Rodas5()
+    
+    # Solve the ODE.
+    solution = diffrax.diffeqsolve(
+        term,
+        solver,
+        t0=t0,
+        t1=t1,
+        dt0=dt0,
+        y0=initial_state,
+        stepsize_controller=controller,
+        saveat=saveat,
     )
     return solution
