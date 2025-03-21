@@ -298,7 +298,7 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, p
 def run_reverse_process(params_interpolator, suffix,key):
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
-    params_interpolator_reverse_plus_linear = lambda t: 2 * params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    params_interpolator_reverse_plus_linear = lambda t:  params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
     drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, T=0.0)
