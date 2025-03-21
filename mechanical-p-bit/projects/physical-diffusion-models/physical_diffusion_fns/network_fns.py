@@ -354,8 +354,7 @@ def setup_overdamped_ODE(energy_fn, flattened_args, gamma=1.0, time_dependent_pa
 def solve_ODE(force_fn, initial_state, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6):
     term = diffrax.ODETerm(force_fn)
     saveat = diffrax.SaveAt(ts=jnp.linspace(t0, t1, N_save))
-    controller = diffrax.PIDController(rtol=rtol, atol=atol)
-    solver = diffrax.Rodas5()
+    solver = diffrax.Kvaerno5()
     
     # Solve the ODE.
     solution = diffrax.diffeqsolve(
@@ -365,7 +364,7 @@ def solve_ODE(force_fn, initial_state, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6
         t1=t1,
         dt0=dt0,
         y0=initial_state,
-        stepsize_controller=controller,
+        stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),
         saveat=saveat,
     )
     return solution
