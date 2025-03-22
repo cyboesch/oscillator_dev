@@ -9,53 +9,50 @@ from diffrax import ControlTerm, MultiTerm, ODETerm
 # Connectivity functions
 ########################################################################################
 
-# Create 2D grid connectivity for 8x8 oscillators
-def create_2d_square_grid_connectivity(grid_size):
-    connections = []
+# # Create 2D grid connectivity for 8x8 oscillators
+# def create_2d_square_grid_connectivity(grid_size):
+#     connections = []
     
-    for i in range(grid_size):
-        for j in range(grid_size):
-            current = i * grid_size + j
+#     for i in range(grid_size):
+#         for j in range(grid_size):
+#             current = i * grid_size + j
             
-            # Connect to right neighbor
-            if j < grid_size - 1:
-                connections.append([current, current + 1])
+#             # Connect to right neighbor
+#             if j < grid_size - 1:
+#                 connections.append([current, current + 1])
             
-            # Connect to bottom neighbor
-            if i < grid_size - 1:
-                connections.append([current, current + grid_size])
+#             # Connect to bottom neighbor
+#             if i < grid_size - 1:
+#                 connections.append([current, current + grid_size])
     
-    return jnp.array(connections)
+#     return jnp.array(connections)
 
-def create_2d_square_grid_connectivity_with_diagonals(grid_size):
-    connections = []
+# def create_2d_square_grid_connectivity_with_diagonals(grid_size):
+#     connections = []
     
-    for i in range(grid_size):
-        for j in range(grid_size):
-            current = i * grid_size + j
+#     for i in range(grid_size):
+#         for j in range(grid_size):
+#             current = i * grid_size + j
             
-            # Connect to right neighbor
-            if j < grid_size - 1:
-                connections.append([current, current + 1])
+#             # Connect to right neighbor
+#             if j < grid_size - 1:
+#                 connections.append([current, current + 1])
             
-            # Connect to bottom neighbor
-            if i < grid_size - 1:
-                connections.append([current, current + grid_size])
+#             # Connect to bottom neighbor
+#             if i < grid_size - 1:
+#                 connections.append([current, current + grid_size])
             
-            # Connect to right-bottom diagonal neighbor
-            if i < grid_size - 1 and j < grid_size - 1:
-                connections.append([current, current + grid_size + 1])
+#             # Connect to right-bottom diagonal neighbor
+#             if i < grid_size - 1 and j < grid_size - 1:
+#                 connections.append([current, current + grid_size + 1])
             
-            # Connect to left-bottom diagonal neighbor
-            if i < grid_size - 1 and j > 0:
-                connections.append([current, current + grid_size - 1])
-    return jnp.array(connections)
+#             # Connect to left-bottom diagonal neighbor
+#             if i < grid_size - 1 and j > 0:
+#                 connections.append([current, current + grid_size - 1])
+#     return jnp.array(connections)
 
 
-
-
-
-def create_2d_square_grid_connectivity_with_long_range(grid_size, n_neighbour_couplings):
+def create_2d_square_lattice_connectivity(grid_size, n_neighbour_couplings):
     """
     Create connectivity for a square lattice (grid_size x grid_size) by coupling each node
     to every other node whose Chebyshev distance (shell) is between 1 and n_neighbour_couplings.
