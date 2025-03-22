@@ -18,9 +18,9 @@ jax.config.update("jax_enable_x64", True)
 std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 30
-t_forward = 2.5
-sigma_forward = 1.
+n_time_steps = 50
+t_forward = 1.
+sigma_forward = 0.5
 exponential_time_pts = True
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
@@ -52,8 +52,8 @@ problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}"
 
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-9
-atol = 1e-9
+rtol = 1e-4
+atol = 1e-6
 
 #####################################
 ## Filenames
@@ -295,13 +295,16 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, p
 # Run reverse process
 #####################################
 
-def run_reverse_process(params_interpolator, suffix,key):
+def run_reverse_process(params_interpolator, suffix,key, Temp):
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
-    params_interpolator_reverse_plus_linear = lambda t: params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    if Temp == 0.0:
+        params_interpolator_reverse_plus_linear = lambda t: params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    else:
+        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
-    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, T=0.0)
+    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, T=Temp)
 
     t0 = 0.0
     t1 = t_forward
@@ -347,14 +350,17 @@ def run_reverse_process(params_interpolator, suffix,key):
 
 # Run reverse process for both smoothed and non-smoothed parameters
 key, subkey = jr.split(key)
-images_generated_non_smoothed = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed",subkey)
+images_generated_non_smoothed_ode = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed_ode",subkey, 0.0)
+images_generated_non_smoothed_sde = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed_sde",subkey, 1.0)
+
 #####################################
 # Plotting
 #####################################
 images_true = images_flat_true.reshape(-1, resolution[0], resolution[1])
+
 # Plot a few examples
 num_examples = n_trajectories  # number of examples to display
-fig, axes = plt.subplots(2, num_examples, figsize=(30, 4))  # Increase the height to make images larger
+fig, axes = plt.subplots(3, num_examples, figsize=(15, 6))  # Increased height for 3 rows
 
 # Plot true images
 for i in range(num_examples):
@@ -364,23 +370,27 @@ for i in range(num_examples):
     im = axes[0, i].imshow(np.array(img), cmap='gray')
     axes[0, i].axis('off')
 
-# Plot generated images without smoothed params
+# Plot SDE generated images
 for i in range(num_examples):
-    img_generated = images_generated_non_smoothed[i]
+    img_generated = images_generated_non_smoothed_sde[i]
     if img_generated.shape[-1] == 1:
         img_generated = img_generated.squeeze(-1)
     im = axes[1, i].imshow(np.array(img_generated), cmap='gray')
     axes[1, i].axis('off')
 
+# Plot ODE generated images
+for i in range(num_examples):
+    img_generated = images_generated_non_smoothed_ode[i]
+    if img_generated.shape[-1] == 1:
+        img_generated = img_generated.squeeze(-1)
+    im = axes[2, i].imshow(np.array(img_generated), cmap='gray')
+    axes[2, i].axis('off')
 
 # Add titles with increased font size
 axes[0, 0].set_title("True images", loc='left', fontsize=16)
-axes[1, 0].set_title("Generated images", loc='left', fontsize=16)
+axes[1, 0].set_title("SDE sampled images", loc='left', fontsize=16)
+axes[2, 0].set_title("ODE sampled images", loc='left', fontsize=16)
 
-# Adjust the vertical and horizontal spacing
-# plt.subplots_adjust(hspace=0.3, wspace=0.1)  # Adjust these values to reduce spacing
-# plt.tight_layout(pad=0.5)
-plt.subplots_adjust(wspace=0.1, hspace=0)
+plt.subplots_adjust(wspace=0.01, hspace=0.5)
 plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_{rtol}_atol_{atol}.png')
-
 
