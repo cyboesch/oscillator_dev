@@ -19,8 +19,8 @@ std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 50
-t_forward = 2.5
-sigma_forward = 1.
+t_forward = 1.
+sigma_forward = .5
 exponential_time_pts = True
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
@@ -52,8 +52,8 @@ problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neigh
 
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-5
-atol = 1e-7
+rtol = 1e-6
+atol = 1e-8
 
 #####################################
 ## Filenames
