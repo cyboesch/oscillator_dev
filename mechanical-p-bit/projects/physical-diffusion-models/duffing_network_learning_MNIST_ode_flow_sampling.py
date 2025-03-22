@@ -18,12 +18,12 @@ jax.config.update("jax_enable_x64", True)
 std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 20
+n_time_steps = 30
 t_forward = 2.5
 sigma_forward = 1.
 exponential_time_pts = True
 if exponential_time_pts:
-    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-4), jnp.log(t_forward), n_time_steps))
+    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
     forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
@@ -48,10 +48,11 @@ with_diagonal_connections = True
 energy_fn_type = "6th_order_duffing_coupling"
 
 problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}"
+# problem_type_folder = f"MNIST_with_duffing_coupling_and_6th_order_self_coupling"
 
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-6
+rtol = 1e-9
 atol = 1e-9
 
 #####################################
@@ -217,7 +218,7 @@ else:
 
     # Loop over time points
     for t_idx, t_curr in enumerate(forward_time_pts):
-        
+        print(f"t_idx: {t_idx}, t_curr: {t_curr}")
         # Generate samples at current time
         key, subkey = jr.split(key)
         samples_t = sample_forward_process(
@@ -297,10 +298,10 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, p
 def run_reverse_process(params_interpolator, suffix,key):
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
-    params_interpolator_reverse_plus_linear = lambda t: 2 * params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    params_interpolator_reverse_plus_linear = lambda t: params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
-    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True)
+    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, T=0.0)
 
     t0 = 0.0
     t1 = t_forward
