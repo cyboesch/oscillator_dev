@@ -51,6 +51,53 @@ def create_2d_square_grid_connectivity_with_diagonals(grid_size):
                 connections.append([current, current + grid_size - 1])
     return jnp.array(connections)
 
+
+
+
+
+def create_2d_square_grid_connectivity_with_long_range(grid_size, n_neighbour_couplings):
+    """
+    Create connectivity for a square lattice (grid_size x grid_size) by coupling each node
+    to every other node whose Chebyshev distance (shell) is between 1 and n_neighbour_couplings.
+    
+    For example:
+      - n_neighbour_couplings = 1: Connect to immediate neighbors (horizontal, vertical, and diagonal).
+      - n_neighbour_couplings = 2: Also include next-nearest neighbors (shell 2).
+      - n_neighbour_couplings = grid_size: All-to-all connectivity.
+    
+    Args:
+        grid_size (int): Side length of the square grid.
+        n_neighbour_couplings (int): Maximum coupling shell to include.
+        
+    Returns:
+        jnp.ndarray: Array of shape (num_connections, 2) with each row [node1, node2].
+    """
+    connections = set()
+    for i in range(grid_size):
+        for j in range(grid_size):
+            node = i * grid_size + j
+            # Loop over all possible offsets from -n_neighbour_couplings to +n_neighbour_couplings.
+            for di in range(-n_neighbour_couplings, n_neighbour_couplings + 1):
+                for dj in range(-n_neighbour_couplings, n_neighbour_couplings + 1):
+                    # Skip self connection.
+                    if di == 0 and dj == 0:
+                        continue
+                    # Only include if the offset is within the desired shell.
+                    # (This is actually always true since di,dj are within [-n_c, n_c].)
+                    ni = i + di
+                    nj = j + dj
+                    # Make sure neighbor is within the grid.
+                    if 0 <= ni < grid_size and 0 <= nj < grid_size:
+                        neighbor = ni * grid_size + nj
+                        # To avoid duplicates, only add if current node index is less than neighbor.
+                        if node < neighbor:
+                            connections.add((node, neighbor))
+    # Convert the set of tuples into a sorted JAX array.
+    connections = sorted(list(connections))
+    return jnp.array(connections)
+
+
+
 ########################################################################################
 # Energy functions
 ########################################################################################

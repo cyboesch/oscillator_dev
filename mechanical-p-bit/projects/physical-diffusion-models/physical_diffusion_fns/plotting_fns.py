@@ -191,7 +191,7 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
         plt.hist(samples_t[:, i], bins=50, density=True, alpha=0.3, color=colors[i], label=label)
 
     # Add Gaussian N(0,sigma) for comparison
-    x = jnp.linspace(-3, 3, 1000)  # Adjust range as needed
+    x = jnp.linspace(-2*sigma_final, 2*sigma_final, 1000)  # Adjust range as needed
     gaussian_pdf = (1 / jnp.sqrt(2 * jnp.pi*sigma_final**2)) * jnp.exp(-0.5 * x**2/sigma_final**2)
     plt.plot(x, gaussian_pdf, 'r--', linewidth=2, label=r'Gaussian N(0,$\sigma$)')
 
@@ -312,4 +312,160 @@ def visualize_connectivity(connectivity, grid_size_x=8, grid_size_y=8):
     plt.grid(True)
     plt.axis('equal')
     plt.title(f'2D Grid Connectivity ({grid_size_x}x{grid_size_y})')
+    plt.show()
+    
+
+# def visualize_connectivity_w_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, bend_factor=0.2):
+#     """
+#     Visualize the connectivity pattern of the grid, drawing local (nearest-neighbor)
+#     couplings as straight lines and non-local couplings as bent (curved) lines.
+    
+#     Args:
+#         connectivity (jnp.ndarray): Connectivity matrix (each row [node1, node2])
+#         grid_size_x (int): Number of columns in the grid.
+#         grid_size_y (int): Number of rows in the grid.
+#         bend_factor (float): Factor controlling the curvature of non-local couplings.
+#                              Higher values produce more bending.
+#     """
+#     plt.figure(figsize=(4, 4))
+    
+#     # Plot nodes as black circles
+#     for i in range(grid_size_y):
+#         for j in range(grid_size_x):
+#             plt.plot(j, i, 'ko')
+    
+#     # Define a threshold distance for "local" couplings (neighbors and diagonals)
+#     local_threshold = jnp.sqrt(2) + 1e-6
+    
+#     # Iterate over each connection to plot it.
+#     for conn in connectivity:
+#         node1, node2 = int(conn[0]), int(conn[1])
+#         # Compute grid coordinates.
+#         # Assuming nodes are numbered row-wise: node index = row * grid_size_x + col
+#         row1, col1 = divmod(node1, grid_size_x)
+#         row2, col2 = divmod(node2, grid_size_x)
+        
+#         # Calculate the Euclidean distance between the nodes.
+#         dx = col2 - col1
+#         dy = row2 - row1
+#         d = jnp.sqrt(dx**2 + dy**2)
+        
+#         if d <= local_threshold:
+#             # Local coupling: plot as a straight line (blue)
+#             plt.plot([col1, col2], [row1, row2], 'b-', alpha=0.3)
+#         else:
+#             # Non-local coupling: plot as a curved line.
+#             # Compute the midpoint.
+#             mid_x = (col1 + col2) / 2.0
+#             mid_y = (row1 + row2) / 2.0
+            
+#             # Compute a perpendicular direction to the line connecting the nodes.
+#             # One perpendicular vector is given by (-dy, dx)
+#             perp_x, perp_y = -dy, dx
+#             norm = jnp.sqrt(perp_x**2 + perp_y**2)
+#             if norm > 0:
+#                 perp_x /= norm
+#                 perp_y /= norm
+#             else:
+#                 perp_x, perp_y = 0, 0
+            
+#             # Compute the control point for the quadratic Bézier curve.
+#             cp_x = mid_x + bend_factor * d * perp_x
+#             cp_y = mid_y + bend_factor * d * perp_y
+            
+#             # Generate points along the quadratic Bézier curve.
+#             t_values = jnp.linspace(0, 1, 50)
+#             curve_x = (1 - t_values)**2 * col1 + 2 * (1 - t_values) * t_values * cp_x + t_values**2 * col2
+#             curve_y = (1 - t_values)**2 * row1 + 2 * (1 - t_values) * t_values * cp_y + t_values**2 * row2
+            
+#             plt.plot(curve_x, curve_y, 'r-', alpha=0.5)
+    
+#     plt.grid(True)
+#     plt.axis('equal')
+#     plt.title(f'2D Grid Connectivity ({grid_size_x}x{grid_size_y})')
+#     plt.show()
+    
+
+
+
+
+def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, n_neighbour_couplings=1):
+    """
+    Visualize the connectivity of a square grid.
+    
+    Nodes are arranged in a grid (row-major ordering). Each connection is drawn using a color
+    that depends on its "shell" number, defined as:
+    
+         shell = max(|row2 - row1|, |col2 - col1|)
+    
+    - Shell 1 (immediate neighbors: horizontal, vertical, diagonal) are drawn as straight lines.
+    - For shells 2 and higher, a curved line (quadratic Bézier curve) is drawn.
+    
+    Different colors are assigned to each shell. For example:
+        shell 1: blue, shell 2: red, shell 3: green, etc.
+    
+    Args:
+        connectivity (jnp.ndarray): Array of shape (num_connections, 2) with each row [node1, node2].
+        grid_size_x (int): Number of columns.
+        grid_size_y (int): Number of rows.
+        n_neighbour_couplings (int): Maximum shell (range) considered.
+    """
+    plt.figure(figsize=(6, 6))
+    
+    # Plot the nodes.
+    for i in range(grid_size_y):
+        for j in range(grid_size_x):
+            plt.plot(j, i, 'ko', markersize=4)
+    
+    # Define a list of colors for each shell.
+    # Extend this list if you need more shells.
+    shell_colors = ["blue", "red", "green", "purple", "orange", "cyan", "magenta", "brown"]
+    
+    # Iterate over each connection.
+    for conn in connectivity:
+        node1, node2 = int(conn[0]), int(conn[1])
+        # Recover grid coordinates (assumes row-major ordering).
+        row1, col1 = divmod(node1, grid_size_x)
+        row2, col2 = divmod(node2, grid_size_x)
+        # Determine the shell number based on the maximum coordinate difference.
+        shell = max(abs(row2 - row1), abs(col2 - col1))
+        
+        # Get the color based on the shell (using the list, with shell 1 -> index 0, etc.)
+        if shell - 1 < len(shell_colors):
+            color = shell_colors[shell - 1]
+        else:
+            color = "black"  # fallback if shell number exceeds our defined colors
+        
+        if shell == 1:
+            # Immediate neighbors: draw a straight line.
+            plt.plot([col1, col2], [row1, row2], color=color, alpha=0.7, linewidth=1.5)
+        else:
+            # For longer-range couplings, draw a curved line.
+            # Compute the midpoint.
+            mid_x = (col1 + col2) / 2.0
+            mid_y = (row1 + row2) / 2.0
+            # Compute the perpendicular direction.
+            dx = col2 - col1
+            dy = row2 - row1
+            norm = jnp.sqrt(dx**2 + dy**2)
+            if norm == 0:
+                perp_x, perp_y = 0, 0
+            else:
+                perp_x, perp_y = -dy / norm, dx / norm
+            # Bend factor increases with the shell (adjust multiplier as desired).
+            bend = 0.2 * shell
+            cp_x = mid_x + bend * norm * perp_x
+            cp_y = mid_y + bend * norm * perp_y
+            
+            # Generate points along a quadratic Bézier curve.
+            t = jnp.linspace(0, 1, 50)
+            curve_x = (1 - t)**2 * col1 + 2 * (1 - t) * t * cp_x + t**2 * col2
+            curve_y = (1 - t)**2 * row1 + 2 * (1 - t) * t * cp_y + t**2 * row2
+            plt.plot(curve_x, curve_y, color=color, alpha=0.7, linewidth=1.5)
+    
+    plt.grid(True)
+    plt.axis('equal')
+    plt.title(f'2D Grid Connectivity ({grid_size_x}x{grid_size_y})\nShells 1 to {n_neighbour_couplings}')
+    plt.xlabel('Column index')
+    plt.ylabel('Row index')
     plt.show()
