@@ -389,7 +389,7 @@ def visualize_connectivity(connectivity, grid_size_x=8, grid_size_y=8):
 
 
 
-def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, n_neighbour_couplings=1):
+def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, n_neighbour_couplings=1, save_fig=False, path=None):
     """
     Visualize the connectivity of a square grid.
     
@@ -469,3 +469,6 @@ def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8,
     plt.xlabel('Column index')
     plt.ylabel('Row index')
     plt.show()
+    if save_fig and path is not None:
+        plt.savefig(path + f"/connectivity_n_neighbour_couplings_{n_neighbour_couplings}.png", dpi=300, bbox_inches='tight')
+    
