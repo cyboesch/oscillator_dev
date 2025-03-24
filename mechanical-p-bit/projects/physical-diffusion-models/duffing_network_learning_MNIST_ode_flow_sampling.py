@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
 from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
-from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
+from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn, setup_overdamped_ODE, solve_ODE
 
 jax.config.update("jax_enable_x64", True)
 
@@ -19,8 +19,8 @@ std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 50
-t_forward = 1.
-sigma_forward = .5
+t_forward = 2.5
+sigma_forward = 1.
 exponential_time_pts = True
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
@@ -43,7 +43,7 @@ key_seed = 0
 labels = [1,7]
 resolution = (8,8)
 
-n_neighbour_couplings = 2
+n_neighbour_couplings = 6
 
 energy_fn_type = "6th_order_duffing_coupling"
 
@@ -52,8 +52,10 @@ problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neigh
 
 # SDE parameters
 n_trajectories = 10
-rtol = 1e-6
-atol = 1e-8
+rtol_ode = 1e-10
+atol_ode = 1e-12
+rtol_sde = 1e-6
+atol_sde = 1e-8
 
 #####################################
 ## Filenames
@@ -293,7 +295,7 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, p
 # Run reverse process
 #####################################
 
-def run_reverse_process(params_interpolator, suffix,key, Temp):
+def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol):
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
     if Temp == 0.0:
@@ -302,7 +304,7 @@ def run_reverse_process(params_interpolator, suffix,key, Temp):
         params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
-    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, T=Temp)
+    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
 
     t0 = 0.0
     t1 = t_forward
@@ -346,10 +348,58 @@ def run_reverse_process(params_interpolator, suffix,key, Temp):
     images_generated_flat = final_samples * std_MNIST + mean_MNIST
     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
+# def run_reverse_process_ODE(params_interpolator, suffix,key, Temp):
+#     forward_params = jnp.zeros_like(params_flattened_initial)
+#     forward_params = forward_params.at[0:N_osc].set(1.)
+#     params_interpolator_reverse_plus_linear = lambda t: params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+
+#     # Setup SDE functions
+#     drift_fn, _ = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
+
+#     t0 = 0.0
+#     t1 = t_forward
+#     ts = jnp.linspace(t0, t1, 100)
+#     dt0 = 0.00000001
+
+#     # Generate multiple initial states
+#     key, subkey = jr.split(key)
+#     initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
+
+#     # Generate a key for each initial condition
+#     key, subkey = jr.split(key)
+#     keys_brownian = jr.split(subkey, n_trajectories)
+
+#     # Vectorize solve_SDE across both initial states and keys
+#     vectorized_solve_ODE = vmap(
+#         lambda init_state: solve_ODE(
+#             drift_fn,
+#             init_state,
+#             t0,
+#             t1,
+#             ts.shape[0],
+#             dt0,
+#             rtol=rtol_ode,
+#             atol=atol_ode
+#         ),
+#         in_axes=(0)
+#     )
+
+#     # Run SDE for all initial states at once
+#     solutions = vectorized_solve_ODE(initial_states)
+#     all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
+#     reverse_trajectories_path = f"{output_dir}/reverse_trajectories_{suffix}.npy"
+#     jnp.save(reverse_trajectories_path, all_trajectories)
+#     print(f"Reverse trajectories saved to {reverse_trajectories_path}")
+
+#     final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
+#     final_samples = final_samples_scaled / additional_rescaling
+#     images_generated_flat = final_samples * std_MNIST + mean_MNIST
+#     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
+
 # Run reverse process for both smoothed and non-smoothed parameters
 key, subkey = jr.split(key)
-images_generated_non_smoothed_ode = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed_ode",subkey, 0.0)
-images_generated_non_smoothed_sde = run_reverse_process(params_interpolator_non_smoothed, "non_smoothed_sde",subkey, 1.0)
+images_generated_non_smoothed_ode = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_ode",subkey, 0.0, atol_ode, rtol_ode)
+images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",subkey, 1.0, atol_sde, rtol_sde)
 
 #####################################
 # Plotting
@@ -386,9 +436,9 @@ for i in range(num_examples):
 
 # Add titles with increased font size
 axes[0, 0].set_title("True images", loc='left', fontsize=16)
-axes[1, 0].set_title("SDE sampled images", loc='left', fontsize=16)
-axes[2, 0].set_title("ODE sampled images", loc='left', fontsize=16)
+axes[1, 0].set_title(f"SDE sampled images, rtol={rtol_sde}, atol={atol_sde}", loc='left', fontsize=16)
+axes[2, 0].set_title(f"ODE sampled images, rtol={rtol_ode}, atol={atol_ode}", loc='left', fontsize=16)
 
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
-plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_{rtol}_atol_{atol}.png')
+plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_sde_{rtol_sde}_atol_sde_{atol_sde}_rtol_ode_{rtol_ode}_atol_ode_{atol_ode}.png')
 
