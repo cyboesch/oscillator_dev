@@ -266,7 +266,7 @@ def setup_general_polynomial_network_with_external_force_energy_fn(connectivity,
 # Overdamped SDE
 ########################################################################################
 
-def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T=1.0, time_dependent_parms=False, debug=False):
+def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, Temp=1.0, time_dependent_parms=False, debug=False):
     """
     Sets up drift and diffusion functions for overdamped dynamics
     
@@ -301,7 +301,7 @@ def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T
     
     def diffusion_fn(t, state, args):
         """Diffusion function for overdamped dynamics"""
-        noise_strength = jnp.sqrt(2 * 1/gamma * k_b * T)
+        noise_strength = jnp.sqrt(2 * 1/gamma * k_b * Temp)
         return noise_strength * jnp.eye(N_osc)
     
     return drift_fn, diffusion_fn
@@ -337,7 +337,7 @@ def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_sav
 # Overdamped ODE
 ########################################################################################
 
-def setup_overdamped_ODE(energy_fn, flattened_args, gamma=1.0, time_dependent_parms=False):
+def setup_overdamped_ODE(energy_fn, flattened_args, gamma=1.0, time_dependent_parms=False, Temp=1.0):
     
         # Reduce energy function to only depend on state
     if time_dependent_parms:
@@ -352,10 +352,10 @@ def setup_overdamped_ODE(energy_fn, flattened_args, gamma=1.0, time_dependent_pa
 
     return force_fn
 
-def solve_ODE(force_fn, initial_state, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6):
+def solve_ODE(force_fn, initial_state, t0, t1, N_save, dt0, rtol, atol):
     term = diffrax.ODETerm(force_fn)
     saveat = diffrax.SaveAt(ts=jnp.linspace(t0, t1, N_save))
-    solver = diffrax.Kvaerno5()
+    solver = diffrax.Huen()
     
     # Solve the ODE.
     solution = diffrax.diffeqsolve(
