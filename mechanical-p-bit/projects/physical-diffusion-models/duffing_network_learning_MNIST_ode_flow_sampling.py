@@ -18,7 +18,7 @@ jax.config.update("jax_enable_x64", True)
 std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 50
+n_time_steps = 10
 t_forward = 2.5
 sigma_forward = 1.
 exponential_time_pts = True
@@ -43,7 +43,7 @@ key_seed = 0
 labels = [1,7]
 resolution = (8,8)
 
-n_neighbour_couplings = 6
+n_neighbour_couplings = 2
 
 energy_fn_type = "6th_order_duffing_coupling"
 
@@ -52,10 +52,10 @@ problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neigh
 
 # SDE parameters
 n_trajectories = 10
-rtol_ode = 1e-10
-atol_ode = 1e-12
-rtol_sde = 1e-6
-atol_sde = 1e-8
+rtol_ode = 1e-5
+atol_ode = 1e-7
+rtol_sde = 1e-3
+atol_sde = 1e-5
 
 #####################################
 ## Filenames
