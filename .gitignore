@@ -15,6 +15,7 @@ mechanical-p-bit/out/*
 
 out/
 data/
+jax-env-thermo/
 
 # Distribution / packaging
 .Python
