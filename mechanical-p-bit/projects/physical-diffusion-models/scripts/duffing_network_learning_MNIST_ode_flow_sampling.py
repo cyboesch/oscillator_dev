@@ -1,3 +1,9 @@
+import sys
+import os
+# Add the parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
 import jax
 from jax import flatten_util, vmap 
 import jax.numpy as jnp
