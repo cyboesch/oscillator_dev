@@ -354,53 +354,6 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol):
     images_generated_flat = final_samples * std_MNIST + mean_MNIST
     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
-# def run_reverse_process_ODE(params_interpolator, suffix,key, Temp):
-#     forward_params = jnp.zeros_like(params_flattened_initial)
-#     forward_params = forward_params.at[0:N_osc].set(1.)
-#     params_interpolator_reverse_plus_linear = lambda t: params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
-
-#     # Setup SDE functions
-#     drift_fn, _ = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
-
-#     t0 = 0.0
-#     t1 = t_forward
-#     ts = jnp.linspace(t0, t1, 100)
-#     dt0 = 0.00000001
-
-#     # Generate multiple initial states
-#     key, subkey = jr.split(key)
-#     initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
-
-#     # Generate a key for each initial condition
-#     key, subkey = jr.split(key)
-#     keys_brownian = jr.split(subkey, n_trajectories)
-
-#     # Vectorize solve_SDE across both initial states and keys
-#     vectorized_solve_ODE = vmap(
-#         lambda init_state: solve_ODE(
-#             drift_fn,
-#             init_state,
-#             t0,
-#             t1,
-#             ts.shape[0],
-#             dt0,
-#             rtol=rtol_ode,
-#             atol=atol_ode
-#         ),
-#         in_axes=(0)
-#     )
-
-#     # Run SDE for all initial states at once
-#     solutions = vectorized_solve_ODE(initial_states)
-#     all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
-#     reverse_trajectories_path = f"{output_dir}/reverse_trajectories_{suffix}.npy"
-#     jnp.save(reverse_trajectories_path, all_trajectories)
-#     print(f"Reverse trajectories saved to {reverse_trajectories_path}")
-
-#     final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
-#     final_samples = final_samples_scaled / additional_rescaling
-#     images_generated_flat = final_samples * std_MNIST + mean_MNIST
-#     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
 # Run reverse process for both smoothed and non-smoothed parameters
 key, subkey = jr.split(key)
