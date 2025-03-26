@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
 from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
-from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn, setup_overdamped_ODE, solve_ODE
+from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
 jax.config.update("jax_enable_x64", True)
 
@@ -82,7 +82,7 @@ optimization_folder = (
            f"patience_{patience}")
 
 # Setup output directories
-base_dir = "out/problems"
+base_dir = "../out/problems"
 output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
 
@@ -98,7 +98,7 @@ print(f"Plot directory: {plot_folder}")
 ##################################### 
 import numpy as np
 # Load the saved .npy file
-data_np = np.load(f"data/MNIST/mnist_labels_{labels}_resolution_{resolution}.npy")
+data_np = np.load(f"../data/MNIST/mnist_labels_{labels}_resolution_{resolution}.npy")
 
 # Optionally convert to a JAX array
 images_flat_raw = jnp.array(data_np)
