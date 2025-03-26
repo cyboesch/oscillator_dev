@@ -103,7 +103,7 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
 # Plotting parameter evolution
 ########################################################################################
 
-def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten, N_osc, param_names, slicing=10, figsize=(4, 14), title="Parameter Evolution", maximize=False, labels_on=True, save_fig=False, path=None):
+def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten, N_osc, param_names, slicing=10, figsize=(4, 14), title="Parameter Evolution", maximize=False, labels_on=True, save_fig=False, path=None, plot_show=False):
     """
     Plot the evolution of parameters during optimization.
     
@@ -158,14 +158,15 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
     if save_fig and path is not None:
         print(f"Saving figure to {path}")
         plt.savefig(path + f"/parameter_opt_evolution_at_timeidx_{time_index}_time_{time:.5f}.png", dpi=300, bbox_inches='tight')
-    # plt.show()
+    if plot_show:
+        plt.show()
 
     return best_loss, best_params, best_idx
 
 ########################################################################################
 # Plotting forward diffusion process
 ########################################################################################
-def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=None, save_fig=False, fontsize=16):
+def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=None, save_fig=False, fontsize=16, plot_show=False):
     """
     Plot marginal distributions of samples at forward time t.
     
@@ -210,15 +211,15 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
     if save_fig and path is not None:
         print(f"Saving figure to {path}")
         plt.savefig(path + f"/final_forward_distribution_sigma_{sigma_final:.2f}_beta_{beta:.2f}.png", dpi=300, bbox_inches='tight')
-    
-    # plt.show()
+    if plot_show:
+        plt.show()
     
 ########################################################################################
 # Plotting parameter as function of time
 ########################################################################################  
 def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval, 
                                  params_history_all_t, params_interpolator, 
-                                 unflatten, N_osc, log_scale=True, save_fig=False, path=None):
+                                 unflatten, N_osc, log_scale=True, save_fig=False, path=None, plot_show=False):
     # --- Reconstruct Historical Data ---
     first_params = unflatten(params_history_all_t[0])
     n_groups = len(first_params)
@@ -282,8 +283,8 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
     plt.tight_layout(rect=[0, 0, 1, 0.95])  # Adjust rect to reduce gap
     if save_fig and path is not None:
         plt.savefig(f"{path}/parameter_evolution_over_time.png", dpi=300, bbox_inches='tight')
-    
-    # plt.show()
+    if plot_show:
+        plt.show()
 
 ########################################################################################
 # Plotting connectivity
@@ -315,81 +316,8 @@ def visualize_connectivity(connectivity, grid_size_x=8, grid_size_y=8):
     plt.show()
     
 
-# def visualize_connectivity_w_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, bend_factor=0.2):
-#     """
-#     Visualize the connectivity pattern of the grid, drawing local (nearest-neighbor)
-#     couplings as straight lines and non-local couplings as bent (curved) lines.
-    
-#     Args:
-#         connectivity (jnp.ndarray): Connectivity matrix (each row [node1, node2])
-#         grid_size_x (int): Number of columns in the grid.
-#         grid_size_y (int): Number of rows in the grid.
-#         bend_factor (float): Factor controlling the curvature of non-local couplings.
-#                              Higher values produce more bending.
-#     """
-#     plt.figure(figsize=(4, 4))
-    
-#     # Plot nodes as black circles
-#     for i in range(grid_size_y):
-#         for j in range(grid_size_x):
-#             plt.plot(j, i, 'ko')
-    
-#     # Define a threshold distance for "local" couplings (neighbors and diagonals)
-#     local_threshold = jnp.sqrt(2) + 1e-6
-    
-#     # Iterate over each connection to plot it.
-#     for conn in connectivity:
-#         node1, node2 = int(conn[0]), int(conn[1])
-#         # Compute grid coordinates.
-#         # Assuming nodes are numbered row-wise: node index = row * grid_size_x + col
-#         row1, col1 = divmod(node1, grid_size_x)
-#         row2, col2 = divmod(node2, grid_size_x)
-        
-#         # Calculate the Euclidean distance between the nodes.
-#         dx = col2 - col1
-#         dy = row2 - row1
-#         d = jnp.sqrt(dx**2 + dy**2)
-        
-#         if d <= local_threshold:
-#             # Local coupling: plot as a straight line (blue)
-#             plt.plot([col1, col2], [row1, row2], 'b-', alpha=0.3)
-#         else:
-#             # Non-local coupling: plot as a curved line.
-#             # Compute the midpoint.
-#             mid_x = (col1 + col2) / 2.0
-#             mid_y = (row1 + row2) / 2.0
-            
-#             # Compute a perpendicular direction to the line connecting the nodes.
-#             # One perpendicular vector is given by (-dy, dx)
-#             perp_x, perp_y = -dy, dx
-#             norm = jnp.sqrt(perp_x**2 + perp_y**2)
-#             if norm > 0:
-#                 perp_x /= norm
-#                 perp_y /= norm
-#             else:
-#                 perp_x, perp_y = 0, 0
-            
-#             # Compute the control point for the quadratic Bézier curve.
-#             cp_x = mid_x + bend_factor * d * perp_x
-#             cp_y = mid_y + bend_factor * d * perp_y
-            
-#             # Generate points along the quadratic Bézier curve.
-#             t_values = jnp.linspace(0, 1, 50)
-#             curve_x = (1 - t_values)**2 * col1 + 2 * (1 - t_values) * t_values * cp_x + t_values**2 * col2
-#             curve_y = (1 - t_values)**2 * row1 + 2 * (1 - t_values) * t_values * cp_y + t_values**2 * row2
-            
-#             plt.plot(curve_x, curve_y, 'r-', alpha=0.5)
-    
-#     plt.grid(True)
-#     plt.axis('equal')
-#     plt.title(f'2D Grid Connectivity ({grid_size_x}x{grid_size_y})')
-#     plt.show()
-    
 
-
-
-
-def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, n_neighbour_couplings=1, save_fig=False, path=None):
+def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, n_neighbour_couplings=1, save_fig=False, path=None, plot_show=False):
     """
     Visualize the connectivity of a square grid.
     
@@ -468,7 +396,8 @@ def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8,
     plt.title(f'2D Grid Connectivity ({grid_size_x}x{grid_size_y})\nShells 1 to {n_neighbour_couplings}')
     plt.xlabel('Column index')
     plt.ylabel('Row index')
-    plt.show()
+    if plot_show:
+        plt.show()
     if save_fig and path is not None:
         plt.savefig(path + f"/connectivity_n_neighbour_couplings_{n_neighbour_couplings}.png", dpi=300, bbox_inches='tight')
     
