@@ -166,7 +166,7 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
 ########################################################################################
 # Plotting forward diffusion process
 ########################################################################################
-def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=None, save_fig=False, fontsize=16, plot_show=False):
+def plot_forward_marginals(samples_t, t_forward, sigma_final, Temp=1.0, beta=1.0, path=None, save_fig=False, fontsize=16, plot_show=False):
     """
     Plot marginal distributions of samples at forward time t.
     
@@ -193,7 +193,7 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, beta=1.0, path=Non
 
     # Add Gaussian N(0,sigma) for comparison
     x = jnp.linspace(-2*sigma_final, 2*sigma_final, 1000)  # Adjust range as needed
-    gaussian_pdf = (1 / jnp.sqrt(2 * jnp.pi*sigma_final**2)) * jnp.exp(-0.5 * x**2/sigma_final**2)
+    gaussian_pdf = (1 / jnp.sqrt(2 * jnp.pi* Temp*sigma_final**2)) * jnp.exp(-0.5 * x**2/(Temp*sigma_final**2))
     plt.plot(x, gaussian_pdf, 'r--', linewidth=2, label=r'Gaussian N(0,$\sigma$)')
 
     plt.title(f'Marginal Distributions at t = {t_forward}, $\sigma$ = {sigma_final:.2f}', fontsize=fontsize+2)
