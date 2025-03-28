@@ -24,10 +24,10 @@ jax.config.update("jax_enable_x64", True)
 std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 10
-t_forward = 2.5
+n_time_steps = 30
+t_forward = 5.
 sigma_forward = 1.
-exponential_time_pts = True
+exponential_time_pts = False
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
@@ -39,29 +39,30 @@ print('forward_time_pts', forward_time_pts)
 training_method = "SM"
 learning_rate = 0.01
 n_epochs = 1000000
-batch_size = 128
+batch_size = 2*128
 window_size=100
 tolerance=1e-6
 patience=50
+
+Temp = 0.01
 
 key_seed = 0
 
 labels = [1,7]
 resolution = (8,8)
 
-n_neighbour_couplings = 2
+n_neighbour_couplings = 3
 
 energy_fn_type = "6th_order_duffing_coupling"
 
-problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}"
-# problem_type_folder = f"MNIST_with_duffing_coupling_and_6th_order_self_coupling"
+problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
 
 # SDE parameters
 n_trajectories = 10
-rtol_ode = 1e-5
+rtol_ode = 1e-7
 atol_ode = 1e-7
-rtol_sde = 1e-3
-atol_sde = 1e-5
+rtol_sde = 1e-10
+atol_sde = 1e-10
 
 #####################################
 ## Filenames
@@ -209,8 +210,8 @@ else:
     print('No existing parameters found, running optimization')
     key, subkey = jr.split(key)
     
-    samples_t = sample_forward_process(t_forward, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=subkey)
-    plot_forward_marginals(samples_t, t_forward, sigma_forward, beta=1.0, path=output_dir, save_fig=True, fontsize=16)
+    samples_t = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey)
+    plot_forward_marginals(samples_t, t_forward, sigma_forward, Temp=Temp, path=output_dir, save_fig=True, fontsize=16)
     
     # Setup optimization parameters
     mask = jnp.ones(params_flattened_initial.shape[0])
@@ -228,7 +229,7 @@ else:
         # Generate samples at current time
         key, subkey = jr.split(key)
         samples_t = sample_forward_process(
-            t_curr, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=subkey
+            t_curr, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey
         )
         
         # Perform optimization starting from previous best parameters
@@ -270,7 +271,7 @@ else:
                     labels_on=True,
                     save_fig=True,
                     path=output_dir,
-                    param_names=params_names
+                    param_names=params_names,
                 )
             
     # Convert params_history_all_t to array for easier analysis
@@ -295,19 +296,19 @@ time_eval = jnp.linspace(forward_time_pts[0], forward_time_pts[-1], 200)
 interpolated_params_smoothed = params_interpolator_smoothed(time_eval)
 interpolated_params_non_smoothed = params_interpolator_non_smoothed(time_eval)
 
-plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder)
+plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False)
 
 #####################################
 # Run reverse process
 #####################################
 
-def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol):
+def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, ode_solve=False):
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
-    if Temp == 0.0:
-        params_interpolator_reverse_plus_linear = lambda t: params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    if ode_solve:
+        params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
     else:
-        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+        params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
     drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
@@ -319,7 +320,7 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol):
 
     # Generate multiple initial states
     key, subkey = jr.split(key)
-    initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=1, samples0=samples_target, key=subkey)
+    initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=Temp, samples0=samples_target, key=subkey)
 
     # Generate a key for each initial condition
     key, subkey = jr.split(key)
@@ -357,8 +358,8 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol):
 
 # Run reverse process for both smoothed and non-smoothed parameters
 key, subkey = jr.split(key)
-images_generated_non_smoothed_ode = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_ode",subkey, 0.0, atol_ode, rtol_ode)
-images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",subkey, 1.0, atol_sde, rtol_sde)
+images_generated_non_smoothed_ode = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_ode",subkey, Temp, atol_ode, rtol_ode, ode_solve=True)
+images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",subkey, Temp, atol_sde, rtol_sde, ode_solve=False)
 
 #####################################
 # Plotting
