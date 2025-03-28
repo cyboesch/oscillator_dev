@@ -59,10 +59,10 @@ problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neigh
 
 # SDE parameters
 n_trajectories = 10
-rtol_ode = 1e-7
-atol_ode = 1e-7
-rtol_sde = 1e-10
-atol_sde = 1e-10
+rtol_ode = 1e-5
+atol_ode = 1e-5
+rtol_sde = 1e-5
+atol_sde = 1e-5
 
 #####################################
 ## Filenames
