@@ -48,10 +48,10 @@ Temp = 0.01
 
 key_seed = 0
 
-labels = [1,7]
-resolution = (10,10)
+labels = [7]
+resolution = (12,12)
 
-n_neighbour_couplings = 4
+n_neighbour_couplings = 3
 
 energy_fn_type = "6th_order_duffing_coupling"
 
