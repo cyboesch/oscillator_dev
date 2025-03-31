@@ -1,14 +1,14 @@
 {
   "name": "jax-env",
   "build": {
-    "dockerfile": "../Dockerfile"
+    "dockerfile": "../thermo-ai-docker/Dockerfile"
   },
   "features": {
     "ghcr.io/devcontainers/features/git:1": {}
   },
   "workspaceFolder": "/app",
   "mounts": [
-    "source=${localWorkspaceFolder}/../projects,target=/app,type=bind"
+    "source=${localWorkspaceFolder},target=/app,type=bind"
   ],
   "settings": {
     "terminal.integrated.defaultProfile.linux": "bash"
