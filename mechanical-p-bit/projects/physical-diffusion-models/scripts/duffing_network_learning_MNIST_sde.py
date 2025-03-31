@@ -97,7 +97,10 @@ print(f"Plot directory: {plot_folder}")
 ##################################### 
 import numpy as np
 # Load the saved .npy file
-data_np = np.load(f"../data/MNIST/mnist_labels_{labels}_resolution_{resolution}.npy")
+here = os.path.dirname(os.path.abspath(__file__))
+path_to_data = os.path.join(here, "..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}.npy")
+
+data_np = np.load(path_to_data)
 
 # Optionally convert to a JAX array
 images_flat_raw = jnp.array(data_np)
