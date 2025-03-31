@@ -192,7 +192,7 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, Temp=1.0, beta=1.0
         plt.hist(samples_t[:, i], bins=50, density=True, alpha=0.3, color=colors[i], label=label)
 
     # Add Gaussian N(0,sigma) for comparison
-    x = jnp.linspace(-2*sigma_final, 2*sigma_final, 1000)  # Adjust range as needed
+    x = jnp.linspace(-3*jnp.sqrt(Temp)*sigma_final, 3*jnp.sqrt(Temp)*sigma_final, 1000)  # Adjust range as needed
     gaussian_pdf = (1 / jnp.sqrt(2 * jnp.pi* Temp*sigma_final**2)) * jnp.exp(-0.5 * x**2/(Temp*sigma_final**2))
     plt.plot(x, gaussian_pdf, 'r--', linewidth=2, label=r'Gaussian N(0,$\sigma$)')
 
