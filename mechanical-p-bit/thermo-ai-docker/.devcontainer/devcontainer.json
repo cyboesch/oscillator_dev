@@ -3,6 +3,9 @@
   "build": {
     "dockerfile": "../Dockerfile"
   },
+  "features": {
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
   "workspaceFolder": "/app",
   "mounts": [
     "source=${localWorkspaceFolder}/../projects,target=/app,type=bind"
@@ -21,5 +24,4 @@
     }
   }
 }
-
-  
+ 
