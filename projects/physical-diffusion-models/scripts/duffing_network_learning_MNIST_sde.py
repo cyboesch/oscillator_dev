@@ -24,7 +24,7 @@ jax.config.update("jax_enable_x64", True)
 std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 100
+n_time_steps = 30
 t_forward = 5.
 sigma_forward = 1.
 exponential_time_pts = False
@@ -44,18 +44,16 @@ window_size=100
 tolerance=1e-6
 patience=50
 
-Temp = 0.1
+Temp = 0.01
 
 key_seed = 0
 
 labels = [1,7]
-resolution = (8,8)
+resolution = (10,10)
 
-n_neighbour_couplings = 3
+n_neighbour_couplings = 4
 
 energy_fn_type = "6th_order_duffing_coupling"
-
-problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
 
 # SDE parameters
 n_trajectories = 30
@@ -66,6 +64,7 @@ atol_sde = 1e-7
 ## Filenames
 #####################################
 
+problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
 data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}"
 
 optimization_folder = (
