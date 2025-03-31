@@ -5,7 +5,7 @@
   },
   "workspaceFolder": "/app",
   "mounts": [
-    "source=${localWorkspaceFolder}/../projects/physical-diffusion-models,target=/app,type=bind"
+    "source=${localWorkspaceFolder}/../projects,target=/app,type=bind"
   ],
   "settings": {
     "terminal.integrated.defaultProfile.linux": "bash"
