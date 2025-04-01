@@ -1,14 +1,14 @@
 {
-  "name": "jax-env",
+  "name": "docker_practice:latest",
   "build": {
-    "dockerfile": "../thermo-ai-docker/Dockerfile"
+    "dockerfile": "../Dockerfile"
   },
   "features": {
     "ghcr.io/devcontainers/features/git:1": {}
   },
-  "workspaceFolder": "/app",
+  "workspaceFolder": "/docker_practice",
   "mounts": [
-    "source=${localWorkspaceFolder},target=/app,type=bind"
+    "source=${localWorkspaceFolder},target=/docker_practice,type=bind"
   ],
   "settings": {
     "terminal.integrated.defaultProfile.linux": "bash"
