@@ -1,14 +1,14 @@
 {
-  "name": "docker_practice:latest",
+  "name": "docker_thermo_ai:latest",
   "build": {
     "dockerfile": "../Dockerfile"
   },
   "features": {
     "ghcr.io/devcontainers/features/git:1": {}
   },
-  "workspaceFolder": "/docker_practice",
+  "workspaceFolder": "/docker_thermo_ai",
   "mounts": [
-    "source=${localWorkspaceFolder},target=/docker_practice,type=bind"
+    "source=${localWorkspaceFolder},target=/docker_thermo_ai,type=bind"
   ],
   "settings": {
     "terminal.integrated.defaultProfile.linux": "bash"

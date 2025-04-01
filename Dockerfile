@@ -4,8 +4,8 @@ LABEL maintainer="cb7454@princeton.edu"
 
 COPY ./requirements.txt /requirements.txt
 
-WORKDIR /docker_practice
-ENV PYTHONPATH=/docker_practice:/docker_practice/
+WORKDIR /docker_thermo_ai
+ENV PYTHONPATH=/docker_thermo_ai:/docker_thermo_ai/
 
 # ubuntu dependencies
 RUN --mount=type=cache,target=/var/cache/apt \
