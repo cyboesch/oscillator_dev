@@ -7,6 +7,7 @@
     "ghcr.io/devcontainers/features/git:1": {}
   },
   "workspaceFolder": "/docker_thermo_ai",
+  "runArgs": ["--gpus", "all"],
   "mounts": [
     "source=${localWorkspaceFolder},target=/docker_thermo_ai,type=bind"
   ],
@@ -24,4 +25,3 @@
     }
   }
 }
- 
