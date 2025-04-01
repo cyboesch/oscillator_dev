@@ -24,7 +24,7 @@ jax.config.update("jax_enable_x64", True)
 std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 30
+n_time_steps = 3
 t_forward = 5.
 sigma_forward = 1.
 exponential_time_pts = False
@@ -48,15 +48,15 @@ Temp = 0.01
 
 key_seed = 0
 
-labels = [7]
-resolution = (12,12)
+labels = [1,7]
+resolution = (8,8)
 
-n_neighbour_couplings = 3
+n_neighbour_couplings = 2
 
 energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
-n_trajectories = 30
+n_trajectories = 10
 rtol_sde = 1e-7
 atol_sde = 1e-7
 
@@ -80,7 +80,8 @@ optimization_folder = (
            f"patience_{patience}")
 
 # Setup output directories
-base_dir = "../out/problems"
+here = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.join(here,"..", "out", "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
 
@@ -96,9 +97,7 @@ print(f"Plot directory: {plot_folder}")
 ##################################### 
 import numpy as np
 # Load the saved .npy file
-here = os.path.dirname(os.path.abspath(__file__))
-path_to_data = os.path.join(here, "..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}.npy")
-
+path_to_data = os.path.join(here,"..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}.npy")
 data_np = np.load(path_to_data)
 
 # Optionally convert to a JAX array
