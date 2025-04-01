@@ -1,0 +1,15 @@
+Bootstrap: docker
+From: nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
+
+%files
+    ./build/requirements.txt /requirements.txt
+
+%post
+    apt-get -y update
+    DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+        build-essential \
+        python3-pip
+
+    # install python dependencies
+    pip install -r /requirements.txt \
+    && rm -f /requirements.txt
