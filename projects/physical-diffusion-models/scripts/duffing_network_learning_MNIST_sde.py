@@ -48,10 +48,10 @@ Temp = 0.01
 
 key_seed = 0
 
-labels = [0]
+labels = [7]
 resolution = (10,10)
 
-n_neighbour_couplings = 2
+n_neighbour_couplings = 3
 
 energy_fn_type = "duffing_optomech_coupling"
 
