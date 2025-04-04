@@ -2,7 +2,7 @@ Bootstrap: docker
 From: nvidia/cuda:12.2.2-cudnn8-devel-ubuntu22.04
 
 %files
-    ./build/requirements.txt /requirements.txt
+    ./requirements.txt /requirements.txt
 
 %post
     apt-get -y update
