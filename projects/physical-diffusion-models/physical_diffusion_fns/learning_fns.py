@@ -203,7 +203,7 @@ def run_optimization(loss_fn_per_batch,
         
         if constraint_indices is not None:
             # Define a small positive constant epsilon to ensure strict positivity.
-            epsilon = 1e-3
+            epsilon = 100.0
             # Project the subset of parameters (e.g., those at index 0:10) to be at least epsilon:
             params = params.at[constraint_indices].set(jnp.maximum(params[constraint_indices], epsilon))
 
