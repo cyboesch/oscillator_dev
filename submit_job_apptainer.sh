@@ -16,5 +16,5 @@
 #SBATCH --output=project_space.out
 
 set -x
-apptainer exec --nv -e --pwd /project container_image.sif python3 workload.py
+apptainer exec --nv -e --pwd /project container_image.sif python3 projects/physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde.py
 exit 0
