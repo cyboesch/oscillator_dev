@@ -2,15 +2,18 @@
 FROM ubuntu:22.04
 LABEL maintainer="cb7454@princeton.edu"
 
+ENV VSCODE_INSTALL_DIR=/opt/VSCode-linux-x64
+ENV VSCODE_BINARY_URL="https://code.visualstudio.com/sha/download?build=stable&os=linux-x64"
 COPY ./requirements.txt /requirements.txt
 
-WORKDIR /docker_thermo_ai
-ENV PYTHONPATH=/docker_thermo_ai:/docker_thermo_ai/projects
+WORKDIR /workspace
+ENV PYTHONPATH=/workspace:/workspace/projects
 
 # ubuntu dependencies
 RUN --mount=type=cache,target=/var/cache/apt \
 apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
     build-essential \
+    curl \
     python3-pip
 
 RUN mkdir -p $VSCODE_INSTALL_DIR/data

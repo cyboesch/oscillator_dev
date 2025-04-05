@@ -1,3 +1,0 @@
-+ apptainer exec --nv -e --pwd /project container_image.sif python3 projects/physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde.py
-FATAL:   failed to set working directory: chdir /project: no such file or directory
-+ exit 0

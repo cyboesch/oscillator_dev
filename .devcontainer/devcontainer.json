@@ -1,7 +1,7 @@
 {
   "name": "docker_thermo_ai:latest",
   "build": {
-    "dockerfile": "../Dockerfile"
+    "dockerfile": "../container/Dockerfile"
   },
   "features": {
     "ghcr.io/devcontainers/features/git:1": {}
