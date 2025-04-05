@@ -23,4 +23,4 @@ docker-run-cpu:
 
 build-apptainer: docker-build
 	apptainer build ${IMAGE_NAME}.sif docker-daemon://${IMAGE_NAME}:latest
-	scp ${IMAGE_NAME}.sif ${IONIC_USER}@cycles.cs.princeton.edu:/n/fs/${PROJECT_SPACE}/
+	scp ${IMAGE_NAME}.sif ${IONIC_USER}@soak.cs.princeton.edu:/n/fs/${PROJECT_SPACE}/
