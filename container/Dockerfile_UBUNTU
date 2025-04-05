@@ -4,7 +4,8 @@ LABEL maintainer="cb7454@princeton.edu"
 
 ENV VSCODE_INSTALL_DIR=/opt/VSCode-linux-x64
 ENV VSCODE_BINARY_URL="https://code.visualstudio.com/sha/download?build=stable&os=linux-x64"
-COPY ./requirements.txt /requirements.txt
+ENV USER=cb7454
+ENV GROUP=cb7454
 
 WORKDIR /workspace
 ENV PYTHONPATH=/workspace:/workspace/projects
@@ -35,10 +36,34 @@ RUN --mount=type=cache,target=/var/cache/apt \
  && apt-get clean \
  && rm -rf /var/lib/apt/lists/*
 
+ # install vscode
 RUN mkdir -p $VSCODE_INSTALL_DIR/data
 RUN curl -L $VSCODE_BINARY_URL -o /tmp/vscode-linux-x64.tar.gz \
     && tar -zxvf /tmp/vscode-linux-x64.tar.gz --directory $VSCODE_INSTALL_DIR --strip-components=1
 ENV PATH=$VSCODE_INSTALL_DIR/bin:$PATH
+
+# add user to container so that I do not get the permission errors
+RUN addgroup --gid 1000 $USER \
+ && adduser --uid 1000 --ingroup $USER --home /home/$USER --shell /usr/bin/zsh --disabled-password --gecos "" $USER \
+ && chown -R $USER:$USER /home/$USER \
+ && chown -R $USER:$USER $VSCODE_INSTALL_DIR
+
+RUN curl -SsL https://github.com/boxboat/fixuid/releases/download/v0.6.0/fixuid-0.6.0-linux-amd64.tar.gz | \
+    tar -C /usr/local/bin -xzf - \
+ && chown root:root /usr/local/bin/fixuid \
+ && chmod 4755 /usr/local/bin/fixuid \
+ && mkdir -p /etc/fixuid \
+ && echo -e "user: $USER\ngroup: $USER" > /etc/fixuid/config.yml
+
+# Fix permissions while still root
+RUN chown -R $USER:$USER /home/$USER
+
+USER $USER:$USER
+
+COPY ./requirements.txt /requirements.txt
+
+ENV HOME=/home/$USER
+WORKDIR /home/$USER
 
 
 # install python dependencies
