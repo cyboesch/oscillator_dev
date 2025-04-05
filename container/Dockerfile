@@ -11,10 +11,29 @@ ENV PYTHONPATH=/workspace:/workspace/projects
 
 # ubuntu dependencies
 RUN --mount=type=cache,target=/var/cache/apt \
-apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --yes \
     build-essential \
     curl \
-    python3-pip
+    python3-pip \
+    libnss3 \
+    libatk1.0-0 \
+    libatk-bridge2.0-0 \
+    gmsh \
+    zsh \
+    libgtk-3-0 \
+    libx11-xcb1 \
+    libxcomposite1 \
+    libxcursor1 \
+    libxdamage1 \
+    libxrandr2 \
+    libasound2 \
+    libpangocairo-1.0-0 \
+    libcups2 \
+    libxss1 \
+    libxshmfence1 \
+    libgbm1 \
+ && apt-get clean \
+ && rm -rf /var/lib/apt/lists/*
 
 RUN mkdir -p $VSCODE_INSTALL_DIR/data
 RUN curl -L $VSCODE_BINARY_URL -o /tmp/vscode-linux-x64.tar.gz \
