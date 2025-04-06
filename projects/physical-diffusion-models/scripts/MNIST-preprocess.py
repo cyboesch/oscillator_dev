@@ -41,7 +41,6 @@ def load_and_preprocess_mnist(labels=None, resolution=(8, 8)):
     
     # Iterate over the dataset. Each image is originally 28x28x1
     for image, label in tfds.as_numpy(ds):
-        print(image.shape)
         # Normalize image to [0, 1]
         image = image.astype(np.float32) / 255.0
         
