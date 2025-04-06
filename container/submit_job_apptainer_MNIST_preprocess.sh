@@ -16,5 +16,5 @@
 #SBATCH --output=project_space.out
 
 set -x
-apptainer exec --nv -e --pwd /project container_image.sif python3 projects/physical-diffusion-models/scripts/MNIST-preprocess.py
+apptainer exec --nv -e --bind $(pwd)/../projects:/projects --pwd /projects container_image.sif python3 physical-diffusion-models/scripts/MNIST-preprocess.py
 exit 0
