@@ -2,7 +2,6 @@
 
 IMAGE_NAME := docker_thermo_ai
 PROJECT_SPACE := gen-osc
-IONIC_USER := cb7454
 DOCKER_USER := cb7454
 
 docker-build:
@@ -19,8 +18,3 @@ docker-run-MNISTlearning-gpu:
 
 docker-run-cpu:
 	docker run  -dt -v "$(shell pwd)":"/${IMAGE_NAME}" --name ${IMAGE_NAME}_cpu ${IMAGE_NAME}_cpu:latest /bin/bash
-
-
-build-apptainer: docker-build
-	apptainer build ${IMAGE_NAME}.sif docker-daemon://${IMAGE_NAME}:latest
-	scp ${IMAGE_NAME}.sif ${IONIC_USER}@soak.cs.princeton.edu:/n/fs/${PROJECT_SPACE}/

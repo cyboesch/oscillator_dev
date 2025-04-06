@@ -20,6 +20,6 @@ matplotlib==3.9.1.post1
 tensorflow-datasets==4.9.7
 tensorflow-metadata==1.16.1
 
-jupyterlab
-ipykernel
-notebook
+# jupyterlab
+# ipykernel
+# notebook
