@@ -21,7 +21,7 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.02
+std_of_added_noise = 0.04
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 30
@@ -39,32 +39,32 @@ print('forward_time_pts', forward_time_pts)
 training_method = "SM"
 learning_rate = 0.01
 n_epochs = 1000000
-batch_size = 2*128
+batch_size = 128
 window_size=100
 tolerance=1e-6
 patience=50
 
-Temp = 0.001
+Temp = 0.01
 
 key_seed = 0
 
 labels = [1,7]
 resolution = (10,10)
 
-n_neighbour_couplings = 4
+n_neighbour_couplings = 5
 
 energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 30
-rtol_sde = 1e-8
-atol_sde = 1e-8
+rtol_sde = 1e-7
+atol_sde = 1e-7
 
 #####################################
 ## Filenames
 #####################################
 
-problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}_higher_constraint_val"
+problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
 data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}"
 
 optimization_folder = (
@@ -201,12 +201,24 @@ else:
 # Optimization
 #####################################
 params_history_path = f"{output_dir}/params_history.npy"
-if os.path.exists(params_history_path):
-    # Load existing parameters
+time_index_path = f"{output_dir}/current_time_index.txt"
+
+# Check if we have existing parameters and time index
+if os.path.exists(params_history_path) and os.path.exists(time_index_path):
+    # Load existing parameters and time index
     print('Loading existing parameters from', params_history_path)
     params_history_all_t = jnp.load(params_history_path)
+    with open(time_index_path, 'r') as f:
+        start_t_idx = int(f.read())
+    print(f'Resuming from time index {start_t_idx}')
 else:
-    print('No existing parameters found, running optimization')
+    print('No existing parameters found, starting from beginning')
+    start_t_idx = 0
+    params_history_all_t = []
+    current_params = params_flattened_initial
+
+# Only run optimization if we haven't completed all time steps
+if start_t_idx < len(forward_time_pts):
     key, subkey = jr.split(key)
     
     samples_t = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey)
@@ -219,12 +231,11 @@ else:
     plot_steps = True  # Flag to control whether to plot during optimization
     plot_slice = 1     # Plot every nth step
 
-    params_history_all_t = []
-    current_params = params_flattened_initial
-
-    # Loop over time points
-    for t_idx, t_curr in enumerate(forward_time_pts):
+    # Loop over time points starting from where we left off
+    for t_idx in range(start_t_idx, len(forward_time_pts)):
+        t_curr = forward_time_pts[t_idx]
         print(f"t_idx: {t_idx}, t_curr: {t_curr}")
+        
         # Generate samples at current time
         key, subkey = jr.split(key)
         samples_t = sample_forward_process(
@@ -254,6 +265,11 @@ else:
         _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
         params_history_all_t.append(current_params)
         
+        # Save current state after each time step
+        jnp.save(params_history_path, jnp.array(params_history_all_t))
+        with open(time_index_path, 'w') as f:
+            f.write(str(t_idx + 1))  # Save next time index to resume from
+        
         if plot_steps:
             if t_idx % plot_slice == 0:
                 # Plot optimization progress
@@ -272,12 +288,10 @@ else:
                     path=output_dir,
                     param_names=params_names,
                 )
-            
-    # Convert params_history_all_t to array for easier analysis
-    params_history_all_t = jnp.array(params_history_all_t)
-    jnp.save(f"{output_dir}/params_history.npy", params_history_all_t)
-
+    
     print('Optimization complete; saved parameters to', output_dir)
+else:
+    print('Optimization already completed for all time steps')
 
 #####################################
 # Interpolating parameters as function of time
