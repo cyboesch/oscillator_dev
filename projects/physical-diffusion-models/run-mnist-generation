@@ -1,0 +1,10 @@
+#! /usr/bin/env bash 
+
+CONTAINER_RUNTIME="/usr/bin/apptainer exec" 
+IMAGE="/n/fs/gen-osc/oscillator_dev/container/container_image.sif"
+RUNTIME_ARGS="--pwd /projects --nv -e --bind /n/fs/gen-osc/oscillator_dev/projects:/projects"
+
+PAYLOAD="python3 physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde.py"
+
+set -ux; 
+${CONTAINER_RUNTIME} ${RUNTIME_ARGS} ${IMAGE} ${PAYLOAD} 

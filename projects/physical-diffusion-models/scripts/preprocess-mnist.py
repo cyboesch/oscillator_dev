@@ -59,7 +59,7 @@ def load_and_preprocess_mnist(labels=None, resolution=(8, 8)):
 
 # %%
 labels = [1,7]
-resolution = (12,12)
+resolution = (10,10)
 images, labels_array = load_and_preprocess_mnist(labels=labels, resolution=resolution)
 
 # Plot a few examples
@@ -100,6 +100,3 @@ print(f"Saved preprocessed data to: {str(save_path)}")
 
 
 # %%
-
-
-
