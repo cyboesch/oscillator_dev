@@ -1,5 +1,5 @@
 import jax
-from jax import grad, vmap, hessian
+from jax import grad, vmap,pmap, hessian
 import jax.numpy as jnp
 import jax.random as jr
 import diffrax
@@ -121,9 +121,127 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
 
 
 
-########################################################################################
+# #######################################################################################
 # Optimization
-########################################################################################
+# #######################################################################################
+
+
+# def run_optimization(loss_fn_per_batch, 
+#                                  params_initial, 
+#                                  samples, 
+#                                  gradient_fn_per_batch=None,
+#                                  mask=None, 
+#                                  key=jr.PRNGKey(0), 
+#                                  batch_size=128,
+#                                  learning_rate=0.001,
+#                                  n_epochs=20000, 
+#                                  maximize=False, 
+#                                  window_size=1000, 
+#                                  tolerance=1e-16, 
+#                                  patience=50,
+#                                  constraint_indices=None):
+#     """
+#     Runs gradient-based optimization using mini-batches with an adaptive learning rate schedule 
+#     (exponential decay) and an early stopping criterion based on the moving average of the loss.
+
+#     Args:
+#         loss_fn_per_batch: Callable that computes the loss for a batch of samples.
+#         params_initial: Initial parameters (any pytree).
+#         samples: Array of training samples.
+#         gradient_fn_per_batch: Optional callable to compute gradients.
+#         mask: Optional mask to apply to the gradients.
+#         key: PRNG key for random batch sampling.
+#         batch_size: Number of samples per optimization step.
+#         learning_rate: Initial learning rate for the Adam optimizer.
+#         n_epochs: Maximum number of optimization steps.
+#         maximize: Whether to maximize (rather than minimize) the loss.
+#         window_size: Number of recent epochs over which to compute the moving average.
+#         tolerance: Minimum improvement required in the moving average to reset the patience counter.
+#         patience: Number of consecutive windows without sufficient improvement before stopping.
+#         constraint_indices: Optional indices of parameters for which constraints are applied.
+
+#     Returns:
+#         params_history: List of parameter values at each optimization step.
+#         loss_history: List of loss values at each optimization step.
+#     """
+    
+#     # Define an exponential decay learning rate schedule
+#     lr_schedule = optax.exponential_decay(
+#         init_value=learning_rate,
+#         transition_steps=100,  # number of steps after which to decay
+#         decay_rate=0.99,
+#         staircase=True
+#     )
+    
+#     # Initialize the optimizer with the learning rate schedule
+#     optimizer = optax.adam(learning_rate=lr_schedule)
+#     opt_state = optimizer.init(params_initial)
+#     if mask is None:
+#         mask = jnp.ones(params_initial.shape[0])
+
+#     @partial(jax.jit, static_argnums=(3,))
+#     def training_step(params, opt_state, samples, batch_size, key):
+#         key, subkey = jr.split(key)
+#         n_samples = len(samples)
+#         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
+#         batch = samples[idx]
+#         # Define loss for current batch
+#         loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
+#         loss_val = loss_fn(params)
+#         # Compute gradients
+#         if gradient_fn_per_batch is None:
+#             dparams = jax.grad(loss_fn)(params)
+#         else:
+#             dparams = gradient_fn_per_batch(params, batch)
+#         if maximize:
+#             dparams = -dparams
+#         dparams = dparams * mask
+#         updates, opt_state = optimizer.update(dparams, opt_state)
+#         params = optax.apply_updates(params, updates)
+#         return params, opt_state, key, loss_val
+
+#     params_history = []
+#     loss_history = []
+#     best_moving_avg = jnp.inf
+#     patience_counter = 0
+
+#     params = params_initial
+
+#     for epoch in range(n_epochs):
+#         key, subkey = jr.split(key)
+#         params, opt_state, key, loss = training_step(params, opt_state, samples, batch_size, subkey)
+        
+#         if constraint_indices is not None:
+#             # Define a small positive constant epsilon to ensure strict positivity.
+#             epsilon = 0.01
+#             # Project the subset of parameters to be at least epsilon
+#             params = params.at[constraint_indices].set(jnp.maximum(params[constraint_indices], epsilon))
+
+#         params_history.append(params)
+#         loss_history.append(loss)
+
+#         # Check convergence if we have enough history
+#         if epoch % 100 == 0 and len(loss_history) >= window_size:
+#             current_moving_avg = jnp.mean(jnp.array(loss_history[-window_size:]))
+#             # Reset patience if the moving average improves by at least tolerance
+#             if current_moving_avg < best_moving_avg - tolerance:
+#                 best_moving_avg = current_moving_avg
+#                 patience_counter = 0
+#             else:
+#                 patience_counter += 1
+
+#         # Optionally print progress every 100 epochs
+#         if epoch % 100 == 0:
+#             print(f"Epoch {epoch} - Loss: {loss:.4f}")
+#         # Stop training if there hasn't been sufficient improvement over 'patience' consecutive windows
+#         if patience_counter >= patience:
+#             print(f"Convergence reached at epoch {epoch}. Stopping optimization.")
+#             break
+
+#     return params_history, loss_history
+
+
+
 
 def run_optimization(loss_fn_per_batch, 
                      params_initial, 
@@ -229,3 +347,100 @@ def run_optimization(loss_fn_per_batch,
             break
 
     return params_history, loss_history
+
+
+# def run_optimization(loss_fn_per_batch, 
+#                      params_initial, 
+#                      samples, 
+#                      gradient_fn_per_batch=None,
+#                      mask=None, 
+#                      key=jr.PRNGKey(0), 
+#                      batch_size=128,
+#                      learning_rate=0.001,
+#                      n_epochs=20000, 
+#                      maximize=False, 
+#                      window_size=1000, 
+#                      tolerance=1e-16, 
+#                      patience=50,
+#                      constraint_indices=None):
+#     """
+#     Runs gradient-based optimization using mini-batches with an early stopping criterion.
+#     """
+#     optimizer = optax.adam(learning_rate=learning_rate)
+#     opt_state = optimizer.init(params_initial)
+#     if mask is None:
+#         mask = jax.numpy.ones(params_initial.shape[0])
+
+#     # Define training step without jax.jit, as pmap will handle compilation
+#     def training_step(params, opt_state, batch, batch_size, key):
+#         key, subkey = jr.split(key)
+#         # Define loss for current batch; note: batch here is per-device (e.g. shape (local_batch_size, ...))
+#         loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
+#         loss_val = loss_fn(params)
+#         # Compute gradients
+#         if gradient_fn_per_batch is None:
+#             dparams = jax.grad(loss_fn)(params)
+#         else:
+#             dparams = gradient_fn_per_batch(params, batch)
+#         if maximize:
+#             dparams = -dparams
+#         dparams = dparams * mask
+#         updates, opt_state = optimizer.update(dparams, opt_state)
+#         params = optax.apply_updates(params, updates)
+#         return params, opt_state, key, loss_val
+
+#     # Get number of devices and determine per-device batch size
+#     num_devices = jax.local_device_count()  # e.g., 2
+#     local_batch_size = batch_size // num_devices
+
+#     # Replicate parameters and optimizer state across devices
+#     params = jax.device_put_replicated(params_initial, jax.devices())
+#     opt_state = jax.device_put_replicated(opt_state, jax.devices())
+
+#     # Wrap the training_step with pmap.
+#     p_training_step = jax.pmap(training_step, static_broadcasted_argnums=(3,))
+
+#     params_history = []
+#     loss_history = []
+#     best_moving_avg = jax.numpy.inf
+#     patience_counter = 0
+
+#     for epoch in range(n_epochs):
+#         key, subkey = jr.split(key)
+#         # Sample a global batch of size `batch_size`
+#         n_samples = len(samples)
+#         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
+#         global_batch = samples[idx]
+#         # Reshape the global batch to have shape (num_devices, local_batch_size, ...)
+#         sharded_batch = global_batch.reshape((num_devices, local_batch_size, *global_batch.shape[1:]))
+        
+#         # Split the key for each device
+#         device_keys = jr.split(key, num_devices)
+#         params, opt_state, device_keys, loss = p_training_step(params, opt_state, sharded_batch, local_batch_size, device_keys)
+        
+#         # Optionally, if you need to enforce constraints after each update
+#         if constraint_indices is not None:
+#             epsilon = 0.01
+#             params = params.at[:, constraint_indices].set(jax.numpy.maximum(params[:, constraint_indices], epsilon))
+
+#         # Here, loss is per-device; you might average or sum them as needed.
+#         loss_val = jax.numpy.mean(loss)
+#         loss_history.append(loss_val)
+#         params_history.append(params)
+
+#         # Convergence check (using a moving average over epochs)
+#         if epoch % 100 == 0 and len(loss_history) >= window_size:
+#             current_moving_avg = jax.numpy.mean(jax.numpy.array(loss_history[-window_size:]))
+#             if current_moving_avg < best_moving_avg - tolerance:
+#                 best_moving_avg = current_moving_avg
+#                 patience_counter = 0
+#             else:
+#                 patience_counter += 1
+
+#         if epoch % 100 == 0:
+#             print(f"Epoch {epoch} - Loss: {loss_val:.4f}")
+#         if patience_counter >= patience:
+#             print(f"Convergence reached at epoch {epoch}. Stopping optimization.")
+#             break
+
+#     return params_history, loss_history
