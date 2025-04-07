@@ -38,11 +38,11 @@ print('forward_time_pts', forward_time_pts)
 # Optimization parameters
 training_method = "SM"
 learning_rate = 0.01
-n_epochs = 1000000
-batch_size = 128
+n_epochs = 10000
+batch_size = 6*128
 window_size=100
-tolerance=1e-6
-patience=50
+tolerance=1e-3
+patience=10
 
 Temp = 0.01
 
