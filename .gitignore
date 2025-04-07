@@ -16,6 +16,7 @@ mechanical-p-bit/out/*
 
 out/
 data/
+_data/
 jax-env-thermo/
 
 # Distribution / packaging
