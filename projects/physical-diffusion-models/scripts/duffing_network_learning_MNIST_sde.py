@@ -21,11 +21,11 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.04
+std_of_added_noise = 0.05
 additional_rescaling = 1.
 # Forward process parameters
-n_time_steps = 30
-t_forward = 10.
+n_time_steps = 15
+t_forward = 4.
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -48,17 +48,17 @@ Temp = 0.01
 
 key_seed = 0
 
-labels = [1,7]
+labels = [0,1]
 resolution = (10,10)
 
-n_neighbour_couplings = 3
+n_neighbour_couplings = 6
 
 energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
-n_trajectories = 30
-rtol_sde = 1e-7
-atol_sde = 1e-7
+n_trajectories = 100
+rtol_sde = 1e-6
+atol_sde = 1e-8
 
 #####################################
 ## Filenames
