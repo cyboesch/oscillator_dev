@@ -51,7 +51,7 @@ key_seed = 0
 labels = [0,1]
 resolution = (10,10)
 
-n_neighbour_couplings = 6
+n_neighbour_couplings = 4
 
 energy_fn_type = "6th_order_duffing_coupling"
 
