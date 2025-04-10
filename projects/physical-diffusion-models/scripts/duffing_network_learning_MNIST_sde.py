@@ -21,7 +21,7 @@ jax.config.update("jax_enable_x64", True)
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.05
+std_of_added_noise = 0.02
 additional_rescaling = 1.
 # Forward process parameters
 n_time_steps = 15
@@ -51,9 +51,9 @@ key_seed = 0
 labels = [0,1]
 resolution = (10,10)
 
-n_neighbour_couplings = 4
+n_neighbour_couplings = 3
 
-energy_fn_type = "6th_order_duffing_coupling"
+energy_fn_type = "duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
