@@ -1,3 +1,4 @@
+print("Script started.")
 import sys
 import os
 # Add the parent directory to Python path

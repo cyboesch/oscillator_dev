@@ -176,3 +176,4 @@ cython_debug/
 
 *.sif
 *.out
+*.err
