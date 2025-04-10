@@ -58,7 +58,7 @@ energy_fn_type = "duffing_coupling"
 # SDE parameters
 n_trajectories = 100
 rtol_sde = 1e-6
-atol_sde = 1e-9
+atol_sde = 1e-8
 
 #####################################
 ## Filenames
