@@ -417,5 +417,5 @@ plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
 plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_sde_{rtol_sde}_atol_sde_{atol_sde}_n_samples_{n_trajectories}.png')
-plt.show()
+plt.close()
 
