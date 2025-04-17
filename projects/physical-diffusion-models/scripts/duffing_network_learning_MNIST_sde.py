@@ -291,8 +291,10 @@ if start_t_idx < len(forward_time_pts):
                 )
     
     print('Optimization complete; saved parameters to', output_dir)
+    params_history_all_t = jnp.array(params_history_all_t)
 else:
     print('Optimization already completed for all time steps')
+    
 
 #####################################
 # Interpolating parameters as function of time
