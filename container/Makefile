@@ -16,5 +16,8 @@ docker-run:
 docker-run-MNISTlearning-gpu:
 	docker exec -it ${IMAGE_NAME} python3 projects/physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde.py
 
+docker-run-MNISTlearning-equillibrium-sampling-gpu:
+	docker exec -it ${IMAGE_NAME} python3 projects/physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde_equillibirum_sampling.py
+
 docker-run-cpu:
 	docker run  -dt -v "$(shell pwd)":"/${IMAGE_NAME}" --name ${IMAGE_NAME}_cpu ${IMAGE_NAME}_cpu:latest /bin/bash
