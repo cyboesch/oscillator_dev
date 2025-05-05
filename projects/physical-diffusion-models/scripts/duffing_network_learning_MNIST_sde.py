@@ -291,8 +291,10 @@ if start_t_idx < len(forward_time_pts):
                 )
     
     print('Optimization complete; saved parameters to', output_dir)
+    params_history_all_t = jnp.array(params_history_all_t)
 else:
     print('Optimization already completed for all time steps')
+    
 
 #####################################
 # Interpolating parameters as function of time
@@ -417,5 +419,5 @@ plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
 plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_sde_{rtol_sde}_atol_sde_{atol_sde}_n_samples_{n_trajectories}.png')
-plt.show()
+plt.close()
 

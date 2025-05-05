@@ -160,7 +160,7 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
         plt.savefig(path + f"/parameter_opt_evolution_at_timeidx_{time_index}_time_{time:.5f}.png", dpi=300, bbox_inches='tight')
     if plot_show:
         plt.show()
-
+    plt.close()
     return best_loss, best_params, best_idx
 
 ########################################################################################
@@ -213,7 +213,7 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, Temp=1.0, beta=1.0
         plt.savefig(path + f"/final_forward_distribution_sigma_{sigma_final:.2f}_beta_{beta:.2f}.png", dpi=300, bbox_inches='tight')
     if plot_show:
         plt.show()
-    
+    plt.close()
 ########################################################################################
 # Plotting parameter as function of time
 ########################################################################################  
@@ -285,7 +285,7 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
         plt.savefig(f"{path}/parameter_evolution_over_time.png", dpi=300, bbox_inches='tight')
     if plot_show:
         plt.show()
-
+    plt.close()
 ########################################################################################
 # Plotting connectivity
 ########################################################################################   
@@ -314,7 +314,7 @@ def visualize_connectivity(connectivity, grid_size_x=8, grid_size_y=8):
     plt.axis('equal')
     plt.title(f'2D Grid Connectivity ({grid_size_x}x{grid_size_y})')
     plt.show()
-    
+    plt.close()
 
 
 def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8, grid_size_y=8, n_neighbour_couplings=1, save_fig=False, path=None, plot_show=False):
@@ -400,4 +400,5 @@ def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8,
         plt.show()
     if save_fig and path is not None:
         plt.savefig(path + f"/connectivity_n_neighbour_couplings_{n_neighbour_couplings}.png", dpi=300, bbox_inches='tight')
+    plt.close()
     
