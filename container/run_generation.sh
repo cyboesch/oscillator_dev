@@ -5,12 +5,12 @@
 #SBATCH --error=MNIST_generation_%j.err
 #SBATCH --mail-user=cb7454@princeton.edu
 #SBATCH --mail-type=end
-#SBATCH --time=10:00:00
+#SBATCH --time=40:00:00
 #SBATCH --partition=lips
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 
 echo "Starting job..."
 echo "Hostname: $(hostname)"
