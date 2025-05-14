@@ -6,13 +6,15 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 import jax
+print(jax.local_devices())  # should list 4 GPUs
+print(jax.local_device_count())  # should print 4
 from jax import flatten_util, vmap 
 import jax.numpy as jnp
 import jax.random as jr
 import os
 import matplotlib.pyplot as plt
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, get_best_params, smooth_parameters, interpolate_parameters, sample_total_distribution
-from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
+from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, run_optimization_multi_gpu, run_optimization_pjit
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
 from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
@@ -40,7 +42,7 @@ print('forward_time_pts', forward_time_pts)
 training_method = "SM"
 learning_rate = 0.01
 n_epochs = 10000
-batch_size = 8*128
+batch_size = 128
 window_size=100
 tolerance=1e-4
 patience=10
@@ -50,7 +52,7 @@ Temp = 0.1
 key_seed = 0
 
 labels = [0,1]
-resolution = (12,12)
+resolution = (10,10)
 
 n_neighbour_couplings = 3
 
@@ -58,8 +60,8 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
-rtol_sde = 1e-7
-atol_sde = 1e-9
+rtol_sde = 1e-5
+atol_sde = 1e-7
 
 #####################################
 ## Filenames
@@ -246,7 +248,7 @@ if start_t_idx < len(forward_time_pts):
         # Perform optimization starting from previous best parameters
         key, subkey = jr.split(key)
         
-        params_history, loss_history = run_optimization(
+        params_history, loss_history = run_optimization_multi_gpu(
             loss_fn_per_batch=loss_fn_per_batch,
             params_initial=current_params,
             samples=samples_t,
