@@ -7,6 +7,7 @@ import jax.random as jr
 import diffrax
 from diffrax import ControlTerm, MultiTerm, ODETerm
 from functools import partial
+from jax.experimental.pjit import pjit
 import optax
 from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE
 
@@ -457,14 +458,15 @@ def run_optimization_pjit(
         loss_fn_per_batch,                    # params, batch -> scalar loss
         params_initial,                       # PyTree of arrays  (leading axis = shardable)
         samples,                              # (N, ...) full dataset (on host)
-        grad_fn_per_batch=None,               # optional analytic grads
+        gradient_fn_per_batch=None,  
+        mask=None,
         key=jr.PRNGKey(0),
         batch_size=128,
         learning_rate=1e-3,
         n_epochs=20_000,
         maximize=False,
         window_size=1_000,
-        tol=1e-16,
+        tolerance=1e-16,
         patience=50,
         constraint_indices=None               # optional positivity constraint
     ):
@@ -482,11 +484,24 @@ def run_optimization_pjit(
     # helper to replicate if axis too small
     def maybe_shard(x):
         if x.ndim and x.shape[0] >= n_devices:
+            # 1. split leading axis evenly across devices
+            per_dev = [x[i::n_devices] for i in range(n_devices)]  # list length = n_devices
+
+            # 2. place each slice onto its target GPU
+            per_dev = [
+                jax.device_put(arr, device=devices[i])   # NOW each slice lives on cuda:0, cuda:1, ...
+                for i, arr in enumerate(per_dev)
+            ]
+
+            # 3. build a sharded array whose sharding matches param_ps
             return jax.make_array_from_single_device_arrays(
-                x.shape, jax.sharding.NamedSharding(mesh, param_ps),
-                [x[i::n_devices] for i in range(n_devices)]
+                x.shape,
+                jax.sharding.NamedSharding(mesh, param_ps),
+                per_dev,
             )
-        return jax.device_put_replicated(x, devices)
+        else:
+            # small leading axis → just replicate
+            return jax.device_put_replicated(x, devices)
 
     params = jax.tree_map(maybe_shard, params_initial)
 
@@ -499,15 +514,15 @@ def run_optimization_pjit(
     # ----------------------------------------------------------------------
     # 2.  pjit‑compiled step -------------------------------------------------
     # ----------------------------------------------------------------------
-    if grad_fn_per_batch is None:
+    if gradient_fn_per_batch is None:
         val_and_grad = jax.value_and_grad(loss_fn_per_batch)
     else:
         def val_and_grad(p, b):
-            return loss_fn_per_batch(p, b), grad_fn_per_batch(p, b)
+            return loss_fn_per_batch(p, b), gradient_fn_per_batch(p, b)
 
-    @pjit.pjit(
-        in_shardings =(param_ps, batch_ps, None, None, None),
-        out_shardings=(param_ps, P(),      param_ps, P())  # grads may be sharded
+    @pjit(
+    in_shardings=(param_ps, batch_ps, None, None, None),
+    out_shardings=(param_ps, P(), param_ps, P()),
     )
     def train_step(params, batch, opt_state, mask, key):
         loss, grads = val_and_grad(params, batch)
@@ -547,7 +562,7 @@ def run_optimization_pjit(
         # simple moving‑average early‑stop
         if epoch % 100 == 0 and len(loss_history) >= window_size:
             mov = jnp.mean(jnp.array(loss_history[-window_size:]))
-            if mov < best - tol:
+            if mov < best - tolerance:
                 best, wait = mov, 0
             else:
                 wait += 1
