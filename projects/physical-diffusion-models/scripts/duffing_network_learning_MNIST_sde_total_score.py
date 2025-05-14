@@ -13,7 +13,7 @@ import jax.numpy as jnp
 import jax.random as jr
 import os
 import matplotlib.pyplot as plt
-from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, get_best_params, smooth_parameters, interpolate_parameters, sample_total_distribution
+from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, get_best_params, smooth_parameters, interpolate_parameters, sample_total_distribution,sample_forward_process
 from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, run_optimization_multi_gpu, run_optimization_pjit
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
 from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
@@ -47,7 +47,7 @@ window_size=100
 tolerance=1e-4
 patience=10
 
-Temp = 0.1
+Temp = 1.
 
 key_seed = 0
 
@@ -60,8 +60,8 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
-rtol_sde = 1e-5
-atol_sde = 1e-7
+rtol_sde = 1e-3
+atol_sde = 1e-4
 
 #####################################
 ## Filenames
@@ -117,6 +117,7 @@ images_flat_true = images_flat_raw + gaussian_noise
 # Normalize the data
 samples_target_unscaled, mean_MNIST, std_MNIST = normalize_samples(images_flat_true)
 samples_target = samples_target_unscaled*additional_rescaling
+samples_target = samples_target[::1000]
 
 
 ##################################### 
@@ -224,8 +225,10 @@ else:
 if start_t_idx < len(forward_time_pts):
     key, subkey = jr.split(key)
     
-    samples_t = sample_total_distribution(t_forward, n_samples, D=Temp, sigma_final=1/jnp.sqrt(Temp), samples0=samples_target, key=subkey, k=1, beta= 1)
+    samples_t = sample_total_distribution(0, n_samples, D=Temp, sigma_final=1/jnp.sqrt(Temp), samples0=samples_target, key=subkey, k=1, beta= 1)
+    # samples_t = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=1/jnp.sqrt(Temp), samples0=samples_target, key=subkey, beta= 1)
     plot_forward_marginals(samples_t, t_forward, sigma_forward, Temp=Temp, path=plot_folder, save_fig=True, fontsize=16, plot_show=True)
+
     
     # Setup optimization parameters
     mask = jnp.ones(params_flattened_initial.shape[0])
@@ -241,14 +244,15 @@ if start_t_idx < len(forward_time_pts):
         
         # Generate samples at current time
         key, subkey = jr.split(key)
-        samples_t = sample_total_distribution(
-            t_curr, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey, k=1, beta= 1
-        )
+        with jax.disable_jit():
+            samples_t = sample_total_distribution(
+                t_curr, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey, k=1, beta= 1
+            )
         
         # Perform optimization starting from previous best parameters
         key, subkey = jr.split(key)
         
-        params_history, loss_history = run_optimization_multi_gpu(
+        params_history, loss_history = run_optimization(
             loss_fn_per_batch=loss_fn_per_batch,
             params_initial=current_params,
             samples=samples_t,
