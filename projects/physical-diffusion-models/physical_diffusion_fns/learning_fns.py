@@ -1,5 +1,7 @@
 import jax
 from jax import grad, vmap,pmap, hessian
+from jax.sharding import Mesh, PartitionSpec as P
+from jax.experimental import pjit
 import jax.numpy as jnp
 import jax.random as jr
 import diffrax
@@ -349,98 +351,217 @@ def run_optimization(loss_fn_per_batch,
     return params_history, loss_history
 
 
-# def run_optimization(loss_fn_per_batch, 
-#                      params_initial, 
-#                      samples, 
-#                      gradient_fn_per_batch=None,
-#                      mask=None, 
-#                      key=jr.PRNGKey(0), 
-#                      batch_size=128,
-#                      learning_rate=0.001,
-#                      n_epochs=20000, 
-#                      maximize=False, 
-#                      window_size=1000, 
-#                      tolerance=1e-16, 
-#                      patience=50,
-#                      constraint_indices=None):
-#     """
-#     Runs gradient-based optimization using mini-batches with an early stopping criterion.
-#     """
-#     optimizer = optax.adam(learning_rate=learning_rate)
-#     opt_state = optimizer.init(params_initial)
-#     if mask is None:
-#         mask = jax.numpy.ones(params_initial.shape[0])
+def run_optimization_multi_gpu(loss_fn_per_batch, 
+                     params_initial, 
+                     samples, 
+                     gradient_fn_per_batch=None,
+                     mask=None, 
+                     key=jr.PRNGKey(0), 
+                     batch_size=128,
+                     learning_rate=0.001,
+                     n_epochs=20000, 
+                     maximize=False, 
+                     window_size=1000, 
+                     tolerance=1e-16, 
+                     patience=50,
+                     constraint_indices=None):
+    """
+    Runs gradient-based optimization using mini-batches with an early stopping criterion.
+    """
+    optimizer = optax.adam(learning_rate=learning_rate)
+    opt_state = optimizer.init(params_initial)
+    if mask is None:
+        mask = jax.numpy.ones(params_initial.shape[0])
 
-#     # Define training step without jax.jit, as pmap will handle compilation
-#     def training_step(params, opt_state, batch, batch_size, key):
-#         key, subkey = jr.split(key)
-#         # Define loss for current batch; note: batch here is per-device (e.g. shape (local_batch_size, ...))
-#         loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
-#         loss_val = loss_fn(params)
-#         # Compute gradients
-#         if gradient_fn_per_batch is None:
-#             dparams = jax.grad(loss_fn)(params)
-#         else:
-#             dparams = gradient_fn_per_batch(params, batch)
-#         if maximize:
-#             dparams = -dparams
-#         dparams = dparams * mask
-#         updates, opt_state = optimizer.update(dparams, opt_state)
-#         params = optax.apply_updates(params, updates)
-#         return params, opt_state, key, loss_val
+    # Define training step without jax.jit, as pmap will handle compilation
+    def training_step(params, opt_state, batch, batch_size, key):
+        key, subkey = jr.split(key)
+        # Define loss for current batch; note: batch here is per-device (e.g. shape (local_batch_size, ...))
+        loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
+        loss_val = loss_fn(params)
+        # Compute gradients
+        if gradient_fn_per_batch is None:
+            dparams = jax.grad(loss_fn)(params)
+        else:
+            dparams = gradient_fn_per_batch(params, batch)
+        if maximize:
+            dparams = -dparams
+        dparams = dparams * mask
+        updates, opt_state = optimizer.update(dparams, opt_state)
+        params = optax.apply_updates(params, updates)
+        return params, opt_state, key, loss_val
 
-#     # Get number of devices and determine per-device batch size
-#     num_devices = jax.local_device_count()  # e.g., 2
-#     local_batch_size = batch_size // num_devices
+    # Get number of devices and determine per-device batch size
+    num_devices = jax.local_device_count()  # e.g., 2
+    local_batch_size = batch_size // num_devices
 
-#     # Replicate parameters and optimizer state across devices
-#     params = jax.device_put_replicated(params_initial, jax.devices())
-#     opt_state = jax.device_put_replicated(opt_state, jax.devices())
+    # Replicate parameters and optimizer state across devices
+    params = jax.device_put_replicated(params_initial, jax.devices())
+    opt_state = jax.device_put_replicated(opt_state, jax.devices())
 
-#     # Wrap the training_step with pmap.
-#     p_training_step = jax.pmap(training_step, static_broadcasted_argnums=(3,))
+    # Wrap the training_step with pmap.
+    p_training_step = jax.pmap(training_step, static_broadcasted_argnums=(3,))
 
-#     params_history = []
-#     loss_history = []
-#     best_moving_avg = jax.numpy.inf
-#     patience_counter = 0
+    params_history = []
+    loss_history = []
+    best_moving_avg = jax.numpy.inf
+    patience_counter = 0
 
-#     for epoch in range(n_epochs):
-#         key, subkey = jr.split(key)
-#         # Sample a global batch of size `batch_size`
-#         n_samples = len(samples)
-#         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
-#         global_batch = samples[idx]
-#         # Reshape the global batch to have shape (num_devices, local_batch_size, ...)
-#         sharded_batch = global_batch.reshape((num_devices, local_batch_size, *global_batch.shape[1:]))
+    for epoch in range(n_epochs):
+        key, subkey = jr.split(key)
+        # Sample a global batch of size `batch_size`
+        n_samples = len(samples)
+        idx = jr.randint(subkey, (batch_size,), 0, n_samples)
+        global_batch = samples[idx]
+        # Reshape the global batch to have shape (num_devices, local_batch_size, ...)
+        sharded_batch = global_batch.reshape((num_devices, local_batch_size, *global_batch.shape[1:]))
         
-#         # Split the key for each device
-#         device_keys = jr.split(key, num_devices)
-#         params, opt_state, device_keys, loss = p_training_step(params, opt_state, sharded_batch, local_batch_size, device_keys)
+        # Split the key for each device
+        device_keys = jr.split(key, num_devices)
+        params, opt_state, device_keys, loss = p_training_step(params, opt_state, sharded_batch, local_batch_size, device_keys)
         
-#         # Optionally, if you need to enforce constraints after each update
-#         if constraint_indices is not None:
-#             epsilon = 0.01
-#             params = params.at[:, constraint_indices].set(jax.numpy.maximum(params[:, constraint_indices], epsilon))
+        # Optionally, if you need to enforce constraints after each update
+        if constraint_indices is not None:
+            epsilon = 0.01
+            params = params.at[:, constraint_indices].set(jax.numpy.maximum(params[:, constraint_indices], epsilon))
 
-#         # Here, loss is per-device; you might average or sum them as needed.
-#         loss_val = jax.numpy.mean(loss)
-#         loss_history.append(loss_val)
-#         params_history.append(params)
+        # Here, loss is per-device; you might average or sum them as needed.
+        loss_val = jax.numpy.mean(loss)
+        loss_history.append(loss_val)
+        params_history.append(params)
 
-#         # Convergence check (using a moving average over epochs)
-#         if epoch % 100 == 0 and len(loss_history) >= window_size:
-#             current_moving_avg = jax.numpy.mean(jax.numpy.array(loss_history[-window_size:]))
-#             if current_moving_avg < best_moving_avg - tolerance:
-#                 best_moving_avg = current_moving_avg
-#                 patience_counter = 0
-#             else:
-#                 patience_counter += 1
+        # Convergence check (using a moving average over epochs)
+        if epoch % 100 == 0 and len(loss_history) >= window_size:
+            current_moving_avg = jax.numpy.mean(jax.numpy.array(loss_history[-window_size:]))
+            if current_moving_avg < best_moving_avg - tolerance:
+                best_moving_avg = current_moving_avg
+                patience_counter = 0
+            else:
+                patience_counter += 1
 
-#         if epoch % 100 == 0:
-#             print(f"Epoch {epoch} - Loss: {loss_val:.4f}")
-#         if patience_counter >= patience:
-#             print(f"Convergence reached at epoch {epoch}. Stopping optimization.")
-#             break
+        if epoch % 100 == 0:
+            print(f"Epoch {epoch} - Loss: {loss_val:.4f}")
+        if patience_counter >= patience:
+            print(f"Convergence reached at epoch {epoch}. Stopping optimization.")
+            break
 
-#     return params_history, loss_history
+    return params_history, loss_history
+
+
+
+
+# --------------------------------------------------------------------------
+# main function
+# --------------------------------------------------------------------------
+def run_optimization_pjit(
+        loss_fn_per_batch,                    # params, batch -> scalar loss
+        params_initial,                       # PyTree of arrays  (leading axis = shardable)
+        samples,                              # (N, ...) full dataset (on host)
+        grad_fn_per_batch=None,               # optional analytic grads
+        key=jr.PRNGKey(0),
+        batch_size=128,
+        learning_rate=1e-3,
+        n_epochs=20_000,
+        maximize=False,
+        window_size=1_000,
+        tol=1e-16,
+        patience=50,
+        constraint_indices=None               # optional positivity constraint
+    ):
+    """Adam optimisation with parameter *and* batch sharding via `pjit`."""
+
+    # ----------------------------------------------------------------------
+    # 0.  build 1‑D mesh over all local GPUs
+    # ----------------------------------------------------------------------
+    devices   = jax.devices()
+    n_devices = len(devices)
+    mesh      = Mesh(devices, ('dp',))        # single axis called 'dp'
+    param_ps  = P('dp',)                      # leading axis sharded
+    batch_ps  = P('dp',)                      # ditto for batch
+    
+    # helper to replicate if axis too small
+    def maybe_shard(x):
+        if x.ndim and x.shape[0] >= n_devices:
+            return jax.make_array_from_single_device_arrays(
+                x.shape, jax.sharding.NamedSharding(mesh, param_ps),
+                [x[i::n_devices] for i in range(n_devices)]
+            )
+        return jax.device_put_replicated(x, devices)
+
+    params = jax.tree_map(maybe_shard, params_initial)
+
+    # ----------------------------------------------------------------------
+    # 1.  optimiser state
+    # ----------------------------------------------------------------------
+    opt      = optax.adam(learning_rate)
+    opt_state = jax.device_put_replicated(opt.init(params_initial), devices)
+
+    # ----------------------------------------------------------------------
+    # 2.  pjit‑compiled step -------------------------------------------------
+    # ----------------------------------------------------------------------
+    if grad_fn_per_batch is None:
+        val_and_grad = jax.value_and_grad(loss_fn_per_batch)
+    else:
+        def val_and_grad(p, b):
+            return loss_fn_per_batch(p, b), grad_fn_per_batch(p, b)
+
+    @pjit.pjit(
+        in_shardings =(param_ps, batch_ps, None, None, None),
+        out_shardings=(param_ps, P(),      param_ps, P())  # grads may be sharded
+    )
+    def train_step(params, batch, opt_state, mask, key):
+        loss, grads = val_and_grad(params, batch)
+        if maximize:
+            grads = jax.tree_map(lambda g: -g, grads)
+        grads = jax.tree_map(lambda g, m: g * m, grads, mask)
+        updates, opt_state = opt.update(grads, opt_state, params)
+        params = optax.apply_updates(params, updates)
+        return params, loss, opt_state, key
+
+    # ----------------------------------------------------------------------
+    # 3.  main loop ----------------------------------------------------------
+    # ----------------------------------------------------------------------
+    mask   = jnp.ones(params_initial.shape[0])
+    best   = jnp.inf
+    wait   = 0
+    loss_history = []
+
+    for epoch in range(n_epochs):
+        key, sub = jr.split(key)
+        idx      = jr.randint(sub, (batch_size,), 0, len(samples))
+        global_b = samples[idx]
+
+        # batch must be (n_devices, local_batch, ...)
+        local_bs = batch_size // n_devices
+        batch    = global_b.reshape(n_devices, local_bs, *global_b.shape[1:])
+        batch    = jax.device_put_sharded(list(batch), devices)
+
+        params, loss, opt_state, key = train_step(params, batch, opt_state,
+                                                  mask, key)
+        loss   = jax.device_get(loss).mean()
+        loss_history.append(loss)
+
+        if epoch % 100 == 0:
+            print(f"epoch {epoch:>6d}  loss={loss:.4e}")
+
+        # simple moving‑average early‑stop
+        if epoch % 100 == 0 and len(loss_history) >= window_size:
+            mov = jnp.mean(jnp.array(loss_history[-window_size:]))
+            if mov < best - tol:
+                best, wait = mov, 0
+            else:
+                wait += 1
+            if wait >= patience:
+                print(f"stop @ epoch {epoch}")
+                break
+
+        # optional positivity constraint
+        if constraint_indices is not None:
+            eps = 1e-2
+            def clip_fn(p):
+                p = p.at[constraint_indices].set(jnp.maximum(
+                        p[constraint_indices], eps))
+                return p
+            params = jax.tree_map(clip_fn, params)
+
+    return params, loss_history
