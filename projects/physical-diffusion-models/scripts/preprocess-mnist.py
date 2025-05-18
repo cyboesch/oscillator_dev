@@ -12,7 +12,7 @@ import os
 
 print("GPUs:", tf.config.list_physical_devices('GPU'))
 
-def load_and_preprocess_mnist(labels=None, resolution=(8, 8)):
+def load_and_preprocess_mnist(labels=None, resolution=(8, 8), step=1):
     """Load and preprocess MNIST dataset for specified labels and resolution.
     
     Args:
@@ -34,6 +34,10 @@ def load_and_preprocess_mnist(labels=None, resolution=(8, 8)):
         if not isinstance(labels, (list, tuple)):
             labels = [labels]  # Convert single label to list
         ds = ds.filter(lambda _, label: tf.reduce_any([tf.equal(label, l) for l in labels]))
+        
+    # Add step=10 to take every 10th image
+    ds = ds.enumerate().filter(lambda idx, _: idx % step == 0).map(lambda _, x: x)
+    
     images_list = []
     labels_list = []
     
@@ -59,8 +63,9 @@ def load_and_preprocess_mnist(labels=None, resolution=(8, 8)):
 
 # %%
 labels = [0,1]
-resolution = (12,12)
-images, labels_array = load_and_preprocess_mnist(labels=labels, resolution=resolution)
+resolution = (10,10)
+step = 10
+images, labels_array = load_and_preprocess_mnist(labels=labels, resolution=resolution, step=step)
 
 # Plot a few examples
 num_examples = 10  # number of examples to display
@@ -80,7 +85,7 @@ plt.tight_layout()
 # plt.show()
 
 # %%
-specifics = f"labels_{labels}_resolution_{resolution}"
+specifics = f"labels_{labels}_resolution_{resolution}_step_{step}"
 
 # Create the target directory if it doesn't exist.
 PROJECT_DIRECTORY: Path = Path(__file__).parent.parent.absolute()

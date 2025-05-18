@@ -41,8 +41,8 @@ print('forward_time_pts', forward_time_pts)
 # Optimization parameters
 training_method = "SM"
 learning_rate = 0.01
-n_epochs = 10000
-batch_size = 128
+n_epochs = 1000000
+batch_size = 2*64
 window_size=100
 tolerance=1e-4
 patience=10
@@ -53,6 +53,7 @@ key_seed = 0
 
 labels = [0,1]
 resolution = (10,10)
+step = 10
 
 n_neighbour_couplings = 3
 
@@ -60,8 +61,8 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
-rtol_sde = 1e-3
-atol_sde = 1e-4
+rtol_sde = 1e-5
+atol_sde = 1e-7
 
 #####################################
 ## Filenames
@@ -100,7 +101,7 @@ print(f"Plot directory: {plot_folder}")
 ##################################### 
 import numpy as np
 # Load the saved .npy file
-path_to_data = os.path.join(here,"..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}.npy")
+path_to_data = os.path.join(here,"..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}_step_{step}.npy")
 data_np = np.load(path_to_data)
 
 # Optionally convert to a JAX array
@@ -117,7 +118,6 @@ images_flat_true = images_flat_raw + gaussian_noise
 # Normalize the data
 samples_target_unscaled, mean_MNIST, std_MNIST = normalize_samples(images_flat_true)
 samples_target = samples_target_unscaled*additional_rescaling
-samples_target = samples_target[::1000]
 
 
 ##################################### 
@@ -225,7 +225,7 @@ else:
 if start_t_idx < len(forward_time_pts):
     key, subkey = jr.split(key)
     
-    samples_t = sample_total_distribution(0, n_samples, D=Temp, sigma_final=1/jnp.sqrt(Temp), samples0=samples_target, key=subkey, k=1, beta= 1)
+    samples_t = sample_total_distribution(t_forward, n_samples, D=Temp, sigma_final=1/jnp.sqrt(Temp), samples0=samples_target, key=subkey, k=1, beta= 1, oversample_factor=20, batch_size=batch_size)
     # samples_t = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=1/jnp.sqrt(Temp), samples0=samples_target, key=subkey, beta= 1)
     plot_forward_marginals(samples_t, t_forward, sigma_forward, Temp=Temp, path=plot_folder, save_fig=True, fontsize=16, plot_show=True)
 
@@ -243,10 +243,14 @@ if start_t_idx < len(forward_time_pts):
         print(f"t_idx: {t_idx}, t_curr: {t_curr}")
         
         # Generate samples at current time
-        key, subkey = jr.split(key)
-        with jax.disable_jit():
-            samples_t = sample_total_distribution(
-                t_curr, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey, k=1, beta= 1
+        # key, subkey = jr.split(key)
+        # with jax.disable_jit():
+        #     samples_t = sample_total_distribution(
+        #         t_curr, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey, k=1, beta= 1,oversample_factor=20, batch_size=batch_size
+        #     )
+            
+        sampler = lambda key: sample_total_distribution(
+                t_curr, n_samples = batch_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=key, k=1, beta= 1,oversample_factor=2000, batch_size=batch_size
             )
         
         # Perform optimization starting from previous best parameters
@@ -255,7 +259,7 @@ if start_t_idx < len(forward_time_pts):
         params_history, loss_history = run_optimization(
             loss_fn_per_batch=loss_fn_per_batch,
             params_initial=current_params,
-            samples=samples_t,
+            sampler=sampler,
             mask=mask,
             gradient_fn_per_batch=gradient_fn_per_batch,
             key=subkey,
