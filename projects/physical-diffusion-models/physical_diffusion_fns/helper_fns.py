@@ -175,114 +175,169 @@ def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0
 
 
 
+# def sample_total_distribution(
+#     t, n_samples, D, sigma_final, samples0, key, k, beta=1.0,
+#     *, exact=False, oversample_factor=20
+# ):
+#     """
+#     Sample x_t ~ q_t whose score is 2∇_x log p_t(x) + kx.
+
+#     Parameters
+#     ----------
+#     t : float
+#         Diffusion time.
+#     n_samples : int
+#         Number of required samples.
+#     D, sigma_final, beta, samples0
+#         Same meaning as in sample_forward_process.
+#     key : PRNGKey
+#     k : float
+#         Coefficient in the +k x term (scalar, isotropic case).
+#     exact : bool (default True)
+#         If True and dataset is small (M≤250) use an exact Gaussian mixture sampler.
+#     oversample_factor : int
+#         Only for the fallback path: proposal batch size = oversample_factor*n_samples.
+
+#     Returns
+#     -------
+#     (n_samples, dim) array with samples from q_t.
+#     """
+#     key1, key2, key3 = jax.random.split(key, 3)
+#     M, dim = samples0.shape
+
+#     # --- OU marginal parameters ------------------------------------------------
+#     a_t   = jnp.exp(-beta * t / (sigma_final ** 2))                      # mean decay
+#     var_t = D * sigma_final ** 2 * (1.0 - jnp.exp(-2 * beta * t / sigma_final ** 2))
+
+#     # --- check normalisability -------------------------------------------------
+#     if k * var_t >= 2.0:
+#         raise ValueError(
+#             f"Density not normalisable at this (t, k): k*var_t = {k*var_t:.3f} ≥ 2."
+#         )
+
+#     # new component covariance and mean‑scaling factors (isotropic)
+#     new_var   = var_t / (2.0 - k * var_t)                 # Σ''  in the derivation
+#     mean_scale = 1.0 / (1.0 - 0.5 * k * var_t)            # μ  → μ / (1 - k var/2)
+
+#     # --------------------------------------------------------------------------
+#     # 1) exact mixture sampling  (works up to a few hundred modes without fuss)
+#     # --------------------------------------------------------------------------
+#     if exact and M <= 2:
+#         # time‑evolved means of the *original* mixture components
+#         means = a_t * samples0                  # shape (M, dim)
+
+#         # pairwise (i,j) component means μ_ij and log‑weights  log w_ij
+#         mu_i   = means[:, None, :]              # (M,1,dim)
+#         mu_j   = means[None, :, :]              # (1,M,dim)
+#         mu_ij  = 0.5 * (mu_i + mu_j)            # (M,M,dim)
+
+#         # log‑weight pieces  c_ij  and  tilde{c}_ij  (constants drop out)
+#         sq_norm_diff = jnp.sum((mu_i - mu_j) ** 2, axis=-1)        # ‖μ_i-μ_j‖²
+#         sq_norm_mu   = jnp.sum(mu_ij ** 2, axis=-1)                # ‖μ_ij‖²
+
+#         log_c    = -0.25 / var_t * sq_norm_diff
+#         log_tc   = -0.5   * sq_norm_mu / (var_t / 2.0 + 1.0 / k)
+#         log_w    = (log_c + log_tc).reshape(-1)
+
+#         # normalise logits for categorical sampling
+#         log_w   = log_w - jsp.special.logsumexp(log_w)
+
+#         # sample component indices and draw from the corresponding Gaussian
+#         pair_idx = jax.random.categorical(key1, log_w, shape=(n_samples,))
+#         mu_pairs = mu_ij.reshape(-1, dim)[pair_idx] * mean_scale
+
+#         eps      = jax.random.normal(key2, shape=(n_samples, dim))
+#         return mu_pairs + jnp.sqrt(new_var) * eps
+
+#     # --------------------------------------------------------------------------
+#     # 2) importance‑resampling fallback  (cheaper memory, scales to large M)
+#     # --------------------------------------------------------------------------
+#     prop_N  = oversample_factor * n_samples
+
+#     # 2.1 draw proposal points from the known p_t
+#     prop = sample_forward_process(
+#         t, prop_N, D, sigma_final, samples0, key1, beta=beta
+#     )
+
+#     # 2.2 compute log p_t(prop)   ---- fully vectorised
+#     means = a_t * samples0                                            # (M, dim)
+
+#     def log_gauss(x, m):
+#         return -0.5 * (
+#             dim * jnp.log(2.0 * jnp.pi * var_t) +
+#             jnp.sum((x - m) ** 2, axis=-1) / var_t
+#         )                                                             # scalar
+
+#     def log_p_single(x):
+#         # mixture log‑density  log p_t(x)
+#         log_comp = log_gauss(x, means)                                # (M,)
+#         return jsp.special.logsumexp(log_comp) - jnp.log(M)           # scalar
+
+#     log_p = jax.vmap(log_p_single)(prop)                              # (prop_N,)
+
+#     # 2.3 importance weights  w(x) ∝ p_t(x) exp(+½ k‖x‖²)
+#     log_w = log_p + 0.5 * k * jnp.sum(prop ** 2, axis=-1)
+#     log_w = log_w - jsp.special.logsumexp(log_w)
+#     w     = jnp.exp(log_w)
+
+#     # 2.4 systematic resampling
+#     idx   = jax.random.choice(key3, prop_N, shape=(n_samples,), p=w)
+#     return prop[idx]
+
+
+
 def sample_total_distribution(
     t, n_samples, D, sigma_final, samples0, key, k, beta=1.0,
-    *, exact=False, oversample_factor=20
+    *, exact=False, oversample_factor=200, batch_size=64
 ):
-    """
-    Sample x_t ~ q_t whose score is 2∇_x log p_t(x) + kx.
-
-    Parameters
-    ----------
-    t : float
-        Diffusion time.
-    n_samples : int
-        Number of required samples.
-    D, sigma_final, beta, samples0
-        Same meaning as in sample_forward_process.
-    key : PRNGKey
-    k : float
-        Coefficient in the +k x term (scalar, isotropic case).
-    exact : bool (default True)
-        If True and dataset is small (M≤250) use an exact Gaussian mixture sampler.
-    oversample_factor : int
-        Only for the fallback path: proposal batch size = oversample_factor*n_samples.
-
-    Returns
-    -------
-    (n_samples, dim) array with samples from q_t.
-    """
-    key1, key2, key3 = jax.random.split(key, 3)
+    key_prop, key_centres, key_resample = jax.random.split(key, 3)
     M, dim = samples0.shape
 
-    # --- OU marginal parameters ------------------------------------------------
-    a_t   = jnp.exp(-beta * t / (sigma_final ** 2))                      # mean decay
-    var_t = D * sigma_final ** 2 * (1.0 - jnp.exp(-2 * beta * t / sigma_final ** 2))
+    # 1) OU marginal parameters
+    a_t   = jnp.exp(-beta * t / sigma_final**2)
+    var_t = D * sigma_final**2 * (1 - jnp.exp(-2*beta*t/sigma_final**2))
 
-    # --- check normalisability -------------------------------------------------
     if k * var_t >= 2.0:
-        raise ValueError(
-            f"Density not normalisable at this (t, k): k*var_t = {k*var_t:.3f} ≥ 2."
+        raise ValueError(f"k*var_t = {k*var_t:.3f} ≥ 2 → not normalisable")
+
+    # 2) draw proposals from p_t
+    prop_N = oversample_factor * n_samples
+    prop   = sample_forward_process(
+        t, prop_N, D, sigma_final, samples0, key_prop, beta
+    )  # shape (prop_N, dim)
+
+    # 3) pick a random SUB-BATCH of centres of size B << M
+    B = min(batch_size, M)
+    idx = jax.random.choice(key_centres, M, (B,), replace=False)
+    means = a_t * samples0[idx]    # shape (B, dim)
+
+    # 4) define log-Gaussian for one x against that B-subset
+    def log_gauss(x, mu):
+        # x: (dim,), mu: (B,dim) → returns (B,)
+        # all in float64 if jax_enable_x64=True
+        return -0.5 * (
+            dim * jnp.log(2*jnp.pi*var_t)
+            + jnp.sum((x - mu)**2, axis=-1) / var_t
         )
 
-    # new component covariance and mean‑scaling factors (isotropic)
-    new_var   = var_t / (2.0 - k * var_t)                 # Σ''  in the derivation
-    mean_scale = 1.0 / (1.0 - 0.5 * k * var_t)            # μ  → μ / (1 - k var/2)
+    # 5) Monte-Carlo estimate of log p_t(x) using only B centres
+    def log_p_hat(x):
+        # logsumexp over those B centres, then -log(B)
+        return jsp.special.logsumexp(log_gauss(x, means)) - jnp.log(B)
 
-    # --------------------------------------------------------------------------
-    # 1) exact mixture sampling  (works up to a few hundred modes without fuss)
-    # --------------------------------------------------------------------------
-    if exact and M <= 2:
-        # time‑evolved means of the *original* mixture components
-        means = a_t * samples0                  # shape (M, dim)
+    # 6) vectorise over all prop_N proposals
+    log_p = jax.vmap(log_p_hat)(prop)   # → shape (prop_N,)
 
-        # pairwise (i,j) component means μ_ij and log‑weights  log w_ij
-        mu_i   = means[:, None, :]              # (M,1,dim)
-        mu_j   = means[None, :, :]              # (1,M,dim)
-        mu_ij  = 0.5 * (mu_i + mu_j)            # (M,M,dim)
-
-        # log‑weight pieces  c_ij  and  tilde{c}_ij  (constants drop out)
-        sq_norm_diff = jnp.sum((mu_i - mu_j) ** 2, axis=-1)        # ‖μ_i-μ_j‖²
-        sq_norm_mu   = jnp.sum(mu_ij ** 2, axis=-1)                # ‖μ_ij‖²
-
-        log_c    = -0.25 / var_t * sq_norm_diff
-        log_tc   = -0.5   * sq_norm_mu / (var_t / 2.0 + 1.0 / k)
-        log_w    = (log_c + log_tc).reshape(-1)
-
-        # normalise logits for categorical sampling
-        log_w   = log_w - jsp.special.logsumexp(log_w)
-
-        # sample component indices and draw from the corresponding Gaussian
-        pair_idx = jax.random.categorical(key1, log_w, shape=(n_samples,))
-        mu_pairs = mu_ij.reshape(-1, dim)[pair_idx] * mean_scale
-
-        eps      = jax.random.normal(key2, shape=(n_samples, dim))
-        return mu_pairs + jnp.sqrt(new_var) * eps
-
-    # --------------------------------------------------------------------------
-    # 2) importance‑resampling fallback  (cheaper memory, scales to large M)
-    # --------------------------------------------------------------------------
-    prop_N  = oversample_factor * n_samples
-
-    # 2.1 draw proposal points from the known p_t
-    prop = sample_forward_process(
-        t, prop_N, D, sigma_final, samples0, key1, beta=beta
-    )
-
-    # 2.2 compute log p_t(prop)   ---- fully vectorised
-    means = a_t * samples0                                            # (M, dim)
-
-    def log_gauss(x, m):
-        return -0.5 * (
-            dim * jnp.log(2.0 * jnp.pi * var_t) +
-            jnp.sum((x - m) ** 2, axis=-1) / var_t
-        )                                                             # scalar
-
-    def log_p_single(x):
-        # mixture log‑density  log p_t(x)
-        log_comp = log_gauss(x, means)                                # (M,)
-        return jsp.special.logsumexp(log_comp) - jnp.log(M)           # scalar
-
-    log_p = jax.vmap(log_p_single)(prop)                              # (prop_N,)
-
-    # 2.3 importance weights  w(x) ∝ p_t(x) exp(+½ k‖x‖²)
-    log_w = log_p + 0.5 * k * jnp.sum(prop ** 2, axis=-1)
-    log_w = log_w - jsp.special.logsumexp(log_w)
+    # 7) build importance weights for the target q_t ∝ p_t^2 e^(+k x²)
+    log_w = 2*log_p + 0.5*k*jnp.sum(prop**2, axis=-1)
+    log_w = log_w - jsp.special.logsumexp(log_w) # normalize
     w     = jnp.exp(log_w)
 
-    # 2.4 systematic resampling
-    idx   = jax.random.choice(key3, prop_N, shape=(n_samples,), p=w)
-    return prop[idx]
+    # 8) resample n_samples out of the prop_N proposals
+    choose = jax.random.choice(key_resample, prop_N, (n_samples,), p=w)
+    return prop[choose]   # → shape (n_samples, dim)
+
+
 
 ########################################################################################
 # Reformatting optimization results
