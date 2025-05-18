@@ -248,7 +248,7 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
 
 def run_optimization(loss_fn_per_batch, 
                      params_initial, 
-                     samples, 
+                     sampler, 
                      gradient_fn_per_batch=None,
                      mask=None, 
                      key=jr.PRNGKey(0), 
@@ -290,26 +290,27 @@ def run_optimization(loss_fn_per_batch,
     if mask is None:
         mask = jnp.ones(params_initial.shape[0])
 
-    @partial(jax.jit, static_argnums=(3,))
-    def training_step(params, opt_state, samples, batch_size, key):
-        key, subkey = jr.split(key)
-        n_samples = len(samples)
-        idx = jr.randint(subkey, (batch_size,), 0, n_samples)
-        batch = samples[idx]
+    @partial(jax.jit)
+    def training_step(params, opt_state, samples_batched):
+        # key, subkey = jr.split(key)
+        # n_samples = len(samples)
+        # idx = jr.randint(subkey, (batch_size,), 0, n_samples)
+        # batch = samples[idx]
+        
         # Define loss for current batch
-        loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
+        loss_fn = lambda params_current: loss_fn_per_batch(params_current, samples_batched)
         loss_val = loss_fn(params)
         # Compute gradients
         if gradient_fn_per_batch is None:
             dparams = jax.grad(loss_fn)(params)
         else:
-            dparams = gradient_fn_per_batch(params, batch)
+            dparams = gradient_fn_per_batch(params, samples_batched)
         if maximize:
             dparams = -dparams
         dparams = dparams * mask
         updates, opt_state = optimizer.update(dparams, opt_state)
         params = optax.apply_updates(params, updates)
-        return params, opt_state, key, loss_val
+        return params, opt_state, loss_val
 
     params_history = []
     loss_history = []
@@ -320,7 +321,8 @@ def run_optimization(loss_fn_per_batch,
 
     for epoch in range(n_epochs):
         key, subkey = jr.split(key)
-        params, opt_state, key, loss = training_step(params, opt_state, samples, batch_size, subkey)
+        samples_batched = sampler(subkey)
+        params, opt_state, loss = training_step(params, opt_state, samples_batched)
         
         if constraint_indices is not None:
             # Define a small positive constant epsilon to ensure strict positivity.
