@@ -285,7 +285,8 @@ def plot_parameter_as_fn_of_time(params_names, forward_time_pts, time_eval,
         plt.savefig(f"{path}/parameter_evolution_over_time.png", dpi=300, bbox_inches='tight')
     if plot_show:
         plt.show()
-    plt.close()
+    else:
+        plt.close()
 ########################################################################################
 # Plotting connectivity
 ########################################################################################   
