@@ -252,7 +252,6 @@ def run_optimization(loss_fn_per_batch,
                      gradient_fn_per_batch=None,
                      mask=None, 
                      key=jr.PRNGKey(0), 
-                     batch_size=128,
                      learning_rate=0.001,
                      n_epochs=20000, 
                      maximize=False, 
@@ -271,7 +270,6 @@ def run_optimization(loss_fn_per_batch,
         gradient_fn_per_batch: Optional callable to compute gradients.
         mask: Optional mask to apply to the gradients.
         key: PRNG key for random batch sampling.
-        batch_size: Number of samples per optimization step.
         learning_rate: Step size for the Adam optimizer.
         n_epochs: Maximum number of optimization steps.
         maximize: Whether to maximize (rather than minimize) the loss.
@@ -291,12 +289,7 @@ def run_optimization(loss_fn_per_batch,
         mask = jnp.ones(params_initial.shape[0])
 
     @partial(jax.jit)
-    def training_step(params, opt_state, samples_batched):
-        # key, subkey = jr.split(key)
-        # n_samples = len(samples)
-        # idx = jr.randint(subkey, (batch_size,), 0, n_samples)
-        # batch = samples[idx]
-        
+    def training_step(params, opt_state, samples_batched, subkey_gradient):
         # Define loss for current batch
         loss_fn = lambda params_current: loss_fn_per_batch(params_current, samples_batched)
         loss_val = loss_fn(params)
@@ -304,7 +297,7 @@ def run_optimization(loss_fn_per_batch,
         if gradient_fn_per_batch is None:
             dparams = jax.grad(loss_fn)(params)
         else:
-            dparams = gradient_fn_per_batch(params, samples_batched)
+            dparams = gradient_fn_per_batch(params, samples_batched, subkey_gradient)
         if maximize:
             dparams = -dparams
         dparams = dparams * mask
@@ -320,9 +313,9 @@ def run_optimization(loss_fn_per_batch,
     params = params_initial
 
     for epoch in range(n_epochs):
-        key, subkey = jr.split(key)
-        samples_batched = sampler(subkey)
-        params, opt_state, loss = training_step(params, opt_state, samples_batched)
+        key, subkey_epoch, subkey_gradient = jr.split(key,3)
+        samples_batched = sampler(subkey_epoch)
+        params, opt_state, loss = training_step(params, opt_state, samples_batched, subkey_gradient)
         
         if constraint_indices is not None:
             # Define a small positive constant epsilon to ensure strict positivity.
