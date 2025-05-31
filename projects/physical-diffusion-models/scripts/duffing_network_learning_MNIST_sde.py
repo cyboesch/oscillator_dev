@@ -18,6 +18,13 @@ from physical_diffusion_fns.network_fns import setup_duffing_network_with_extern
 
 jax.config.update("jax_enable_x64", True)
 
+##################################### 
+# Set random seeds
+##################################### 
+
+key_seed = 0
+master_key  = jax.random.PRNGKey(key_seed)          # single seed
+optimization_key, reverse_sde_key = jr.split(master_key, 2)
 
 ##################################### 
 # Set parameters
@@ -37,7 +44,7 @@ else:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-training_method = "SM"
+training_method = "CD1"
 learning_rate = 0.01
 n_epochs = 10000
 batch_size = 6*128
@@ -188,7 +195,7 @@ if training_method == "SM":
     maximize = False
 elif training_method == "CD1":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
-    gradient_fn_per_batch = lambda flattened_args, batch: -CD1_gradient(energy_fn, batch, flattened_args, dt=0.001, D=1, key=jnp.random.PRNGKey(1535), num_noise_samples=1000)
+    gradient_fn_per_batch = lambda flattened_args, batch, key_CD1: -CD1_gradient(energy_fn, batch, flattened_args, dt=0.001, D=Temp, key=key_CD1, num_noise_samples=1000)
     maximize = False
 elif training_method == "MLE":
     loss_fn_per_batch = setup_MLE_loss_per_batch(energy_fn)
@@ -220,11 +227,6 @@ else:
 
 # Only run optimization if we haven't completed all time steps
 if start_t_idx < len(forward_time_pts):
-    key, subkey = jr.split(key)
-    
-    samples_t = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey)
-    plot_forward_marginals(samples_t, t_forward, sigma_forward, Temp=Temp, path=output_dir, save_fig=True, fontsize=16)
-    
     # Setup optimization parameters
     mask = jnp.ones(params_flattened_initial.shape[0])
 
@@ -237,11 +239,15 @@ if start_t_idx < len(forward_time_pts):
         t_curr = forward_time_pts[t_idx]
         print(f"t_idx: {t_idx}, t_curr: {t_curr}")
         
-        # Generate samples at current time
-        key, subkey = jr.split(key)
-        samples_t = sample_forward_process(
-            t_curr, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey
-        )
+        optimization_key, optimization_subkey = jr.split(optimization_key)
+
+        if t_idx == 0:
+            samples_0 = sample_forward_process(t_forward, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=optimization_key)
+            plot_forward_marginals(samples_0, t_forward, sigma_forward, beta=1.0, path=output_dir, save_fig=True, fontsize=16, plot_show=True)
+        
+        sampler = lambda key: sample_forward_process(
+                t_curr, n_samples = batch_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=key, beta= 1
+            )
         
         # Perform optimization starting from previous best parameters
         key, subkey = jr.split(key)
@@ -249,10 +255,10 @@ if start_t_idx < len(forward_time_pts):
         params_history, loss_history = run_optimization(
             loss_fn_per_batch=loss_fn_per_batch,
             params_initial=current_params,
-            samples=samples_t,
+            sampler = sampler,
             mask=mask,
             gradient_fn_per_batch=gradient_fn_per_batch,
-            key=subkey,
+            key=optimization_subkey,
             batch_size=batch_size,
             learning_rate=learning_rate,
             n_epochs=n_epochs,
@@ -323,6 +329,8 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
     forward_params = forward_params.at[0:N_osc].set(1.)
     if ode_solve:
         params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    elif training_method == "CD1":
+        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
     else:
         params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
 
