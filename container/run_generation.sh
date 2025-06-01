@@ -27,7 +27,7 @@ ls -l "${IMAGE}" || { echo "Error: Container image not found!"; exit 1; }
 ls -l "${HOST_PROJECTS_DIR}/physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde.py" || { echo "Script not found!"; exit 1; }
 
 # === Payload ===
-PAYLOAD="python3 -u /projects/physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde_total_score.py"
+PAYLOAD="python3 -u /projects/physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde.py"
 
 # === Run ===
 set -ux
