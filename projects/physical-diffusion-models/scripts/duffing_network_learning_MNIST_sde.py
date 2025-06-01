@@ -46,7 +46,7 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "CD1"
-learning_rate = 0.01
+learning_rate = 0.005
 n_epochs = 10000
 batch_size = 6*128
 window_size=100
@@ -67,8 +67,8 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
-rtol_sde = 1e-5
-atol_sde = 1e-7
+rtol_sde = 1e-7
+atol_sde = 1e-9
 
 #####################################
 ## Filenames
