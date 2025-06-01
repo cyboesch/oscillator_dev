@@ -33,7 +33,7 @@ std_of_added_noise = 0.01
 additional_rescaling = 1.
 skip_rate = 2
 # Forward process parameters
-n_time_steps = 15
+n_time_steps = 10
 t_forward = 4.
 sigma_forward = 1.
 exponential_time_pts = False
@@ -53,7 +53,7 @@ window_size=100
 tolerance=1e-3
 patience=10
 CD1_dt = 0.0001
-CD1_num_noise_samples = 1000
+CD1_num_noise_samples = 300
 
 Temp = 0.01
 
