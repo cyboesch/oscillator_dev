@@ -24,13 +24,14 @@ jax.config.update("jax_enable_x64", True)
 
 key_seed = 0
 master_key  = jax.random.PRNGKey(key_seed)          # single seed
-optimization_key, reverse_sde_key = jr.split(master_key, 2)
+optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
 
 ##################################### 
 # Set parameters
 ##################################### 
 std_of_added_noise = 0.01
 additional_rescaling = 1.
+skip_rate = 2
 # Forward process parameters
 n_time_steps = 15
 t_forward = 4.
@@ -51,13 +52,14 @@ batch_size = 6*128
 window_size=100
 tolerance=1e-3
 patience=10
+CD1_dt = 0.0001
+CD1_num_noise_samples = 1000
 
 Temp = 0.01
 
-key_seed = 0
 
 labels = [0,1]
-resolution = (10,10)
+resolution = (12,12)
 
 n_neighbour_couplings = 3
 
@@ -65,27 +67,30 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
-rtol_sde = 1e-7
-atol_sde = 1e-9
+rtol_sde = 1e-5
+atol_sde = 1e-7
 
 #####################################
 ## Filenames
 #####################################
 
 problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
-data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_training_method_{training_method}"
+data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_skip_rate_{skip_rate}"
 
 optimization_folder = (
-           f"exp_time_pts_{exponential_time_pts}_"
-           f"t_forward_{t_forward}_"
-           f"n_timesteps_{n_time_steps}_"
-           f"sigma_forward_{sigma_forward}_"
-           f"lr_{learning_rate}_"
-           f"epochs_{n_epochs}_"
-           f"batch_{batch_size}_"
-           f"window_{window_size}_"
-           f"tol_{tolerance}_"
-           f"patience_{patience}")
+    f"training_method_{training_method}_"
+    + (f"CD1_dt_{CD1_dt}_CD1_num_noise_samples_{CD1_num_noise_samples}_" if training_method == "CD1" else "")
+    + f"exp_time_pts_{exponential_time_pts}_"
+    f"t_forward_{t_forward}_"
+    f"n_timesteps_{n_time_steps}_"
+    f"sigma_forward_{sigma_forward}_"
+    f"lr_{learning_rate}_"
+    f"epochs_{n_epochs}_"
+    f"batch_{batch_size}_"
+    f"window_{window_size}_"
+    f"tol_{tolerance}_"
+    f"patience_{patience}"
+)
 
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
@@ -109,19 +114,21 @@ path_to_data = os.path.join(here,"..", "data", "MNIST", f"mnist_labels_{labels}_
 data_np = np.load(path_to_data)
 
 # Optionally convert to a JAX array
-images_flat_raw = jnp.array(data_np)
+images_flat_raw_full = jnp.array(data_np)
+
+images_flat_raw = images_flat_raw_full[0::skip_rate,:]
 n_samples = images_flat_raw.shape[0]
 print("Data shape:", images_flat_raw.shape)
 
 # Add noise to the data for regularization
-key =  jr.PRNGKey(key_seed)  
-key, subkey =  jr.split(key)  # Seed for reproducibility
-gaussian_noise = jr.normal(subkey, images_flat_raw.shape) * std_of_added_noise 
+_, subkey_image_noise_added =  jr.split(image_noise_added_key)  # Seed for reproducibility
+gaussian_noise = jr.normal(subkey_image_noise_added, images_flat_raw.shape) * std_of_added_noise 
 images_flat_true = images_flat_raw + gaussian_noise
 
 # Normalize the data
 samples_target_unscaled, mean_MNIST, std_MNIST = normalize_samples(images_flat_true)
 samples_target = samples_target_unscaled*additional_rescaling
+
 
 
 ##################################### 
@@ -189,13 +196,13 @@ else:
 
 ##################################### 
 # Setup loss and gradient functions based on selected method
-if training_method == "SM":
+if training_method == "CD1":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
     gradient_fn_per_batch = None
     maximize = False
 elif training_method == "CD1":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
-    gradient_fn_per_batch = lambda flattened_args, batch, key_CD1: -CD1_gradient(energy_fn, batch, flattened_args, dt=0.001, D=Temp, key=key_CD1, num_noise_samples=1000)
+    gradient_fn_per_batch = lambda flattened_args, batch, key_CD1: -CD1_gradient(energy_fn, batch, flattened_args, dt=CD1_dt, D=Temp, key=key_CD1, num_noise_samples=CD1_num_noise_samples)
     maximize = False
 elif training_method == "MLE":
     loss_fn_per_batch = setup_MLE_loss_per_batch(energy_fn)
@@ -249,9 +256,6 @@ if start_t_idx < len(forward_time_pts):
                 t_curr, n_samples = batch_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=key, beta= 1
             )
         
-        # Perform optimization starting from previous best parameters
-        key, subkey = jr.split(key)
-        
         params_history, loss_history = run_optimization(
             loss_fn_per_batch=loss_fn_per_batch,
             params_initial=current_params,
@@ -259,7 +263,6 @@ if start_t_idx < len(forward_time_pts):
             mask=mask,
             gradient_fn_per_batch=gradient_fn_per_batch,
             key=optimization_subkey,
-            batch_size=batch_size,
             learning_rate=learning_rate,
             n_epochs=n_epochs,
             maximize=maximize,
@@ -381,8 +384,8 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
 
 
 # Run reverse process for both smoothed and non-smoothed parameters
-key, subkey = jr.split(key)
-images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",subkey, Temp, atol_sde, rtol_sde, ode_solve=False)
+everse_sde_key, severse_sde_subkey = jr.split(reverse_sde_key)
+images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",severse_sde_subkey, Temp, atol_sde, rtol_sde, ode_solve=False)
 
 #####################################
 # Plotting
