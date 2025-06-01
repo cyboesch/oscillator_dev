@@ -46,9 +46,9 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "CD1"
-learning_rate = 0.005
+learning_rate = 0.01
 n_epochs = 10000
-batch_size = 12*128
+batch_size = 6*128
 window_size=100
 tolerance=1e-3
 patience=10
@@ -66,9 +66,9 @@ n_neighbour_couplings = 3
 energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
-n_trajectories = 100
-rtol_sde = 1e-7
-atol_sde = 1e-9
+n_trajectories = 10
+rtol_sde = 1e-5
+atol_sde = 1e-7
 
 #####################################
 ## Filenames
@@ -347,11 +347,14 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
 
     # Generate multiple initial states
     key, subkey = jr.split(key)
+    print('subkey', subkey)
     initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=Temp, samples0=samples_target, key=subkey)
+    print('initial_states', initial_states)
 
     # Generate a key for each initial condition
     key, subkey = jr.split(key)
     keys_brownian = jr.split(subkey, n_trajectories)
+    print('keys_brownian', keys_brownian)
 
     # Vectorize solve_SDE across both initial states and keys
     vectorized_solve_SDE = vmap(
@@ -384,8 +387,7 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
 
 
 # Run reverse process for both smoothed and non-smoothed parameters
-everse_sde_key, severse_sde_subkey = jr.split(reverse_sde_key)
-images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",severse_sde_subkey, Temp, atol_sde, rtol_sde, ode_solve=False)
+images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",reverse_sde_key, Temp, atol_sde, rtol_sde, ode_solve=False)
 
 #####################################
 # Plotting
