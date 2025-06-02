@@ -31,7 +31,7 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 std_of_added_noise = 0.01
 additional_rescaling = 1.
-skip_rate = 1
+skip_rate = 2
 # Forward process parameters
 n_time_steps = 10
 t_forward = 4.
@@ -48,18 +48,18 @@ print('forward_time_pts', forward_time_pts)
 training_method = "CD1"
 learning_rate = 0.01
 n_epochs = 10000
-batch_size = 6*128
+batch_size = 2*128
 window_size=100
 tolerance=1e-3
 patience=10
 CD1_dt = 0.0001
-CD1_num_noise_samples = 500
+CD1_num_noise_samples = 400
 
 Temp = 0.01
 
 
 labels = [0,1]
-resolution = (12,12)
+resolution = (10,10)
 
 n_neighbour_couplings = 3
 
@@ -67,8 +67,8 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 10
-rtol_sde = 1e-5
-atol_sde = 1e-7
+rtol_sde = 1e-3
+atol_sde = 1e-5
 
 #####################################
 ## Filenames
@@ -196,7 +196,7 @@ else:
 
 ##################################### 
 # Setup loss and gradient functions based on selected method
-if training_method == "CD1":
+if training_method == "SM":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
     gradient_fn_per_batch = None
     maximize = False
@@ -383,11 +383,14 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
     final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
     final_samples = final_samples_scaled / additional_rescaling
     images_generated_flat = final_samples * std_MNIST + mean_MNIST
+    print('images_generated_flat', images_generated_flat)
     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
 
 # Run reverse process for both smoothed and non-smoothed parameters
 images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",reverse_sde_key, Temp, atol_sde, rtol_sde, ode_solve=False)
+
+print('images_generated_non_smoothed_sde', images_generated_non_smoothed_sde)
 
 #####################################
 # Plotting
