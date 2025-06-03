@@ -30,8 +30,8 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 # Set parameters
 ##################################### 
 std_of_added_noise = 0.01
-additional_rescaling = 1.
-skip_rate = 2
+additional_rescaling = .1
+skip_rate = 1
 # Forward process parameters
 n_time_steps = 10
 t_forward = 4.
@@ -46,20 +46,20 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "CD1"
-learning_rate = 0.01
-n_epochs = 10000
-batch_size = 2*128
+learning_rate = 0.1
+n_epochs = 100000
+batch_size = 8*128
 window_size=100
-tolerance=1e-3
+tolerance=1e-1
 patience=10
-CD1_dt = 0.0001
-CD1_num_noise_samples = 400
+CD1_dt = 0.001
+CD1_num_noise_samples = 50
 
 Temp = 0.01
 
 
 labels = [0,1]
-resolution = (10,10)
+resolution = (8,8)
 
 n_neighbour_couplings = 3
 
@@ -249,7 +249,7 @@ if start_t_idx < len(forward_time_pts):
         optimization_key, optimization_subkey = jr.split(optimization_key)
 
         if t_idx == 0:
-            samples_0 = sample_forward_process(t_forward, n_samples, D=1, sigma_final=sigma_forward, samples0=samples_target, key=optimization_key)
+            samples_0 = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=optimization_key)
             plot_forward_marginals(samples_0, t_forward, sigma_forward, beta=1.0, path=output_dir, save_fig=True, fontsize=16, plot_show=True)
         
         sampler = lambda key: sample_forward_process(
