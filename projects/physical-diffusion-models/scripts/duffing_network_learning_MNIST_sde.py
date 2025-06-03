@@ -70,6 +70,8 @@ n_trajectories = 10
 rtol_sde = 1e-3
 atol_sde = 1e-5
 
+start_from_scratch = True
+
 #####################################
 ## Filenames
 #####################################
@@ -223,11 +225,26 @@ if os.path.exists(params_history_path) and os.path.exists(time_index_path):
     # Load existing parameters and time index
     print('Loading existing parameters from', params_history_path)
     params_history_all_t = jnp.load(params_history_path)
+    current_params = params_history_all_t[-1]
+    params_history_all_t = params_history_all_t.tolist()
     with open(time_index_path, 'r') as f:
         start_t_idx = int(f.read())
     print(f'Resuming from time index {start_t_idx}')
 else:
     print('No existing parameters found, starting from beginning')
+    start_t_idx = 0
+    params_history_all_t = []
+    current_params = params_flattened_initial
+
+if start_from_scratch:
+    print('Starting from scratch')
+    # Delete all files in the output directory
+    import shutil
+    if os.path.exists(output_dir):
+        print(f'Deleting all files in {output_dir}')
+        shutil.rmtree(output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        os.makedirs(plot_folder, exist_ok=True)
     start_t_idx = 0
     params_history_all_t = []
     current_params = params_flattened_initial
