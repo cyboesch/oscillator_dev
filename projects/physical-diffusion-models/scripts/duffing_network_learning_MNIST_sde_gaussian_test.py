@@ -1,0 +1,564 @@
+print("Script started.")
+import sys
+import os
+# Add the parent directory to Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+
+import jax
+from jax import flatten_util, vmap 
+import jax.numpy as jnp
+import jax.random as jr
+import os
+import matplotlib.pyplot as plt
+from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
+from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
+from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
+from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
+
+jax.config.update("jax_enable_x64", True)
+
+##################################### 
+# Set random seeds
+##################################### 
+
+key_seed = 0
+master_key  = jax.random.PRNGKey(key_seed)          # single seed
+optimization_key, reverse_sde_key, sample_target_key = jr.split(master_key, 3)
+
+##################################### 
+# Set parameters
+##################################### 
+std_of_added_noise = 0.01
+additional_rescaling = 1.
+skip_rate = 1
+# Forward process parameters
+n_time_steps = 10
+t_forward = 5.
+sigma_forward = 1.
+exponential_time_pts = False
+if exponential_time_pts:
+    forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
+    forward_time_pts = forward_time_pts.at[0].set(0.)
+else:
+    forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
+print('forward_time_pts', forward_time_pts)
+
+# Optimization parameters
+training_method = "CD1"
+learning_rate = 0.01
+n_epochs = 10000
+batch_size = 16*128
+window_size=100
+tolerance=1e-2
+patience=20
+CD1_dt = 0.01
+CD1_num_noise_samples = 300
+
+Temp = 0.01
+
+
+labels = [0,1]
+resolution = (10,10)
+
+n_neighbour_couplings = 3
+
+energy_fn_type = "6th_order_duffing_coupling"
+
+# SDE parameters
+n_trajectories = 1000
+rtol_sde = 1e-3
+atol_sde = 1e-5
+
+#####################################
+## Filenames
+#####################################
+
+problem_type_folder = f"gaussian_test_MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
+data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_skip_rate_{skip_rate}"
+
+optimization_folder = (
+    f"training_method_{training_method}_"
+    + (f"CD1_dt_{CD1_dt}_CD1_num_noise_samples_{CD1_num_noise_samples}_" if training_method == "CD1" else "")
+    + f"exp_time_pts_{exponential_time_pts}_"
+    f"t_forward_{t_forward}_"
+    f"n_timesteps_{n_time_steps}_"
+    f"sigma_forward_{sigma_forward}_"
+    f"lr_{learning_rate}_"
+    f"epochs_{n_epochs}_"
+    f"batch_{batch_size}_"
+    f"window_{window_size}_"
+    f"tol_{tolerance}_"
+    f"patience_{patience}"
+)
+
+# Setup output directories
+here = os.path.dirname(os.path.abspath(__file__))
+base_dir = os.path.join(here,"..", "out", "problems")
+output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
+plot_folder = os.path.join(output_dir, 'aaa_final_plots')
+
+# Create directories if they don't exist
+os.makedirs(output_dir, exist_ok=True)
+os.makedirs(plot_folder, exist_ok=True)
+print(f"Output directory: {output_dir}")
+print(f"Plot directory: {plot_folder}")
+
+
+##################################### 
+# Load MNIST data
+##################################### 
+N = 2  # number of dimensions
+N_mixgauss = 3  # number of mixture components
+n_samples = 10000
+
+# Define mixture weights (must sum to 1)
+weights = jnp.array([.6, .4])
+
+# Define means
+means = jnp.array([
+    [1., 0.5],   # mean of first Gaussian
+    [-1., -0.5],  # mean of second Gaussian
+])
+
+# Define covariance matrices
+covs = jnp.array([
+    [[0.001, 0.0],    # covariance of first Gaussian
+        [0.0, 0.001]],
+    [[0.001, 0.0],   # covariance of second Gaussian
+        [0.0, 0.001]],
+])
+# Generate samples
+samples_target = sample_gaussian_mixture(sample_target_key, n_samples, weights, means, covs)
+
+
+
+##################################### 
+# Setup network
+##################################### 
+
+#####################################
+# Network size and topology
+N_osc = 2
+connectivity = jnp.array([[0, 1]])
+num_connections = connectivity.shape[0]
+visualize_connectivity(connectivity,grid_size_x=2,grid_size_y=1)
+
+#####################################
+# Define initial parameters and energy fn
+if energy_fn_type == "6th_order_duffing_coupling":
+    k_lin_0 = -1.*jnp.ones(N_osc)
+    k_duff_0 = jnp.ones(N_osc)
+    k_6_0 = jnp.ones(N_osc)
+    c_lin_0 = jnp.zeros(num_connections)
+    c_optomech_0 = jnp.zeros(num_connections)
+    c_duff_0 = jnp.zeros(num_connections)
+    biases_0 = jnp.zeros(N_osc)
+    params_initial = (k_lin_0, k_duff_0, k_6_0, c_lin_0, c_optomech_0, c_duff_0, biases_0)
+    params_names = ['k_lin', 'k_duff', 'k_6', 'c_lin', 'c_optomech', 'c_duff', 'biases']
+    params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
+    constraint_indices_k6_self = jnp.arange(2*N_osc,3*N_osc)
+    constraint_indices = constraint_indices_k6_self
+
+    # Set up energy fn
+    energy_fn = setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn(connectivity, unflatten)
+elif energy_fn_type == "duffing_coupling":
+    k_lin_0 = -1.*jnp.ones(N_osc)
+    k_duff_0 = jnp.ones(N_osc)
+    c_lin_0 = jnp.zeros(num_connections)
+    c_optomech_0 = jnp.zeros(num_connections)
+    c_duff_0 = jnp.zeros(num_connections)
+    biases_0 = jnp.zeros(N_osc)
+    params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, c_duff_0, biases_0)
+    params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'c_duff', 'biases']
+    params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
+    constraint_indices_duff_self = jnp.arange(N_osc,2*N_osc)
+    constraint_indices_duff_coupling = jnp.arange(2*N_osc+2*num_connections,2*N_osc+3*num_connections)
+    constraint_indices = jnp.concatenate([constraint_indices_duff_self, constraint_indices_duff_coupling])
+    # Set up energy fn
+    energy_fn = setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn(connectivity, unflatten)
+elif energy_fn_type == "duffing_optomech_coupling":
+    k_lin_0 = -1.*jnp.ones(N_osc)
+    k_duff_0 = jnp.ones(N_osc)
+    c_lin_0 = jnp.zeros(num_connections)
+    c_optomech_0 = jnp.zeros(num_connections)
+    biases_0 = jnp.zeros(N_osc)
+    params_initial = (k_lin_0, k_duff_0, c_lin_0, c_optomech_0, biases_0)
+    params_names = ['k_lin', 'k_duff', 'c_lin', 'c_optomech', 'biases']
+    params_flattened_initial, unflatten = flatten_util.ravel_pytree(params_initial)
+    constraint_indices = jnp.arange(N_osc,2*N_osc)
+    # Set up energy fn
+    energy_fn = setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten)
+else:
+    raise ValueError(f"Unknown energy function type: {energy_fn_type}. Choose from '6th_order_duffing_coupling' or 'duffing_coupling'.")
+
+##################################### 
+# Learning
+##################################### 
+
+##################################### 
+# Setup loss and gradient functions based on selected method
+if training_method == "SM":
+    loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
+    gradient_fn_per_batch = None
+    maximize = False
+elif training_method == "CD1":
+    loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
+    gradient_fn_per_batch = lambda flattened_args, batch, key_CD1: -CD1_gradient(energy_fn, batch, flattened_args, dt=CD1_dt, D=Temp, key=key_CD1, num_noise_samples=CD1_num_noise_samples)
+    maximize = False
+elif training_method == "MLE":
+    loss_fn_per_batch = setup_MLE_loss_per_batch(energy_fn)
+    gradient_fn_per_batch = setup_MLE_gradient_per_batch(energy_fn)
+    maximize = True
+else:
+    raise ValueError(f"Unknown training method: {training_method}. Choose from 'SM', 'CD1', or 'MLE'.")
+
+
+#####################################
+# Optimization
+#####################################
+params_history_path = f"{output_dir}/params_history.npy"
+time_index_path = f"{output_dir}/current_time_index.txt"
+
+# Check if we have existing parameters and time index
+if os.path.exists(params_history_path) and os.path.exists(time_index_path):
+    # Load existing parameters and time index
+    print('Loading existing parameters from', params_history_path)
+    params_history_all_t = jnp.load(params_history_path)
+    with open(time_index_path, 'r') as f:
+        start_t_idx = int(f.read())
+    print(f'Resuming from time index {start_t_idx}')
+else:
+    print('No existing parameters found, starting from beginning')
+    start_t_idx = 0
+    params_history_all_t = []
+    current_params = params_flattened_initial
+
+# Only run optimization if we haven't completed all time steps
+if start_t_idx < len(forward_time_pts):
+    # Setup optimization parameters
+    mask = jnp.ones(params_flattened_initial.shape[0])
+
+    # Plotting parameters
+    plot_steps = True  # Flag to control whether to plot during optimization
+    plot_slice = 1     # Plot every nth step
+
+    # Loop over time points starting from where we left off
+    for t_idx in range(start_t_idx, len(forward_time_pts)):
+        t_curr = forward_time_pts[t_idx]
+        print(f"t_idx: {t_idx}, t_curr: {t_curr}")
+        
+        optimization_key, optimization_subkey = jr.split(optimization_key)
+
+        if t_idx == 0:
+            samples_0 = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=optimization_key)
+            plot_forward_marginals(samples_0, t_forward, sigma_forward, beta=1.0, path=output_dir, save_fig=True, fontsize=16, plot_show=True)
+        
+        sampler = lambda key: sample_forward_process(
+                t_curr, n_samples = batch_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=key, beta= 1
+            )
+        
+        params_history, loss_history = run_optimization(
+            loss_fn_per_batch=loss_fn_per_batch,
+            params_initial=current_params,
+            sampler = sampler,
+            mask=mask,
+            gradient_fn_per_batch=gradient_fn_per_batch,
+            key=optimization_subkey,
+            learning_rate=learning_rate,
+            n_epochs=n_epochs,
+            maximize=maximize,
+            window_size=window_size,
+            tolerance=tolerance,
+            patience=patience,
+            constraint_indices=constraint_indices
+        )
+        
+        _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
+        params_history_all_t.append(current_params)
+        
+        # Save current state after each time step
+        jnp.save(params_history_path, jnp.array(params_history_all_t))
+        with open(time_index_path, 'w') as f:
+            f.write(str(t_idx + 1))  # Save next time index to resume from
+        
+        if plot_steps:
+            if t_idx % plot_slice == 0:
+                # Plot optimization progress
+                plot_parameter_evolution(
+                    params_history=params_history,
+                    loss_history=loss_history,
+                    time = t_curr,
+                    time_index = t_idx,
+                    unflatten=unflatten,
+                    N_osc=N_osc,
+                    slicing=10,
+                    title=f"{training_method} (t = {t_curr:.3f})",
+                    maximize=maximize,
+                    labels_on=True,
+                    save_fig=True,
+                    path=output_dir,
+                    param_names=params_names,
+                )
+    
+    print('Optimization complete; saved parameters to', output_dir)
+    params_history_all_t = jnp.array(params_history_all_t)
+else:
+    print('Optimization already completed for all time steps')
+    
+
+#####################################
+# Interpolating parameters as function of time
+#####################################
+
+# First smooth the parameters
+smoothed_params = smooth_parameters(params_history_all_t, window_lengths=[10] * params_history_all_t.shape[1], poly_orders=[3] * params_history_all_t.shape[1])
+
+# Get interpolator functions
+params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts)
+params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts)
+
+# Then interpolate the smoothed parameters
+time_eval = jnp.linspace(forward_time_pts[0], forward_time_pts[-1], 200)
+interpolated_params_smoothed = params_interpolator_smoothed(time_eval)
+interpolated_params_non_smoothed = params_interpolator_non_smoothed(time_eval)
+
+plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False)
+
+#####################################
+# Run reverse process
+#####################################
+
+def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, ode_solve=False):
+    forward_params = jnp.zeros_like(params_flattened_initial)
+    forward_params = forward_params.at[0:N_osc].set(1.)
+    if ode_solve:
+        params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    elif training_method == "CD1":
+        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+    else:
+        params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+
+    # Setup SDE functions
+    drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
+
+    t0 = 0.0
+    t1 = t_forward
+    ts = jnp.linspace(t0, t1, 100)
+    dt0 = 0.00000001
+
+    # Generate multiple initial states
+    key, subkey = jr.split(key)
+    print('subkey', subkey)
+    initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=Temp, samples0=samples_target, key=subkey)
+    print('initial_states', initial_states)
+
+    # Generate a key for each initial condition
+    key, subkey = jr.split(key)
+    keys_brownian = jr.split(subkey, n_trajectories)
+    print('keys_brownian', keys_brownian)
+
+    # Vectorize solve_SDE across both initial states and keys
+    vectorized_solve_SDE = vmap(
+        lambda init_state, key_b: solve_SDE(
+            drift_fn,
+            diffusion_fn,
+            init_state,
+            key_b,
+            t0,
+            t1,
+            ts.shape[0],
+            dt0,
+            rtol=rtol,
+            atol=atol
+        ),
+        in_axes=(0, 0)
+    )
+
+    # Run SDE for all initial states at once
+    solutions = vectorized_solve_SDE(initial_states, keys_brownian)
+    all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
+    reverse_trajectories_path = f"{output_dir}/reverse_trajectories_{suffix}.npy"
+    jnp.save(reverse_trajectories_path, all_trajectories)
+    print(f"Reverse trajectories saved to {reverse_trajectories_path}")
+
+    final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
+    final_samples = final_samples_scaled / additional_rescaling
+    return final_samples
+
+
+# Run reverse process for both smoothed and non-smoothed parameters
+samples_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde",reverse_sde_key, Temp, atol_sde, rtol_sde, ode_solve=False)
+
+
+#####################################
+# Plotting
+#####################################
+from matplotlib.colors import LinearSegmentedColormap
+
+import jax.numpy as jnp
+import matplotlib.pyplot as plt
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.lines import Line2D
+
+# high-contrast violet→red
+viored = LinearSegmentedColormap.from_list("viored", ["violet", "red"])
+
+def plot_prl_comparison_with_iso_label(
+    energy_fn,
+    params_reverse,
+    params_equil,
+    reverse_samples,
+    sde_samples_direct,
+    weights, means, covs,       # GMM params
+    *,                           # everything below here must be named
+    x1_range=(-1.5, 1.5),
+    x2_range=(-1.5, 1.5),
+    n_points=200,
+    num_bins=200,
+    sample_stride=10,
+    figsize=(7, 4),
+    fontsize=10,
+    label_fontsize=14,           # increased default label fontsize
+    iso_levels=5,                # number of iso–contour levels
+):
+    # 1) Grid
+    x1 = jnp.linspace(x1_range[0], x1_range[1], n_points)
+    x2 = jnp.linspace(x2_range[0], x2_range[1], n_points)
+    X1, X2 = jnp.meshgrid(x1, x2)
+    dx, dy = x1[1] - x1[0], x2[1] - x2[0]
+
+    # 2) Exact marginals for histograms
+    x_lin = jnp.linspace(x1_range[0], x1_range[1], 1000)
+    marginal_x1 = sum(
+        w * jnp.exp(-0.5*((x_lin - m[0])**2)/C[0,0]) / jnp.sqrt(2*jnp.pi*C[0,0])
+        for w,m,C in zip(weights, means, covs)
+    )
+    marginal_x2 = sum(
+        w * jnp.exp(-0.5*((x_lin - m[1])**2)/C[1,1]) / jnp.sqrt(2*jnp.pi*C[1,1])
+        for w,m,C in zip(weights, means, covs)
+    )
+
+    # 3) True 2D GMM density on grid
+    true_prob = jnp.zeros_like(X1)
+    for w, m, C in zip(weights, means, covs):
+        diff = jnp.stack([X1 - m[0], X2 - m[1]], axis=-1)
+        invC = jnp.linalg.inv(C)
+        exponent = jnp.einsum('...i,ij,...j->...', diff, invC, diff)
+        norm = jnp.sqrt((2*jnp.pi)**2 * jnp.linalg.det(C))
+        true_prob += w * jnp.exp(-0.5 * exponent) / norm
+
+    # 4) Compute E & model P for both methods
+    E_list, P_list = [], []
+    for params in (params_reverse, params_equil):
+        E = jnp.zeros_like(X1)
+        for i in range(n_points):
+            for j in range(n_points):
+                x = jnp.array([X1[i,j], X2[i,j]])
+                E = E.at[i,j].set(energy_fn(x, params))
+        P = jnp.exp(-E)
+        P /= (jnp.sum(P) * dx * dy)
+        E_list.append(E)
+        P_list.append(P)
+
+    # 5) Figure setup
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+    labels = ['(a)','(b)','(c)','(d)','(e)','(f)']
+    for ax, lab in zip(axes.flatten(), labels):
+        ax.text(0.02, 0.95, lab,
+                transform=ax.transAxes,
+                fontsize=label_fontsize,
+                fontweight='bold',
+                va='top', ha='left')
+
+    row_titles = ['Reverse Trajectory', 'Equilibrium Sampling']
+
+    # 6) Plot rows
+    for row, (title, samples) in enumerate(zip(row_titles,
+                                              (reverse_samples, sde_samples_direct))):
+        # — combined marginals
+        ax = axes[row,0]
+        ax.hist(samples[:,0], bins=num_bins, density=True,
+                alpha=0.5, color='blue', label='x$_1$')
+        ax.hist(samples[:,1], bins=num_bins, density=True,
+                alpha=0.5, color='red',  label='x$_2$')
+        ax.plot(x_lin, marginal_x1, '--b', lw=2.5, label='Exact $p(x_1)$')
+        ax.plot(x_lin, marginal_x2, '--r', lw=2.5, label='Exact $p(x_2)$')
+        ax.set_xlabel('x$_1$, x$_2$', fontsize=fontsize)
+        ax.set_ylabel('Density', fontsize=fontsize)
+        ax.legend(fontsize=fontsize-2, loc='upper right')
+        ax.tick_params(labelsize=fontsize-2)
+
+        # — energy map
+        ax = axes[row,1]
+        cf = ax.contourf(X1, X2, E_list[row], levels=30,
+                         cmap='plasma', alpha=0.9)
+        cbar = plt.colorbar(cf, ax=ax)
+        cbar.set_label(r'$\hat{E}_{\theta(0)}$', fontsize=label_fontsize)
+        cbar.ax.tick_params(labelsize=label_fontsize-2)
+        ax.scatter(samples[::sample_stride,0],
+                   samples[::sample_stride,1],
+                   c='white', s=2, alpha=0.6)
+        ax.set_xlabel('x$_1$', fontsize=fontsize)
+        ax.set_ylabel('x$_2$', fontsize=fontsize)
+        ax.tick_params(labelsize=fontsize-2)
+
+        # — probability map + iso contours + legend entry
+        ax = axes[row,2]
+        cf = ax.contourf(X1, X2, P_list[row], levels=30,
+                         cmap='plasma', alpha=0.9)
+        cbar = plt.colorbar(cf, ax=ax)
+        cbar.set_label(
+            r'$p_{\theta(0)} = \exp[-\hat{E}_{\theta(0)}/k_\mathrm{B}T]/Z_{\theta(0)}$',
+            fontsize=label_fontsize
+        )
+        cbar.ax.tick_params(labelsize=label_fontsize-2)
+        ax.scatter(samples[::sample_stride,0],
+                   samples[::sample_stride,1],
+                   c='white', s=2, alpha=0.6)
+        iso = ax.contour(X1, X2, true_prob,
+                         levels=iso_levels,
+                         colors='red',
+                         linestyles='--',
+                         linewidths=1)
+        ax.clabel(iso, fmt='%.2f', fontsize=fontsize-3)
+        iso_proxy = Line2D(
+            [0],[0],
+            color='red',
+            linestyle='--',
+            linewidth=1,
+            label=r'$p(x_1,x_2)$'
+        )
+        ax.legend(handles=[iso_proxy], fontsize=fontsize-2, loc='upper right')
+
+        ax.set_xlabel('x$_1$', fontsize=fontsize)
+        ax.set_ylabel('x$_2$', fontsize=fontsize)
+        ax.tick_params(labelsize=fontsize-2)
+
+        # sanity check
+        tot = jnp.sum(P_list[row]) * dx * dy
+        print(f"{title:>22} total prob ≈ {tot:.6f}")
+
+    fig.tight_layout(rect=[0,0,1,0.95])
+    fig.savefig(f"{output_dir}/prl_comparison_with_iso_label.png", dpi=300)
+    plt.show()
+
+
+# Example call:
+plot_prl_comparison_with_iso_label(
+    energy_fn,
+    params_interpolator_non_smoothed(0)/Temp,
+    params_interpolator_non_smoothed(0)/Temp,
+    samples_generated_non_smoothed_sde,
+    samples_generated_non_smoothed_sde,
+    weights, means, covs,          # GMM params
+    n_points=50,
+    num_bins=150,
+    sample_stride=5,
+    x1_range=(-1.5,1.5),
+    x2_range=(-1.5,1.5),
+    figsize=(20,10),
+    fontsize=16,
+    label_fontsize=16,
+    iso_levels=7,
+)
