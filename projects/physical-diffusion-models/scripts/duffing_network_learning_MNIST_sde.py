@@ -30,10 +30,10 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 # Set parameters
 ##################################### 
 std_of_added_noise = 0.01
-additional_rescaling = .1
+additional_rescaling = .5
 skip_rate = 1
 # Forward process parameters
-n_time_steps = 10
+n_time_steps = 15
 t_forward = 4.
 sigma_forward = 1.
 exponential_time_pts = False
@@ -46,20 +46,20 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "CD1"
-learning_rate = 0.1
+learning_rate = 0.01
 n_epochs = 100000
 batch_size = 8*128
 window_size=100
 tolerance=1e-1
 patience=10
-CD1_dt = 0.001
+CD1_dt = 0.0001
 CD1_num_noise_samples = 50
 
-Temp = 0.01
+Temp = 0.005
 
 
 labels = [0,1]
-resolution = (8,8)
+resolution = (10,10)
 
 n_neighbour_couplings = 3
 
@@ -67,8 +67,8 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 10
-rtol_sde = 1e-3
-atol_sde = 1e-5
+rtol_sde = 1e-5
+atol_sde = 1e-7
 
 start_from_scratch = False
 
