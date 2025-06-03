@@ -119,7 +119,7 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
     
     # Compute final gradient difference
     avg_grad_diff = current_grads_avg - avg_evolved_grads
-    return -avg_grad_diff/(dt/2) # the negative sign ensures that this is in fact the same gradient as in eq. (1) in the paper "Connections Between Score Matching, Contrastive Divergence, and Pseudolikelihood for Continuous-Valued Variables" by Hyvärinen
+    return -avg_grad_diff/(D**2*dt/2) # the negative sign ensures that this is in fact the same gradient as in eq. (1) in the paper "Connections Between Score Matching, Contrastive Divergence, and Pseudolikelihood for Continuous-Valued Variables" by Hyvärinen
 
 
 
