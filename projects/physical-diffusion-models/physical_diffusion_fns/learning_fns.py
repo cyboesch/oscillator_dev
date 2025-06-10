@@ -38,7 +38,7 @@ def setup_MLE_gradient_per_batch(energy_fn, N_osc, gamma=1.0, k_b=1.0, T=1.0, t0
     return gradient_fn_per_batch
 
 ########################################################################################
-# Score matching gradient
+# Score matching 
 ########################################################################################
 
 def setup_score_matching_loss_per_batch(energy_fn):
@@ -54,6 +54,32 @@ def setup_score_matching_loss_per_batch(energy_fn):
         return jnp.sum(vmap(current_score_loss_per_sample)(batch))
     return loss_fn_per_batch
 
+def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
+    def loss_fn_per_batch(flattened_args,batch):
+        n_samples = batch.shape[0]
+        def log_propability_unnormalized(x):
+            return -energy_fn(x, flattened_args)
+        
+        current_score = grad(log_propability_unnormalized)
+        current_score2 = hessian(log_propability_unnormalized)
+        
+        current_score_loss_per_sample = lambda x: (jnp.trace(current_score2(x))/(k_b*T)**2 + 1/2 * jnp.sum(current_score(x)**2)/(k_b*T))/n_samples   
+        return jnp.sum(vmap(current_score_loss_per_sample)(batch))
+    return loss_fn_per_batch
+
+def setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=1.0):
+    def gradient_fn_per_batch(flattened_args,batch):
+        n_samples = batch.shape[0]
+        
+        force_fn = lambda x: grad(energy_fn, argnums=0)(x, flattened_args)
+        d_energy_d_params = lambda x: grad(energy_fn, argnums=1)(x, flattened_args)
+        dd_energy_d_params_d_x = lambda x: grad(d_energy_d_params)(x)
+        ddd_energy_d_params_d_x_d_x = lambda x: grad(dd_energy_d_params_d_x)(x)
+        
+        
+        gradient_per_sample = lambda x: (jnp.trace(ddd_energy_d_params_d_x_d_x(x))/(k_b*T)**2 + jnp.dot(d_energy_d_params(x), force_fn(x))/(k_b*T))/n_samples   
+        return jnp.sum(vmap(gradient_per_sample)(batch))
+    return gradient_fn_per_batch
 
 ########################################################################################
 # CD-1 gradient
