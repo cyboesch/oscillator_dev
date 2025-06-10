@@ -1,5 +1,5 @@
 import jax
-from jax import grad, vmap,pmap, hessian
+from jax import grad, vmap,pmap, hessian, jacfwd
 from jax.sharding import Mesh, PartitionSpec as P
 from jax.experimental import pjit
 import jax.numpy as jnp
@@ -68,17 +68,39 @@ def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
     return loss_fn_per_batch
 
 def setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=1.0):
-    def gradient_fn_per_batch(flattened_args,batch):
-        n_samples = batch.shape[0]
-        
-        force_fn = lambda x: grad(energy_fn, argnums=0)(x, flattened_args)
-        d_energy_d_params = lambda x: grad(energy_fn, argnums=1)(x, flattened_args)
-        dd_energy_d_params_d_x = lambda x: grad(d_energy_d_params)(x)
-        ddd_energy_d_params_d_x_d_x = lambda x: grad(dd_energy_d_params_d_x)(x)
-        
-        
-        gradient_per_sample = lambda x: (jnp.trace(ddd_energy_d_params_d_x_d_x(x))/(k_b*T)**2 + jnp.dot(d_energy_d_params(x), force_fn(x))/(k_b*T))/n_samples   
-        return jnp.sum(vmap(gradient_per_sample)(batch))
+    def gradient_fn_per_batch(params, batch, subkey_gradient=None):
+        """
+        params:     array of shape (P,)
+        batch:      array of shape (N, D)
+        returns:    array of shape (P,)
+        """
+        kBT = k_b * T  # just to shorten expressions
+
+        def per_sample_grad(x):
+            # 1) ∇ₓE(x; params)   shape (D,)
+            dE_dx = grad(energy_fn, argnums=0)(x, params)
+
+            # 2) ∇ₚE(x; params)   shape (P,)
+            dE_dp = grad(energy_fn, argnums=1)(x, params)
+
+            # 3) ∂²E/(∂p ∂x):   shape (P, D)
+            d2E_dpdx = jacfwd(lambda xx: grad(energy_fn, argnums=1)(xx, params))(x)
+
+            # 4) ∂³E/(∂p ∂x ∂x): shape (P, D, D)
+            d3E = jacfwd(lambda xx: jacfwd(lambda yy: grad(energy_fn, argnums=1)(yy, params))(xx))(x)
+
+            # 5) trace over the last two dims → shape (P,)
+            trace_term = jnp.trace(d3E, axis1=1, axis2=2)
+
+            # 6) dot the mixed second derivative with ∇ₓE → shape (P,)
+            dot_term = jnp.dot(d2E_dpdx, dE_dx)
+
+            # combine
+            return -trace_term / kBT + dot_term / kBT**2
+
+        # 7) vectorize over the batch and take the mean
+        grads = vmap(per_sample_grad)(batch)    # shape (N, P)
+        return jnp.mean(grads, axis=0)          # shape (P,)
     return gradient_fn_per_batch
 
 ########################################################################################
