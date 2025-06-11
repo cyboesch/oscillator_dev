@@ -63,7 +63,7 @@ def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
         current_score = grad(log_propability_unnormalized)
         current_score2 = hessian(log_propability_unnormalized)
         
-        current_score_loss_per_sample = lambda x: (jnp.trace(current_score2(x))/(k_b*T)**2 + 1/2 * jnp.sum(current_score(x)**2)/(k_b*T))/n_samples   
+        current_score_loss_per_sample = lambda x: (jnp.trace(current_score2(x))/(k_b*T) + 1/2 * jnp.sum(current_score(x)**2)/(k_b*T)**2)/n_samples   
         return jnp.sum(vmap(current_score_loss_per_sample)(batch))
     return loss_fn_per_batch
 
@@ -79,9 +79,6 @@ def setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=1.0)
         def per_sample_grad(x):
             # 1) ∇ₓE(x; params)   shape (D,)
             dE_dx = grad(energy_fn, argnums=0)(x, params)
-
-            # 2) ∇ₚE(x; params)   shape (P,)
-            dE_dp = grad(energy_fn, argnums=1)(x, params)
 
             # 3) ∂²E/(∂p ∂x):   shape (P, D)
             d2E_dpdx = jacfwd(lambda xx: grad(energy_fn, argnums=1)(xx, params))(x)
