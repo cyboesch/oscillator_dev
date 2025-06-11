@@ -45,10 +45,10 @@ else:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-training_method = "SM_local"
-learning_rate = 0.01
+training_method = "SM_at_kbT"
+learning_rate = 0.001
 n_epochs = 100000
-batch_size = 6*128
+batch_size = 32*128
 window_size=100
 tolerance=1e-2
 patience=10
@@ -59,7 +59,7 @@ Temp = 0.01
 
 
 labels = [0,1]
-resolution = (10,10)
+resolution = (12,12)
 
 n_neighbour_couplings = 3
 
@@ -201,7 +201,12 @@ if training_method == "SM":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
     gradient_fn_per_batch = None
     maximize = False
-elif training_method == "SM_local":
+elif training_method == "SM_at_kbT":
+    loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=Temp)
+    gradient_fn_per_batch = None
+    maximize = False
+    learning_rate = learning_rate*Temp
+elif training_method == "SM_local_at_kbT":
     loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=Temp)
     gradient_fn_per_batch = setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=Temp)
     maximize = False
@@ -356,7 +361,7 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
     forward_params = forward_params.at[0:N_osc].set(1.)
     if ode_solve:
         params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
-    elif training_method == "CD1":
+    elif training_method == "CD1" or training_method == "SM_at_kbT" or training_method == "SM_local_at_kbT":
         params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
     else:
         params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
