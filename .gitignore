@@ -15,6 +15,7 @@ mechanical-p-bit/out/*
 *.so
 
 out/
+_out/
 data/
 _data/
 jax-env-thermo/

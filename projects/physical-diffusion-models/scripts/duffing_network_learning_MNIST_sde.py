@@ -29,7 +29,7 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.001
 additional_rescaling = .5
 skip_rate = 1
 # Forward process parameters
@@ -48,14 +48,14 @@ print('forward_time_pts', forward_time_pts)
 training_method = "SM_local"
 learning_rate = 0.01
 n_epochs = 100000
-batch_size = 32*128
+batch_size = 6*128
 window_size=100
 tolerance=1e-2
 patience=10
 CD1_dt = 0.0001
 CD1_num_noise_samples = 50
 
-Temp = 0.005
+Temp = 0.01
 
 
 labels = [0,1]
@@ -66,7 +66,7 @@ n_neighbour_couplings = 3
 energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
-n_trajectories = 10
+n_trajectories = 100
 rtol_sde = 1e-5
 atol_sde = 1e-7
 
@@ -77,7 +77,7 @@ start_from_scratch = False
 #####################################
 
 problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
-data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}_skip_rate_{skip_rate}"
+data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}"
 
 optimization_folder = (
     f"training_method_{training_method}_"
@@ -115,10 +115,8 @@ import numpy as np
 path_to_data = os.path.join(here,"..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}.npy")
 data_np = np.load(path_to_data)
 
-# Optionally convert to a JAX array
-images_flat_raw_full = jnp.array(data_np)
 
-images_flat_raw = images_flat_raw_full[0::skip_rate,:]
+images_flat_raw = jnp.array(data_np)
 n_samples = images_flat_raw.shape[0]
 print("Data shape:", images_flat_raw.shape)
 
