@@ -12,7 +12,7 @@ import jax.random as jr
 import os
 import matplotlib.pyplot as plt
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
-from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization
+from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
 from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
@@ -45,12 +45,12 @@ else:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-training_method = "CD1"
+training_method = "SM_local"
 learning_rate = 0.01
 n_epochs = 100000
-batch_size = 8*128
+batch_size = 32*128
 window_size=100
-tolerance=1e-1
+tolerance=1e-2
 patience=10
 CD1_dt = 0.0001
 CD1_num_noise_samples = 50
@@ -198,13 +198,20 @@ else:
 
 ##################################### 
 # Setup loss and gradient functions based on selected method
+
 if training_method == "SM":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
     gradient_fn_per_batch = None
     maximize = False
+elif training_method == "SM_local":
+    loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=Temp)
+    gradient_fn_per_batch = setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=Temp)
+    maximize = False
+    learning_rate = learning_rate*Temp
 elif training_method == "CD1":
     loss_fn_per_batch = setup_score_matching_loss_per_batch(energy_fn)
     gradient_fn_per_batch = lambda flattened_args, batch, key_CD1: -CD1_gradient(energy_fn, batch, flattened_args, dt=CD1_dt, D=Temp, key=key_CD1, num_noise_samples=CD1_num_noise_samples)
+    learning_rate = learning_rate*Temp
     maximize = False
 elif training_method == "MLE":
     loss_fn_per_batch = setup_MLE_loss_per_batch(energy_fn)
