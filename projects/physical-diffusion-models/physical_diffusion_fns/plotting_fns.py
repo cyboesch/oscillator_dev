@@ -9,6 +9,7 @@ import matplotlib
 import numpy as np
 # Use non-interactive backend for headless environments
 matplotlib.use('Agg')
+import shutil
 
 jax.config.update("jax_enable_x64", True)
 
@@ -110,73 +111,13 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
 # Plotting parameter evolution
 ########################################################################################
 
-# def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten, N_osc, param_names, slicing=10, figsize=(4, 14), title="Parameter Evolution", maximize=False, labels_on=True, save_fig=False, path=None, plot_show=False):
-#     """
-#     Plot the evolution of parameters during optimization.
-    
-#     Args:
-#         params_history: History of flattened parameters
-#         loss_history: History of loss values
-#         unflatten: Function to unflatten parameters
-#         N_osc: Number of oscillators
-#         slicing: Plot every nth point (default: 10)
-#         figsize: Figure size as (width, height) tuple (default: (6, 6))
-#         title: Super title for the plot (default: "Parameter Evolution")
-#         param_names: List of parameter names for plotting
-#     """
-    
-#     best_loss, best_params, best_idx = get_best_params(params_history, loss_history, maximize)
-    
-#     # Unpack parameter histories
-#     param_histories = reformat_optimization_results(params_history, loss_history, unflatten, slicing=slicing, maximize=maximize)
-
-#     print(f"Best loss: {loss_history[best_idx]:.4e}")
-#     print(f"Found at epoch: {best_idx * slicing}")
-
-#     # Create figure with (num_params + 1) x 1 subplots
-#     n_params = len(param_names)
-#     fig, axes = plt.subplots(n_params + 1, 1, figsize=figsize)
-
-#     # Plot each parameter evolution
-#     for idx, param_name in enumerate(param_names):
-#         param_history = param_histories[idx]
-#         if labels_on and N_osc <= 2:
-#             for i in range(param_history.shape[1]):
-#                 axes[idx].plot(param_history[:, i], label=f'{param_name}[{i}]')
-#         else:
-#             axes[idx].plot(param_history)
-#         axes[idx].set_title(f'Evolution of {param_name}')
-#         axes[idx].set_xlabel(f'Epoch (x {slicing})')
-#         axes[idx].set_ylabel(f'{param_name} Value')
-#         if labels_on and N_osc <= 2:
-#             axes[idx].legend()
-#         axes[idx].grid(True)
-
-#     # Plot loss evolution
-#     axes[-1].plot(loss_history, label='Loss')
-#     axes[-1].set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
-#     axes[-1].set_xlabel(f'Epoch (x {slicing})')
-#     axes[-1].set_ylabel('Loss')
-#     axes[-1].legend()
-#     axes[-1].grid(True)
-
-#     plt.tight_layout()
-#     plt.suptitle(title, y=1.02)
-#     if save_fig and path is not None:
-#         print(f"Saving figure to {path}")
-#         plt.savefig(path + f"/parameter_opt_evolution_at_timeidx_{time_index}_time_{time:.5f}.png", dpi=300, bbox_inches='tight')
-#     if plot_show:
-#         plt.show()
-#     plt.close()
-#     return best_loss, best_params, best_idx
-
 
 def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten,
-                             N_osc, param_names, slicing=10, figsize=(6, 14), title="Parameter Evolution",
+                             N_osc, param_names, figsize=(6, 14), title="Parameter Evolution",
                              maximize=False, labels_on=True, save_fig=False, path=None,
-                             plot_show=False, small_fig=True):
+                             plot_show=False, small_fig=False):
     """
-    Plot the evolution of parameters during optimization, with optional small-figure mode.
+    Plot the evolution of parameters during optimization at 100 fixed time steps.
 
     Args:
         params_history: History of flattened parameters
@@ -186,7 +127,6 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
         unflatten: Function to unflatten parameters
         N_osc: Number of oscillators (for labeling)
         param_names: List of parameter names for plotting
-        slicing: Plot every nth point (default: 10)
         figsize: Base figure size (width, height)
         title: Super title for the plot
         maximize: If True, best loss is maximum instead of minimum
@@ -196,41 +136,54 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
         plot_show: Whether to call plt.show()
         small_fig: If True, scale figsize down by 0.2 for quick testing
     """
-    # Determine scaled figsize
+    # Scale down figure if requested
     if small_fig:
         fig_w, fig_h = figsize
         figsize = (fig_w * 0.2, fig_h * 0.2)
 
+    # Determine best
     best_loss, best_params, best_idx = get_best_params(params_history, loss_history, maximize)
+
+    # Unpack full parameter histories (no slicing)
     param_histories = reformat_optimization_results(params_history, loss_history,
-                                                    unflatten, slicing=slicing, maximize=maximize)
+                                                    unflatten, slicing=1, maximize=maximize)
+
+    # Subsample indices for up to 100 equally‐spaced steps (inclusive endpoints)
+    n_points = param_histories[0].shape[0]
+    num_samples = min(100, n_points)
+    # Generate equally spaced floats, round to nearest int, then unique and sort
+    raw_idxs = np.linspace(0, n_points - 1, num_samples)
+    idxs = np.unique(np.round(raw_idxs).astype(int))
 
     print(f"Best loss: {loss_history[best_idx]:.4e}")
-    print(f"Found at epoch: {best_idx * slicing}")
+    print(f"Found at epoch: {best_idx * 1}")
 
+    # Create subplots: one per parameter plus loss
     n_params = len(param_names)
     fig, axes = plt.subplots(n_params + 1, 1, figsize=figsize)
 
-    # Plot each parameter evolution
+    # Plot each parameter evolution at fixed indices
     for idx, param_name in enumerate(param_names):
-        hist = param_histories[idx]
+        full_hist = param_histories[idx]
+        hist = full_hist[idxs]
         ax = axes[idx]
         if labels_on and N_osc <= 2:
-            for i in range(hist.shape[1]):
-                ax.plot(hist[:, i], label=f'{param_name}[{i}]')
+            for j in range(hist.shape[1]):
+                ax.plot(idxs, hist[:, j], label=f'{param_name}[{j}]')
             ax.legend()
         else:
-            ax.plot(hist)
+            ax.plot(idxs, hist)
         ax.set_title(f'Evolution of {param_name}')
-        ax.set_xlabel(f'Epoch (x {slicing})')
+        ax.set_xlabel('Step index')
         ax.set_ylabel(param_name)
         ax.grid(True)
 
-    # Loss subplot
+    # Plot subsampled loss
+    loss_plot = np.array(loss_history)[idxs]
     ax_loss = axes[-1]
-    ax_loss.plot(loss_history, label='Loss')
+    ax_loss.plot(idxs, loss_plot, label='Loss')
     ax_loss.set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
-    ax_loss.set_xlabel(f'Epoch (x {slicing})')
+    ax_loss.set_xlabel('Step index')
     ax_loss.set_ylabel('Loss')
     ax_loss.legend()
     ax_loss.grid(True)
@@ -244,6 +197,83 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
     if plot_show:
         plt.show()
     plt.close(fig)
+    return best_loss, best_params, best_idx
+
+
+
+# def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten,
+#                              N_osc, param_names, slicing=10, figsize=(6, 14), title="Parameter Evolution",
+#                              maximize=False, labels_on=True, save_fig=False, path=None,
+#                              plot_show=False, small_fig=True):
+#     """
+#     Plot the evolution of parameters during optimization, with optional small-figure mode.
+
+#     Args:
+#         params_history: History of flattened parameters
+#         loss_history: History of loss values
+#         time: Array of time points
+#         time_index: Index of current time for filename
+#         unflatten: Function to unflatten parameters
+#         N_osc: Number of oscillators (for labeling)
+#         param_names: List of parameter names for plotting
+#         slicing: Plot every nth point (default: 10)
+#         figsize: Base figure size (width, height)
+#         title: Super title for the plot
+#         maximize: If True, best loss is maximum instead of minimum
+#         labels_on: Whether to show labels for N_osc <= 2
+#         save_fig: Boolean to save figure
+#         path: Path to save figure
+#         plot_show: Whether to call plt.show()
+#         small_fig: If True, scale figsize down by 0.2 for quick testing
+#     """
+#     # Determine scaled figsize
+#     if small_fig:
+#         fig_w, fig_h = figsize
+#         figsize = (fig_w * 0.2, fig_h * 0.2)
+
+#     best_loss, best_params, best_idx = get_best_params(params_history, loss_history, maximize)
+#     param_histories = reformat_optimization_results(params_history, loss_history,
+#                                                     unflatten, slicing=slicing, maximize=maximize)
+
+#     print(f"Best loss: {loss_history[best_idx]:.4e}")
+#     print(f"Found at epoch: {best_idx * slicing}")
+
+#     n_params = len(param_names)
+#     fig, axes = plt.subplots(n_params + 1, 1, figsize=figsize)
+
+#     # Plot each parameter evolution
+#     for idx, param_name in enumerate(param_names):
+#         hist = param_histories[idx]
+#         ax = axes[idx]
+#         if labels_on and N_osc <= 2:
+#             for i in range(hist.shape[1]):
+#                 ax.plot(hist[:, i], label=f'{param_name}[{i}]')
+#             ax.legend()
+#         else:
+#             ax.plot(hist)
+#         ax.set_title(f'Evolution of {param_name}')
+#         ax.set_xlabel(f'Epoch (x {slicing})')
+#         ax.set_ylabel(param_name)
+#         ax.grid(True)
+
+#     # Loss subplot
+#     ax_loss = axes[-1]
+#     ax_loss.plot(loss_history, label='Loss')
+#     ax_loss.set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
+#     ax_loss.set_xlabel(f'Epoch (x {slicing})')
+#     ax_loss.set_ylabel('Loss')
+#     ax_loss.legend()
+#     ax_loss.grid(True)
+
+#     plt.tight_layout()
+#     plt.suptitle(title, y=1.02)
+
+#     if save_fig and path:
+#         filename = f"{path}/parameter_opt_evolution_timeidx_{time_index}_time_{time:.5f}.png"
+#         plt.savefig(filename, dpi=300, bbox_inches='tight')
+#     if plot_show:
+#         plt.show()
+#     plt.close(fig)
 
 ########################################################################################
 # Plotting forward diffusion process
