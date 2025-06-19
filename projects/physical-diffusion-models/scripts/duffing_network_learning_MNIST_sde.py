@@ -29,7 +29,7 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.001
+std_of_added_noise = 0.01
 additional_rescaling = .5
 skip_rate = 1
 # Forward process parameters
@@ -46,11 +46,11 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "SM_at_kbT"
-learning_rate = 0.001
+learning_rate = 0.01
 n_epochs = 100000
-batch_size = 32*128
+batch_size = 16*128
 window_size=100
-tolerance=1e-2
+tolerance=.1
 patience=10
 CD1_dt = 0.0001
 CD1_num_noise_samples = 50
@@ -59,7 +59,7 @@ Temp = 0.01
 
 
 labels = [0,1]
-resolution = (12,12)
+resolution = (10,10)
 
 n_neighbour_couplings = 3
 
@@ -99,6 +99,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 base_dir = os.path.join(here,"..", "out", "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
+
 
 # Create directories if they don't exist
 os.makedirs(output_dir, exist_ok=True)
@@ -279,7 +280,7 @@ if start_t_idx < len(forward_time_pts):
 
         if t_idx == 0:
             samples_0 = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=optimization_key)
-            plot_forward_marginals(samples_0, t_forward, sigma_forward, beta=1.0, path=output_dir, save_fig=True, fontsize=16, plot_show=True)
+            plot_forward_marginals(samples_0, t_forward, sigma_forward, Temp=Temp, beta=1.0, path=plot_folder, save_fig=True, fontsize=16, plot_show=True)
         
         sampler = lambda key: sample_forward_process(
                 t_curr, n_samples = batch_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=key, beta= 1
@@ -304,11 +305,13 @@ if start_t_idx < len(forward_time_pts):
         _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
         params_history_all_t.append(current_params)
         
+        
+        
         # Save current state after each time step
         jnp.save(params_history_path, jnp.array(params_history_all_t))
+        print('params saved')
         with open(time_index_path, 'w') as f:
             f.write(str(t_idx + 1))  # Save next time index to resume from
-        
         if plot_steps:
             if t_idx % plot_slice == 0:
                 # Plot optimization progress
@@ -327,6 +330,7 @@ if start_t_idx < len(forward_time_pts):
                     path=output_dir,
                     param_names=params_names,
                 )
+        print('end plotting')
     
     print('Optimization complete; saved parameters to', output_dir)
     params_history_all_t = jnp.array(params_history_all_t)
