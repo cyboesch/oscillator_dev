@@ -46,11 +46,11 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "SM_at_kbT"
-learning_rate = 0.01
+learning_rate = 0.1
 n_epochs = 100000
 batch_size = 16*128
 window_size=100
-tolerance=.1
+tolerance=10.
 patience=10
 CD1_dt = 0.0001
 CD1_num_noise_samples = 50
