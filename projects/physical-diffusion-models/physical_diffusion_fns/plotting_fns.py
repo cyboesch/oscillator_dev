@@ -8,7 +8,7 @@ import math
 import matplotlib
 import numpy as np
 # Use non-interactive backend for headless environments
-matplotlib.use('Agg')
+# matplotlib.use('Agg')
 import shutil
 
 jax.config.update("jax_enable_x64", True)
