@@ -33,6 +33,7 @@ std_of_added_noise = 0.001
 additional_rescaling = 1.
 skip_rate = 1
 # Forward process parameters
+Temp = 0.01
 n_time_steps = 15
 t_forward = 4.
 sigma_forward = 1.
@@ -45,17 +46,17 @@ else:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-training_method = "SM_at_kbT"
-learning_rate = 0.1
+training_method = "SM"
+learning_rate = 0.01
 n_epochs = 100000
-batch_size = 8*128
+batch_size = 32*128
 window_size=100
-tolerance=1.
+tolerance=0.001
 patience=10
 CD1_dt = 0.0001
 CD1_num_noise_samples = 50
 
-Temp = 0.005
+
 
 
 labels = [0,1]
@@ -67,8 +68,8 @@ energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
-rtol_sde = 1e-5
-atol_sde = 1e-7
+rtol_sde = 1e-7
+atol_sde = 1e-9
 
 start_from_scratch = False
 
@@ -335,6 +336,7 @@ if start_t_idx < len(forward_time_pts):
     params_history_all_t = jnp.array(params_history_all_t)
 else:
     print('Optimization already completed for all time steps')
+    params_history_all_t = jnp.array(params_history_all_t)
     
 
 #####################################
