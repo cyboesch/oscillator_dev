@@ -46,7 +46,9 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "SM_at_kbT"
-learning_rate = .1
+learning_rate = 1.
+lr_decay_rate = 0.95
+lr_decay_steps = 6000
 n_epochs = 100000
 batch_size = 6*128
 window_size=100
@@ -80,13 +82,15 @@ problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neigh
 data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}"
 
 optimization_folder = (
-    f"training_method_{training_method}_"
+    f"schedule_training_method_{training_method}_"
     + (f"CD1_dt_{CD1_dt}_CD1_num_noise_samples_{CD1_num_noise_samples}_" if training_method == "CD1" else "")
     + f"exp_time_pts_{exponential_time_pts}_"
     f"t_forward_{t_forward}_"
     f"n_timesteps_{n_time_steps}_"
     f"sigma_forward_{sigma_forward}_"
     f"lr_{learning_rate}_"
+    f"lr_decay_rate_{lr_decay_rate}_"
+    f"lr_decay_steps_{lr_decay_steps}_"
     f"epochs_{n_epochs}_"
     f"batch_{batch_size}_"
     f"window_{window_size}_"
@@ -299,12 +303,13 @@ if start_t_idx < len(forward_time_pts):
             window_size=window_size,
             tolerance=tolerance,
             patience=patience,
-            constraint_indices=constraint_indices
+            constraint_indices=constraint_indices,
+            lr_decay_rate=lr_decay_rate,
+            lr_decay_steps=lr_decay_steps
         )
         
         _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
         params_history_all_t.append(current_params)
-        
         
         
         # Save current state after each time step
@@ -314,10 +319,28 @@ if start_t_idx < len(forward_time_pts):
             f.write(str(t_idx + 1))  # Save next time index to resume from
         if plot_steps:
             if t_idx % plot_slice == 0:
+
+                length = len(loss_history)
+                num_pts = min(100, length)
+
+                # build 100 (or fewer) evenly‐spaced integer indices in [0, length-1]
+                raw_idxs = jnp.linspace(0, length - 1, num_pts).astype(int)
+                idxs = jnp.unique(jnp.concatenate([
+                    jnp.array([0], dtype=int),
+                    raw_idxs,
+                    jnp.array([length - 1], dtype=int),
+                ]))
+                # turn into a Python list of ints so we can index the params list
+                idxs_py = idxs.tolist()
+
+                # slice params_history (still a list) and loss_history (convert to array first)
+                params_ds = [params_history[i] for i in idxs_py]
+                loss_arr   = jnp.array(loss_history)
+                loss_ds    = loss_arr[idxs]
                 # Plot optimization progress
                 plot_parameter_evolution(
-                    params_history=params_history,
-                    loss_history=loss_history,
+                    params_history=params_ds,
+                    loss_history=loss_ds,
                     time = t_curr,
                     time_index = t_idx,
                     unflatten=unflatten,
