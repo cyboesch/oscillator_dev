@@ -46,7 +46,7 @@ print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
 training_method = "SM_at_kbT"
-learning_rate = 1.
+learning_rate = .1
 n_epochs = 100000
 batch_size = 6*128
 window_size=100
