@@ -125,6 +125,61 @@ def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0
     x_t_samples = mean_factor * x0_samples + jnp.sqrt(var_factor) * noise
     return x_t_samples
 
+########################################################################################
+# Forward diffusion process - scaled noise
+########################################################################################
+
+
+def sample_forward_noise_scaled(t,
+                                n_samples,
+                                D,
+                                sigma_final,
+                                samples0,
+                                key,
+                                beta: float = 1.0):
+    """
+    Draws n_samples of eps/sigma_t for the forward SDE
+      dx = -beta/sigma_final^2 * x dt + sqrt(2*D*beta) dw,
+    whose marginal is
+      x_t = exp(-beta t / sigma_final^2) x0
+            + sigma_t * eps,  eps ~ N(0,I).
+    We return eps/sigma_t so that
+      eps_over_sigma = (x_t - mean_factor * x0) / var_factor_sqrt**2
+                     = eps / sigma_t.
+    
+    Parameters:
+      t           : time (scalar)
+      n_samples   : how many eps/sigma_t to draw
+      D           : temperature / noise strength
+      sigma_final : target final-variance parameter
+      beta        : diffusion rate
+      samples0    : array of shape (M, N) of x0’s
+      key         : JAX PRNGKey
+      
+    Returns:
+      eps_over_sigma: array (n_samples, N) of iid samples of eps/sigma_t
+    """
+    # split key for sampling indices vs. noise
+    key_idx, key_noise = jax.random.split(key, 2)
+    
+    # pick x0’s at random
+    M = samples0.shape[0]
+    idxs = jax.random.choice(key_idx, M, shape=(n_samples,), replace=True)
+    x0 = samples0[idxs]
+    
+    # compute instantaneous sigma_t
+    # var_factor = D * sigma_final**2 * (1 - exp(-2 beta t / sigma_final^2))
+    var_factor = D * (sigma_final**2) * (
+        1.0 - jnp.exp(-2.0 * beta * t / (sigma_final**2))
+    )
+    sigma_t = jnp.sqrt(var_factor)
+    
+    # sample eps ~ N(0,I)
+    eps = jax.random.normal(key_noise, shape=x0.shape)
+    
+    # return eps / sigma_t
+    # jnp.expand_dims to broadcast if needed
+    return eps / sigma_t
 
 ########################################################################################
 # Sampling from total distribution
