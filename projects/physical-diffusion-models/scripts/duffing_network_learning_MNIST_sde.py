@@ -319,16 +319,24 @@ if start_t_idx < len(forward_time_pts):
             f.write(str(t_idx + 1))  # Save next time index to resume from
         if plot_steps:
             if t_idx % plot_slice == 0:
-                
-                length_histories = loss_history.shape[0]
-                num_pts = min(100, length_histories)
-                raw_idxs = jnp.linspace(0, length_histories-1, num_pts).astype(int)
-                idxs = jnp.unique(jnp.concatenate([jnp.array([0]), raw_idxs, jnp.array([length_histories-1])]))
-                idxs = idxs.tolist()   # convert to Python ints
 
-                # then slice
-                params_ds = [params_history[i] for i in idxs]
-                loss_ds   = loss_history[idxs]
+                length = len(loss_history)
+                num_pts = min(100, length)
+
+                # build 100 (or fewer) evenly‐spaced integer indices in [0, length-1]
+                raw_idxs = jnp.linspace(0, length - 1, num_pts).astype(int)
+                idxs = jnp.unique(jnp.concatenate([
+                    jnp.array([0], dtype=int),
+                    raw_idxs,
+                    jnp.array([length - 1], dtype=int),
+                ]))
+                # turn into a Python list of ints so we can index the params list
+                idxs_py = idxs.tolist()
+
+                # slice params_history (still a list) and loss_history (convert to array first)
+                params_ds = [params_history[i] for i in idxs_py]
+                loss_arr   = jnp.array(loss_history)
+                loss_ds    = loss_arr[idxs]
                 # Plot optimization progress
                 plot_parameter_evolution(
                     params_history=params_ds,
