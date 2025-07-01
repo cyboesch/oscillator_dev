@@ -32,7 +32,7 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
-Temp = 0.01
+Temp = 0.005
 n_time_steps = 15
 t_forward = 4.
 sigma_forward = 1.
@@ -52,7 +52,7 @@ lr_decay_steps = 6000
 n_epochs = 100000
 batch_size = 6*128
 window_size=100
-tolerance=10.
+tolerance=1.
 patience=10
 CD1_dt = 0.0001
 CD1_num_noise_samples = 50
