@@ -303,9 +303,8 @@ def plot_forward_marginals(samples_t, t_forward, sigma_final, Temp=1.0, beta=1.0
     ncols = int(math.ceil(math.sqrt(n_dim)))
     nrows = int(math.ceil(n_dim / ncols))
 
-    # Choose figure size; small_fig uses tiny dimensions for testing
 
-    figsize = (3 * ncols, 3 * nrows)
+    figsize = (2 * ncols, 2 * nrows)
 
     fig = plt.figure(figsize=figsize)
 
