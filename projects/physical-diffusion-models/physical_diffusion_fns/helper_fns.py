@@ -179,7 +179,15 @@ def sample_forward_noise_scaled(t,
     
     # return eps / sigma_t
     # jnp.expand_dims to broadcast if needed
-    return eps / sigma_t
+    return eps #/ sigma_t
+
+def denoising_sampler_for_x_t_and_eps_over_sigma(t, n_samples, D, sigma_final, samples0, key, beta=1.0):
+    _, subkey_x_t, subkey_eps_over_sigma = jax.random.split(key, 3)
+    x_t_samples = sample_forward_process(t, n_samples, D, sigma_final, samples0, subkey_x_t, beta)
+    eps_over_sigma = sample_forward_noise_scaled(t, n_samples, D, sigma_final, samples0, subkey_eps_over_sigma, beta)
+    
+    return x_t_samples, eps_over_sigma
+            
 
 ########################################################################################
 # Sampling from total distribution
