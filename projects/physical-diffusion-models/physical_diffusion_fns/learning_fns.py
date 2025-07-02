@@ -54,6 +54,39 @@ def setup_score_matching_loss_per_batch(energy_fn):
         return jnp.sum(vmap(current_score_loss_per_sample)(batch))
     return loss_fn_per_batch
 
+def setup_denoising_score_matching_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
+    """
+    Returns a loss function of the form
+
+      loss = loss_fn_per_batch(flattened_args, batch)
+
+    where `batch` is a tuple
+      (x_t_batch, eps_over_sigma_batch)
+    both of shape (n_samples, dim).
+
+    It computes
+      1/(2n) * sum_i || score(x_t_i) + eps_over_sigma_i ||^2
+    where score = ∇_x log p_theta = -∇_x energy_fn.
+    """
+    def loss_fn_per_batch(flattened_args, batch):
+        x_t_batch, eps_over_sigma = batch   # each (n, dim)
+        n = x_t_batch.shape[0]
+
+        # model‐score: ∇_x log p_theta(x)
+        def log_unnorm(x):
+            return -energy_fn(x, flattened_args)/(k_b*T)
+        score_fn = grad(log_unnorm)
+
+        # per‐sample DSM loss: ½‖s(x_t) + ε/σ_t‖², averaged over n
+        def loss_per_sample(x_t, eps_s):
+            s = score_fn(x_t)                  # (dim,)
+            return 0.5 * jnp.sum((s + eps_s)**2) / n
+
+        losses = vmap(loss_per_sample)(x_t_batch, eps_over_sigma)
+        return jnp.sum(losses)
+
+    return loss_fn_per_batch
+
 def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
     def loss_fn_per_batch(flattened_args,batch):
         n_samples = batch.shape[0]
