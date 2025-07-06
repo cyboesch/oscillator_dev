@@ -63,8 +63,8 @@ def load_and_preprocess_mnist(labels=None, resolution=(8, 8), step=1):
 
 # %%
 labels = [0,1]
-resolution = (10,10)
-step = 10
+resolution = (16,16)
+step = 1
 images, labels_array = load_and_preprocess_mnist(labels=labels, resolution=resolution, step=step)
 
 # Plot a few examples
@@ -85,7 +85,7 @@ plt.tight_layout()
 # plt.show()
 
 # %%
-specifics = f"labels_{labels}_resolution_{resolution}_step_{step}"
+specifics = f"labels_{labels}_resolution_{resolution}"
 
 # Create the target directory if it doesn't exist.
 PROJECT_DIRECTORY: Path = Path(__file__).parent.parent.absolute()
