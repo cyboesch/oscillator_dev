@@ -29,7 +29,7 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.001
 additional_rescaling = 1.
 # Forward process parameters
 Temp = 0.005
@@ -50,10 +50,10 @@ learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000
 n_epochs = 100000
-batch_size = 2*128
+batch_size = 4*128
 window_size=1000
 tolerance=.1
-patience=100
+patience=1000
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
@@ -63,7 +63,7 @@ CD1_num_noise_samples = 1000
 labels = [0,1]
 resolution = (16,16)
 
-n_neighbour_couplings = 4
+n_neighbour_couplings = 5
 
 energy_fn_type = "6th_order_duffing_coupling"
 
@@ -100,7 +100,7 @@ optimization_folder = (
 
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
-base_dir = os.path.join(here,"..","out", "2025_07_06", "problems")
+base_dir = os.path.join(here,"..","out", "2025_07_09", "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
 
