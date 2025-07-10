@@ -10,7 +10,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=3
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:4
 
 echo "Starting job..."
 echo "Hostname: $(hostname)"
