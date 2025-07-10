@@ -50,10 +50,10 @@ learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000
 n_epochs = 100000
-batch_size = 128
+batch_size = 32*128
 window_size=1000
 tolerance=.1
-patience=100
+patience=400
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
@@ -63,7 +63,7 @@ CD1_num_noise_samples = 1000
 labels = [0,1]
 resolution = (16,16)
 
-n_neighbour_couplings = 4
+n_neighbour_couplings = 6
 
 energy_fn_type = "6th_order_duffing_coupling"
 
