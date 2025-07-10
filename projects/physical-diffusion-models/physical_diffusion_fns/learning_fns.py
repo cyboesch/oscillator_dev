@@ -207,123 +207,6 @@ def CD1_gradient(energy_fn, samples, flattened_args, dt, D, key, num_noise_sampl
 # #######################################################################################
 
 
-# def run_optimization(loss_fn_per_batch, 
-#                                  params_initial, 
-#                                  samples, 
-#                                  gradient_fn_per_batch=None,
-#                                  mask=None, 
-#                                  key=jr.PRNGKey(0), 
-#                                  batch_size=128,
-#                                  learning_rate=0.001,
-#                                  n_epochs=20000, 
-#                                  maximize=False, 
-#                                  window_size=1000, 
-#                                  tolerance=1e-16, 
-#                                  patience=50,
-#                                  constraint_indices=None):
-#     """
-#     Runs gradient-based optimization using mini-batches with an adaptive learning rate schedule 
-#     (exponential decay) and an early stopping criterion based on the moving average of the loss.
-
-#     Args:
-#         loss_fn_per_batch: Callable that computes the loss for a batch of samples.
-#         params_initial: Initial parameters (any pytree).
-#         samples: Array of training samples.
-#         gradient_fn_per_batch: Optional callable to compute gradients.
-#         mask: Optional mask to apply to the gradients.
-#         key: PRNG key for random batch sampling.
-#         batch_size: Number of samples per optimization step.
-#         learning_rate: Initial learning rate for the Adam optimizer.
-#         n_epochs: Maximum number of optimization steps.
-#         maximize: Whether to maximize (rather than minimize) the loss.
-#         window_size: Number of recent epochs over which to compute the moving average.
-#         tolerance: Minimum improvement required in the moving average to reset the patience counter.
-#         patience: Number of consecutive windows without sufficient improvement before stopping.
-#         constraint_indices: Optional indices of parameters for which constraints are applied.
-
-#     Returns:
-#         params_history: List of parameter values at each optimization step.
-#         loss_history: List of loss values at each optimization step.
-#     """
-    
-#     # Define an exponential decay learning rate schedule
-#     lr_schedule = optax.exponential_decay(
-#         init_value=learning_rate,
-#         transition_steps=100,  # number of steps after which to decay
-#         decay_rate=0.99,
-#         staircase=True
-#     )
-    
-#     # Initialize the optimizer with the learning rate schedule
-#     optimizer = optax.adam(learning_rate=lr_schedule)
-#     opt_state = optimizer.init(params_initial)
-#     if mask is None:
-#         mask = jnp.ones(params_initial.shape[0])
-
-#     @partial(jax.jit, static_argnums=(3,))
-#     def training_step(params, opt_state, samples, batch_size, key):
-#         key, subkey = jr.split(key)
-#         n_samples = len(samples)
-#         idx = jr.randint(subkey, (batch_size,), 0, n_samples)
-#         batch = samples[idx]
-#         # Define loss for current batch
-#         loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
-#         loss_val = loss_fn(params)
-#         # Compute gradients
-#         if gradient_fn_per_batch is None:
-#             dparams = jax.grad(loss_fn)(params)
-#         else:
-#             dparams = gradient_fn_per_batch(params, batch)
-#         if maximize:
-#             dparams = -dparams
-#         dparams = dparams * mask
-#         updates, opt_state = optimizer.update(dparams, opt_state)
-#         params = optax.apply_updates(params, updates)
-#         return params, opt_state, key, loss_val
-
-#     params_history = []
-#     loss_history = []
-#     best_moving_avg = jnp.inf
-#     patience_counter = 0
-
-#     params = params_initial
-
-#     for epoch in range(n_epochs):
-#         key, subkey = jr.split(key)
-#         params, opt_state, key, loss = training_step(params, opt_state, samples, batch_size, subkey)
-        
-#         if constraint_indices is not None:
-#             # Define a small positive constant epsilon to ensure strict positivity.
-#             epsilon = 0.01
-#             # Project the subset of parameters to be at least epsilon
-#             params = params.at[constraint_indices].set(jnp.maximum(params[constraint_indices], epsilon))
-
-#         params_history.append(params)
-#         loss_history.append(loss)
-
-#         # Check convergence if we have enough history
-#         if epoch % 100 == 0 and len(loss_history) >= window_size:
-#             current_moving_avg = jnp.mean(jnp.array(loss_history[-window_size:]))
-#             # Reset patience if the moving average improves by at least tolerance
-#             if current_moving_avg < best_moving_avg - tolerance:
-#                 best_moving_avg = current_moving_avg
-#                 patience_counter = 0
-#             else:
-#                 patience_counter += 1
-
-#         # Optionally print progress every 100 epochs
-#         if epoch % 100 == 0:
-#             print(f"Epoch {epoch} - Loss: {loss:.4f}")
-#         # Stop training if there hasn't been sufficient improvement over 'patience' consecutive windows
-#         if patience_counter >= patience:
-#             print(f"Convergence reached at epoch {epoch}. Stopping optimization.")
-#             break
-
-#     return params_history, loss_history
-
-
-
-
 def run_optimization(loss_fn_per_batch, 
                      params_initial, 
                      sampler, 
@@ -437,88 +320,114 @@ def run_optimization(loss_fn_per_batch,
     return params_history, loss_history
 
 
-def run_optimization_multi_gpu(loss_fn_per_batch, 
-                     params_initial, 
-                     samples, 
-                     gradient_fn_per_batch=None,
-                     mask=None, 
-                     key=jr.PRNGKey(0), 
-                     batch_size=128,
-                     learning_rate=0.001,
-                     n_epochs=20000, 
-                     maximize=False, 
-                     window_size=1000, 
-                     tolerance=1e-16, 
-                     patience=50,
-                     constraint_indices=None):
+def run_optimization_multi_gpu_sampler(
+    loss_fn_per_batch, 
+    params_initial, 
+    sampler, 
+    gradient_fn_per_batch=None,
+    mask=None, 
+    key=jr.PRNGKey(0), 
+    learning_rate=0.001,
+    n_epochs=20000, 
+    maximize=False, 
+    window_size=1000, 
+    tolerance=1e-16, 
+    patience=50,
+    constraint_indices=None,
+    lr_decay_rate=1.,
+    lr_decay_steps=100,
+    batch_size=128
+):
     """
-    Runs gradient-based optimization using mini-batches with an early stopping criterion.
+    Multi-GPU optimization using pmap and a sampler function for batches.
+
+    Args:
+        loss_fn_per_batch: Callable that computes the loss for a batch of samples.
+        params_initial: Initial parameters (any pytree).
+        sampler: Callable(key, batch_size) -> batch of samples.
+        gradient_fn_per_batch: Optional callable to compute gradients.
+        mask: Optional mask to apply to the gradients.
+        key: PRNG key for random batch sampling.
+        learning_rate: Step size for the Adam optimizer.
+        n_epochs: Maximum number of optimization steps.
+        maximize: Whether to maximize (rather than minimize) the loss.
+        window_size: Number of recent epochs over which to compute the moving average.
+        tolerance: Minimum improvement required in the moving average to reset the patience counter.
+        patience: Number of consecutive windows without sufficient improvement before stopping.
+        constraint_indices: Indices of parameters to constrain to be positive.
+        lr_decay_rate: Learning rate decay rate.
+        lr_decay_steps: Steps between learning rate decays.
+        batch_size: Total batch size (will be split across devices).
+
+    Returns:
+        params_history: List of parameter values at each optimization step.
+        loss_history: List of loss values at each optimization step.
     """
-    optimizer = optax.adam(learning_rate=learning_rate)
+    num_devices = jax.local_device_count()
+    local_batch_size = batch_size // num_devices
+
+    lr_schedule = optax.exponential_decay(
+        init_value=learning_rate,
+        transition_steps=lr_decay_steps,
+        decay_rate=lr_decay_rate,
+        staircase=False
+    )
+    optimizer = optax.adam(learning_rate=lr_schedule)
     opt_state = optimizer.init(params_initial)
     if mask is None:
-        mask = jax.numpy.ones(params_initial.shape[0])
+        mask = jnp.ones(params_initial.shape[0])
 
-    # Define training step without jax.jit, as pmap will handle compilation
-    def training_step(params, opt_state, batch, batch_size, key):
-        key, subkey = jr.split(key)
-        # Define loss for current batch; note: batch here is per-device (e.g. shape (local_batch_size, ...))
-        loss_fn = lambda params_current: loss_fn_per_batch(params_current, batch)
+    # Replicate params and opt_state across devices
+    params = jax.device_put_replicated(params_initial, jax.devices())
+    opt_state = jax.device_put_replicated(opt_state, jax.devices())
+    mask = jax.device_put_replicated(mask, jax.devices())
+
+    def training_step(params, opt_state, batch, mask, subkey_gradient):
+        loss_fn = lambda p: loss_fn_per_batch(p, batch)
         loss_val = loss_fn(params)
-        # Compute gradients
         if gradient_fn_per_batch is None:
             dparams = jax.grad(loss_fn)(params)
         else:
-            dparams = gradient_fn_per_batch(params, batch)
+            dparams = gradient_fn_per_batch(params, batch, subkey_gradient)
         if maximize:
             dparams = -dparams
         dparams = dparams * mask
         updates, opt_state = optimizer.update(dparams, opt_state)
         params = optax.apply_updates(params, updates)
-        return params, opt_state, key, loss_val
+        return params, opt_state, loss_val
 
-    # Get number of devices and determine per-device batch size
-    num_devices = jax.local_device_count()  # e.g., 2
-    local_batch_size = batch_size // num_devices
-
-    # Replicate parameters and optimizer state across devices
-    params = jax.device_put_replicated(params_initial, jax.devices())
-    opt_state = jax.device_put_replicated(opt_state, jax.devices())
-
-    # Wrap the training_step with pmap.
-    p_training_step = jax.pmap(training_step, static_broadcasted_argnums=(3,))
+    p_training_step = jax.pmap(training_step, in_axes=(0, 0, 0, 0, 0))
 
     params_history = []
     loss_history = []
-    best_moving_avg = jax.numpy.inf
+    best_moving_avg = jnp.inf
     patience_counter = 0
 
     for epoch in range(n_epochs):
-        key, subkey = jr.split(key)
-        # Sample a global batch of size `batch_size`
-        n_samples = len(samples)
-        idx = jr.randint(subkey, (batch_size,), 0, n_samples)
-        global_batch = samples[idx]
-        # Reshape the global batch to have shape (num_devices, local_batch_size, ...)
-        sharded_batch = global_batch.reshape((num_devices, local_batch_size, *global_batch.shape[1:]))
-        
-        # Split the key for each device
-        device_keys = jr.split(key, num_devices)
-        params, opt_state, device_keys, loss = p_training_step(params, opt_state, sharded_batch, local_batch_size, device_keys)
-        
-        # Optionally, if you need to enforce constraints after each update
+        key, subkey_epoch, subkey_gradient = jr.split(key, 3)
+        # Split keys for each device
+        device_keys = jr.split(subkey_epoch, num_devices)
+        device_grad_keys = jr.split(subkey_gradient, num_devices)
+        # Sample a batch for each device
+        batches = [sampler(device_keys[i], local_batch_size) for i in range(num_devices)]
+        # Stack batches for pmap
+        batches = jax.device_put_sharded(batches, jax.devices())
+        # Run training step
+        params, opt_state, loss = p_training_step(params, opt_state, batches, mask, device_grad_keys)
+
+        # Optionally enforce constraints
         if constraint_indices is not None:
             epsilon = 0.01
-            params = params.at[:, constraint_indices].set(jax.numpy.maximum(params[:, constraint_indices], epsilon))
+            params = params.at[:, constraint_indices].set(jnp.maximum(params[:, constraint_indices], epsilon))
 
-        # Here, loss is per-device; you might average or sum them as needed.
-        loss_val = jax.numpy.mean(loss)
+        # Aggregate loss and params
+        loss_val = jax.device_get(loss).mean()
         loss_history.append(loss_val)
-        params_history.append(params)
+        params_history.append(jax.device_get(params))
 
-        # Convergence check (using a moving average over epochs)
+        # Early stopping
         if epoch % 100 == 0 and len(loss_history) >= window_size:
-            current_moving_avg = jax.numpy.mean(jax.numpy.array(loss_history[-window_size:]))
+            current_moving_avg = jnp.mean(jnp.array(loss_history[-window_size:]))
             if current_moving_avg < best_moving_avg - tolerance:
                 best_moving_avg = current_moving_avg
                 patience_counter = 0
@@ -532,136 +441,3 @@ def run_optimization_multi_gpu(loss_fn_per_batch,
             break
 
     return params_history, loss_history
-
-
-
-
-# --------------------------------------------------------------------------
-# main function
-# --------------------------------------------------------------------------
-def run_optimization_pjit(
-        loss_fn_per_batch,                    # params, batch -> scalar loss
-        params_initial,                       # PyTree of arrays  (leading axis = shardable)
-        samples,                              # (N, ...) full dataset (on host)
-        gradient_fn_per_batch=None,  
-        mask=None,
-        key=jr.PRNGKey(0),
-        batch_size=128,
-        learning_rate=1e-3,
-        n_epochs=20_000,
-        maximize=False,
-        window_size=1_000,
-        tolerance=1e-16,
-        patience=50,
-        constraint_indices=None               # optional positivity constraint
-    ):
-    """Adam optimisation with parameter *and* batch sharding via `pjit`."""
-
-    # ----------------------------------------------------------------------
-    # 0.  build 1‑D mesh over all local GPUs
-    # ----------------------------------------------------------------------
-    devices   = jax.devices()
-    n_devices = len(devices)
-    mesh      = Mesh(devices, ('dp',))        # single axis called 'dp'
-    param_ps  = P('dp',)                      # leading axis sharded
-    batch_ps  = P('dp',)                      # ditto for batch
-    
-    # helper to replicate if axis too small
-    def maybe_shard(x):
-        if x.ndim and x.shape[0] >= n_devices:
-            # 1. split leading axis evenly across devices
-            per_dev = [x[i::n_devices] for i in range(n_devices)]  # list length = n_devices
-
-            # 2. place each slice onto its target GPU
-            per_dev = [
-                jax.device_put(arr, device=devices[i])   # NOW each slice lives on cuda:0, cuda:1, ...
-                for i, arr in enumerate(per_dev)
-            ]
-
-            # 3. build a sharded array whose sharding matches param_ps
-            return jax.make_array_from_single_device_arrays(
-                x.shape,
-                jax.sharding.NamedSharding(mesh, param_ps),
-                per_dev,
-            )
-        else:
-            # small leading axis → just replicate
-            return jax.device_put_replicated(x, devices)
-
-    params = jax.tree_map(maybe_shard, params_initial)
-
-    # ----------------------------------------------------------------------
-    # 1.  optimiser state
-    # ----------------------------------------------------------------------
-    opt      = optax.adam(learning_rate)
-    opt_state = jax.device_put_replicated(opt.init(params_initial), devices)
-
-    # ----------------------------------------------------------------------
-    # 2.  pjit‑compiled step -------------------------------------------------
-    # ----------------------------------------------------------------------
-    if gradient_fn_per_batch is None:
-        val_and_grad = jax.value_and_grad(loss_fn_per_batch)
-    else:
-        def val_and_grad(p, b):
-            return loss_fn_per_batch(p, b), gradient_fn_per_batch(p, b)
-
-    @pjit(
-    in_shardings=(param_ps, batch_ps, None, None, None),
-    out_shardings=(param_ps, P(), param_ps, P()),
-    )
-    def train_step(params, batch, opt_state, mask, key):
-        loss, grads = val_and_grad(params, batch)
-        if maximize:
-            grads = jax.tree_map(lambda g: -g, grads)
-        grads = jax.tree_map(lambda g, m: g * m, grads, mask)
-        updates, opt_state = opt.update(grads, opt_state, params)
-        params = optax.apply_updates(params, updates)
-        return params, loss, opt_state, key
-
-    # ----------------------------------------------------------------------
-    # 3.  main loop ----------------------------------------------------------
-    # ----------------------------------------------------------------------
-    mask   = jnp.ones(params_initial.shape[0])
-    best   = jnp.inf
-    wait   = 0
-    loss_history = []
-
-    for epoch in range(n_epochs):
-        key, sub = jr.split(key)
-        idx      = jr.randint(sub, (batch_size,), 0, len(samples))
-        global_b = samples[idx]
-
-        # batch must be (n_devices, local_batch, ...)
-        local_bs = batch_size // n_devices
-        batch    = global_b.reshape(n_devices, local_bs, *global_b.shape[1:])
-        batch    = jax.device_put_sharded(list(batch), devices)
-
-        params, loss, opt_state, key = train_step(params, batch, opt_state,
-                                                  mask, key)
-        loss   = jax.device_get(loss).mean()
-        loss_history.append(loss)
-
-        if epoch % 100 == 0:
-            print(f"epoch {epoch:>6d}  loss={loss:.4e}")
-
-        # simple moving‑average early‑stop
-        if epoch % 100 == 0 and len(loss_history) >= window_size:
-            mov = jnp.mean(jnp.array(loss_history[-window_size:]))
-            if mov < best - tolerance:
-                best, wait = mov, 0
-            else:
-                wait += 1
-            if wait >= patience:
-                print(f"stop @ epoch {epoch}")
-                break
-
-        # optional positivity constraint
-        if constraint_indices is not None:
-            eps = 1e-2
-            def clip_fn(p):
-                p = p.at[constraint_indices].set(jnp.maximum(
-                        p[constraint_indices], eps))
-                return p
-            params = jax.tree_map(clip_fn, params)
-
-    return params, loss_history
