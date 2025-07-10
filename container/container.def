@@ -1,0 +1,39 @@
+Bootstrap: docker
+From: ubuntu:22.04
+
+%labels
+    maintainer "cb7454@princeton.edu"
+
+%files
+    # Copy requirements.txt into the container. It will be deleted in the %post section.
+    ./requirements.txt /requirements.txt
+
+%post
+    # This section runs once during the build process to set up the container.
+
+    # Install ubuntu dependencies
+    apt-get update
+    DEBIAN_FRONTEND=noninteractive apt-get install --yes --no-install-recommends \
+        build-essential \
+        python3-pip
+
+    # Install python dependencies from the requirements file
+    python3 -m pip install -r /requirements.txt
+
+    # Clean up the requirements file to keep the image tidy
+    rm /requirements.txt
+
+    # Create the workspace directory
+    mkdir /workspace
+
+%environment
+    # Set environment variables that will be active when the container runs.
+    export PYTHONPATH=/workspace:/workspace/projects
+    # Change the default prompt to show you're inside the container
+    export PS1="Apptainer> "
+
+%runscript
+    # This is the default command that executes when you run the container.
+    # It will change to the /workspace directory and start a bash shell.
+    cd /workspace
+    exec /bin/bash "$@"
