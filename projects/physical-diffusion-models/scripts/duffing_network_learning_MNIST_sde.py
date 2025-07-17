@@ -4,6 +4,22 @@ import os
 # Add the parent directory to Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Memory monitoring
+import psutil
+import gc
+
+def print_memory_usage(label=""):
+    """Print current memory usage"""
+    process = psutil.Process(os.getpid())
+    memory_info = process.memory_info()
+    print(f"Memory usage {label}: {memory_info.rss / 1024 / 1024:.2f} MB")
+
+def optimize_memory():
+    """Force garbage collection and clear JAX caches"""
+    gc.collect()
+    jax.clear_caches()
+
+print_memory_usage("at start")
 
 import jax
 from jax import flatten_util, vmap 
@@ -11,12 +27,16 @@ import jax.numpy as jnp
 import jax.random as jr
 import os
 import matplotlib.pyplot as plt
+from datetime import datetime
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
-from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch
+from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch, run_optimization_multi_gpu_sampler, setup_score_matching_kbT_loss_per_batch_hessian
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
 from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
 jax.config.update("jax_enable_x64", True)
+
+num_devices = jax.local_device_count()
+print(f"Number of devices: {num_devices}")
 
 ##################################### 
 # Set random seeds
@@ -32,7 +52,7 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
-Temp = 0.005
+Temp = 0.01
 n_time_steps = 15
 t_forward = 4.
 sigma_forward = 1.
@@ -45,25 +65,29 @@ else:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters
-training_method = "SM_at_kbT"
 learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000
 n_epochs = 100000
-batch_size = 32*128
+batch_size = 8*128
 window_size=1000
 tolerance=.1
-patience=400
+patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
+# Memory optimization parameters
+max_params_history = 50  # Keep only last 50 parameter sets in memory
+save_all_params_to_disk = True  # Save all params to disk but keep limited in memory
 
+# Set training method and display memory usage warning
+training_method = "SM_at_kbT"
 
 
 labels = [0,1]
 resolution = (16,16)
 
-n_neighbour_couplings = 6
+n_neighbour_couplings = 3
 
 energy_fn_type = "6th_order_duffing_coupling"
 
@@ -100,7 +124,9 @@ optimization_folder = (
 
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
-base_dir = os.path.join(here,"..","out", "2025_07_09", "problems")
+current_date = datetime.now().strftime("%Y_%m_%d")
+# current_date = "2025_07_11"
+base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
 
@@ -207,11 +233,14 @@ if training_method == "SM":
     gradient_fn_per_batch = None
     maximize = False
 elif training_method == "SM_at_kbT":
-    loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=Temp)
+    loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch_hessian(energy_fn, k_b=1.0, T=Temp)
     gradient_fn_per_batch = None
     maximize = False
     learning_rate = learning_rate*Temp
+    print(f"Using exact Hessian computation for score matching at kbT={Temp}")
 elif training_method == "SM_local_at_kbT":
+    # For local gradient, we use the Hutchinson version for the loss (more memory efficient)
+    # but the local gradient computation is separate
     loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=Temp)
     gradient_fn_per_batch = setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=Temp)
     maximize = False
@@ -252,12 +281,19 @@ if start_from_scratch:
 elif os.path.exists(params_history_path) and os.path.exists(time_index_path):
     # Load existing parameters and time index
     print('Loading existing parameters from', params_history_path)
-    params_history_all_t = jnp.load(params_history_path)
-    current_params = params_history_all_t[-1]
-    params_history_all_t = params_history_all_t.tolist()
+    full_params_history = jnp.load(params_history_path)
+    current_params = full_params_history[-1]
+    
+    # Memory optimization: Keep only last N parameter sets in memory
+    if len(full_params_history) > max_params_history:
+        params_history_all_t = full_params_history[-max_params_history:].tolist()
+    else:
+        params_history_all_t = full_params_history.tolist()
+    
     with open(time_index_path, 'r') as f:
         start_t_idx = int(f.read())
     print(f'Resuming from time index {start_t_idx}')
+    print(f'Keeping last {len(params_history_all_t)} parameter sets in memory')
 else:
     print('No existing parameters found, starting from beginning')
     start_t_idx = 0
@@ -279,6 +315,7 @@ if start_t_idx < len(forward_time_pts):
     for t_idx in range(start_t_idx, len(forward_time_pts)):
         t_curr = forward_time_pts[t_idx]
         print(f"t_idx: {t_idx}, t_curr: {t_curr}")
+        print_memory_usage(f"before optimization at t_idx {t_idx}")
         
         optimization_key, optimization_subkey = jr.split(optimization_key)
 
@@ -293,7 +330,7 @@ if start_t_idx < len(forward_time_pts):
         params_history, loss_history = run_optimization(
             loss_fn_per_batch=loss_fn_per_batch,
             params_initial=current_params,
-            sampler = sampler,
+            sampler=sampler,
             mask=mask,
             gradient_fn_per_batch=gradient_fn_per_batch,
             key=optimization_subkey,
@@ -308,51 +345,96 @@ if start_t_idx < len(forward_time_pts):
             lr_decay_steps=lr_decay_steps
         )
         
-        _, current_params, _ = get_best_params(params_history, loss_history, maximize=maximize)
+        print_memory_usage(f"after optimization at t_idx {t_idx}")
+        
+        # Get best parameters BEFORE deleting the history
+        best_loss, current_params, best_idx = get_best_params(params_history, loss_history, maximize=maximize)
+        print(f"Best loss: {best_loss:.4e}")
+        print(f"Found at epoch: {best_idx}")
+        
+        # Store data for plotting before cleanup
+        if plot_steps and t_idx % plot_slice == 0:
+            # Prepare plotting data before cleanup
+            length = len(loss_history)
+            num_pts = min(100, length)
+            
+            # build 100 (or fewer) evenly‐spaced integer indices in [0, length-1]
+            raw_idxs = jnp.linspace(0, length - 1, num_pts).astype(int)
+            idxs = jnp.unique(jnp.concatenate([
+                jnp.array([0], dtype=int),
+                raw_idxs,
+                jnp.array([length - 1], dtype=int),
+            ]))
+            # turn into a Python list of ints so we can index the params list
+            idxs_py = idxs.tolist()
+            
+            # slice params_history (still a list) and loss_history (convert to array first)
+            params_ds = [params_history[i] for i in idxs_py]
+            loss_arr = jnp.array(loss_history)
+            loss_ds = loss_arr[idxs]
+        else:
+            params_ds = None
+            loss_ds = None
+        
         params_history_all_t.append(current_params)
         
+        # Memory optimization: Keep only last N parameter sets in memory
+        if len(params_history_all_t) > max_params_history:
+            params_history_all_t = params_history_all_t[-max_params_history:]
+        
+        # Memory optimization: Clear large arrays immediately after use
+        del params_history, loss_history
+        
+        # More frequent garbage collection for hessian computation
+        if training_method == "SM_at_kbT":
+            # Force memory cleanup after each iteration for hessian computation
+            optimize_memory()
+            print_memory_usage(f"after hessian computation cleanup at t_idx {t_idx}")
+        
+        # Force garbage collection every few iterations
+        if t_idx % 3 == 0:
+            optimize_memory()
+            print_memory_usage(f"after memory optimization at t_idx {t_idx}")
         
         # Save current state after each time step
-        jnp.save(params_history_path, jnp.array(params_history_all_t))
+        if save_all_params_to_disk:
+            # For disk storage, we need to load, append, and save to keep all history
+            if os.path.exists(params_history_path):
+                full_params_history = jnp.load(params_history_path).tolist()
+                full_params_history.append(current_params)
+                jnp.save(params_history_path, jnp.array(full_params_history))
+            else:
+                jnp.save(params_history_path, jnp.array([current_params]))
+        else:
+            # Save only current limited history
+            jnp.save(params_history_path, jnp.array(params_history_all_t))
         print('params saved')
         with open(time_index_path, 'w') as f:
             f.write(str(t_idx + 1))  # Save next time index to resume from
         if plot_steps:
             if t_idx % plot_slice == 0:
-
-                length = len(loss_history)
-                num_pts = min(100, length)
-
-                # build 100 (or fewer) evenly‐spaced integer indices in [0, length-1]
-                raw_idxs = jnp.linspace(0, length - 1, num_pts).astype(int)
-                idxs = jnp.unique(jnp.concatenate([
-                    jnp.array([0], dtype=int),
-                    raw_idxs,
-                    jnp.array([length - 1], dtype=int),
-                ]))
-                # turn into a Python list of ints so we can index the params list
-                idxs_py = idxs.tolist()
-
-                # slice params_history (still a list) and loss_history (convert to array first)
-                params_ds = [params_history[i] for i in idxs_py]
-                loss_arr   = jnp.array(loss_history)
-                loss_ds    = loss_arr[idxs]
-                # Plot optimization progress
-                plot_parameter_evolution(
-                    params_history=params_ds,
-                    loss_history=loss_ds,
-                    time = t_curr,
-                    time_index = t_idx,
-                    unflatten=unflatten,
-                    N_osc=N_osc,
-                    title=f"{training_method} (t = {t_curr:.3f})",
-                    maximize=maximize,
-                    labels_on=True,
-                    save_fig=True,
-                    path=output_dir,
-                    param_names=params_names,
-                )
+                # Use the real plotting data we prepared earlier
+                if params_ds is not None and loss_ds is not None:
+                    plot_parameter_evolution(
+                        params_history=params_ds,
+                        loss_history=loss_ds,
+                        time = t_curr,
+                        time_index = t_idx,
+                        unflatten=unflatten,
+                        N_osc=N_osc,
+                        title=f"{training_method} (t = {t_curr:.3f})",
+                        maximize=maximize,
+                        labels_on=True,
+                        save_fig=True,
+                        path=output_dir,
+                        param_names=params_names,
+                    )
+                else:
+                    print("Skipping plot - no data prepared")
         print('end plotting')
+        print_memory_usage(f"end of iteration t_idx {t_idx}")
+        print(f"Params history length in memory: {len(params_history_all_t)}")
+        print("---")
     
     print('Optimization complete; saved parameters to', output_dir)
     params_history_all_t = jnp.array(params_history_all_t)
