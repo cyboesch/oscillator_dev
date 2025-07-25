@@ -42,19 +42,19 @@ print(f"Number of devices: {num_devices}")
 # Set random seeds
 ##################################### 
 
-key_seed = 0
+key_seed = 2464
 master_key  = jax.random.PRNGKey(key_seed)          # single seed
 optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
 
 ##################################### 
 # Set parameters
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.005
 additional_rescaling = 1.
 # Forward process parameters
-Temp = 0.01
+Temp = 0.005
 n_time_steps = 15
-t_forward = 4.
+t_forward = 5.
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -69,7 +69,7 @@ learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000
 n_epochs = 100000
-batch_size = 8*128
+batch_size = 4*128
 window_size=1000
 tolerance=.1
 patience=100
@@ -85,9 +85,9 @@ training_method = "SM_at_kbT"
 
 
 labels = [0,1]
-resolution = (16,16)
+resolution = (14,14)
 
-n_neighbour_couplings = 3
+n_neighbour_couplings = 7
 
 energy_fn_type = "6th_order_duffing_coupling"
 
@@ -102,7 +102,12 @@ start_from_scratch = False
 ## Filenames
 #####################################
 
-problem_type_folder = f"MNIST_generation/Energy_fn_type_{energy_fn_type}_n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}"
+problem_type_folder = f"MNIST_generation"
+
+system_specifics = f"n_neighbour_couplings_{n_neighbour_couplings}_Temp_{Temp}_energy_fn_type_{energy_fn_type}"
+
+MNIST_specifics = f"labels_{labels}_resolution_{resolution[0]}_x_{resolution[1]}"
+
 data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_additional_rescaling_{additional_rescaling}_key_seed_{key_seed}"
 
 optimization_folder = (
@@ -127,7 +132,7 @@ here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
 # current_date = "2025_07_11"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
-output_dir = os.path.join(base_dir, problem_type_folder, f"MNIST_labels_{labels}_resolution_{resolution}", data_folder, optimization_folder)
+output_dir = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
 
 
@@ -572,6 +577,6 @@ axes[n_rows, 0].set_title(f"SDE sampled images, rtol={rtol_sde}, atol={atol_sde}
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
-plt.savefig(f'{plot_folder}/true_vs_generated_images_comparison_rtol_sde_{rtol_sde}_atol_sde_{atol_sde}_n_samples_{n_trajectories}.png')
+plt.savefig(f'{plot_folder}/samples_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_rtol_sde_{rtol_sde}_atol_sde_{atol_sde}.png')
 plt.close()
 

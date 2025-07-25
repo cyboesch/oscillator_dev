@@ -63,7 +63,7 @@ def load_and_preprocess_mnist(labels=None, resolution=(8, 8), step=1):
 
 # %%
 labels = [0,1]
-resolution = (16,16)
+resolution = (14,14)
 step = 1
 images, labels_array = load_and_preprocess_mnist(labels=labels, resolution=resolution, step=step)
 
