@@ -42,7 +42,7 @@ print(f"Number of devices: {num_devices}")
 # Set random seeds
 ##################################### 
 
-key_seed = 1234
+key_seed = 123
 master_key  = jax.random.PRNGKey(key_seed)          # single seed
 optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
 
@@ -85,15 +85,15 @@ training_method = "SM_at_kbT"
 
 
 labels = [0,1]
-resolution = (14,14)
+resolution = (12,12)
 
-n_neighbour_couplings = 6
+n_neighbour_couplings = 1
 energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
 n_trajectories = 100
-rtol_sde = 1e-7
-atol_sde = 1e-9
+rtol_sde = 1e-9
+atol_sde = 1e-10
 
 start_from_scratch = False
 
