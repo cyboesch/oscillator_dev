@@ -226,8 +226,8 @@ def run_optimization(loss_fn_per_batch,
                      tolerance=1e-16, 
                      patience=50,
                      constraint_indices=None,
-                     lr_decay_rate=1.,
-                     lr_decay_steps=100):
+                     lr_decay_rate=0.99,
+                     lr_decay_steps=10):
     """
     Runs gradient-based optimization using mini-batches with an early stopping criterion based
     on the moving average of the loss.
