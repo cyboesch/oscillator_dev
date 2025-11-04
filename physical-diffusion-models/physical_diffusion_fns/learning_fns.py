@@ -249,6 +249,9 @@ def run_optimization(loss_fn_per_batch,
     Returns:
         params_history: List of parameter values at each optimization step.
         loss_history: List of loss values at each optimization step.
+        best_params: Parameters that achieved the best (lowest) loss.
+        best_loss: The best (lowest) loss value achieved.
+        best_epoch: The epoch at which the best loss was achieved.
     """
     #########################################################
     # Define an exponential decay learning rate schedule
@@ -288,6 +291,11 @@ def run_optimization(loss_fn_per_batch,
     loss_history = []
     best_moving_avg = jnp.inf
     patience_counter = 0
+    
+    # Track best parameters throughout optimization
+    best_loss = jnp.inf if not maximize else -jnp.inf
+    best_params = params_initial
+    best_epoch = 0
 
     params = params_initial
 
@@ -304,6 +312,12 @@ def run_optimization(loss_fn_per_batch,
 
         params_history.append(params)
         loss_history.append(loss)
+        
+        # Update best parameters if current loss is better
+        if (not maximize and loss < best_loss) or (maximize and loss > best_loss):
+            best_loss = loss
+            best_params = params.copy()  # Make a copy to avoid reference issues
+            best_epoch = epoch
 
         # Check convergence if we have enough history
         if epoch % 100 == 0 and len(loss_history) >= window_size:
@@ -317,13 +331,13 @@ def run_optimization(loss_fn_per_batch,
 
         # Optionally print progress every 100 epochs
         if epoch % 100 == 0:
-            print(f"Epoch {epoch} - Loss: {loss:.4f}")
+            print(f"Epoch {epoch} - Loss: {loss:.4f} - Best Loss: {best_loss:.4f} (Epoch {best_epoch})")
         # If we haven't seen sufficient improvement for 'patience' consecutive windows, stop training
         if patience_counter >= patience:
             print(f"Convergence reached at epoch {epoch}. Stopping optimization.")
             break
 
-    return params_history, loss_history
+    return params_history, loss_history, best_params, best_loss, best_epoch
 
 
 def run_optimization_multi_gpu_sampler(

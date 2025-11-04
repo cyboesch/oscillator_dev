@@ -112,7 +112,7 @@ def plot_energy_and_distributions(energy_fn, param_list, samples,
 ########################################################################################
 
 
-def plot_parameter_evolution(params_history, loss_history, time, time_index, unflatten,
+def plot_parameter_evolution(params_history, loss_history, best_params, best_loss, best_idx, time, time_index, unflatten,
                              N_osc, param_names, figsize=(6, 14), title="Parameter Evolution",
                              maximize=False, labels_on=True, save_fig=False, path=None,
                              plot_show=False, small_fig=False):
@@ -142,7 +142,6 @@ def plot_parameter_evolution(params_history, loss_history, time, time_index, unf
         figsize = (fig_w * 0.2, fig_h * 0.2)
 
     # Determine best
-    best_loss, best_params, best_idx = get_best_params(params_history, loss_history, maximize)
 
     # Unpack full parameter histories (no slicing)
     param_histories = reformat_optimization_results(params_history, loss_history,
