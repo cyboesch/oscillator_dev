@@ -87,7 +87,7 @@ def setup_denoising_score_matching_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
 
     return loss_fn_per_batch
 
-def setup_score_matching_kbT_loss_per_batch_hessian(energy_fn, k_b=1.0, T=1.0):
+def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
     """
     Original version using exact Hessian computation.
     Memory intensive but theoretically exact.
@@ -105,48 +105,6 @@ def setup_score_matching_kbT_loss_per_batch_hessian(energy_fn, k_b=1.0, T=1.0):
     return loss_fn_per_batch
 
 
-def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
-    """
-    Corrected loss function using a Hessian-vector product trace estimator.
-    Memory efficient but uses stochastic trace estimation.
-    """
-    def loss_fn_per_batch(flattened_args, batch, key):
-        n_samples = batch.shape[0]
-
-        # Define the score function (gradient of log-probability)
-        def log_propability_unnormalized(x):
-            return -energy_fn(x, flattened_args)
-        
-        score_fn = grad(log_propability_unnormalized)
-
-        # --- Efficient Trace Calculation ---
-        # Define a function for the Hessian-vector product (HVP)
-        # This computes (d/dx score_fn)(x) @ v without forming the full Hessian
-        hvp = lambda x, v: jax.jvp(score_fn, (x,), (v,))[1]
-
-        # Define the loss for a single sample 'x' and a single random vector 'v'
-        def unbiased_loss_per_sample(x, v):
-            # The trace(H) is estimated by E[v^T H v]
-            trace_h_estimation = jnp.dot(v, hvp(x, v))
-            score_val = score_fn(x)
-            
-            # This is the same loss as before, but with the efficient trace
-            loss = (trace_h_estimation / (k_b * T) + 0.5 * jnp.sum(score_val**2) / (k_b * T)**2)
-            return loss
-
-        # --- vmap over the batch ---
-        # Generate a key for each sample in the batch
-        keys = jax.random.split(key, n_samples)
-        # Generate a random probing vector 'v' for each sample
-        # Note: x.shape is (256,), so v will be (n_samples, 256)
-        vs = jax.random.rademacher(keys, shape=batch.shape, dtype=batch.dtype)
-
-        # Vmap the loss calculation over the batch of samples and random vectors
-        total_loss = jnp.sum(vmap(unbiased_loss_per_sample)(batch, vs))
-        
-        return total_loss / n_samples
-
-    return loss_fn_per_batch
 
 def setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=1.0):
     def gradient_fn_per_batch(params, batch, subkey_gradient=None):
