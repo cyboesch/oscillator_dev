@@ -18,16 +18,16 @@ echo "Current directory: $(pwd)"
 
 # === Apptainer Setup ===
 IMAGE="container_image.sif"  # since the .sif file is in the same folder as this script
-HOST_PROJECTS_DIR="$(realpath ../projects)"  # resolve full path
-RUNTIME_ARGS="--nv --bind ${HOST_PROJECTS_DIR}:/projects"
+HOST_PROJECTS_DIR="$(realpath ../physical-diffusion-models)"  # resolve full path
+RUNTIME_ARGS="--nv --bind ${HOST_PROJECTS_DIR}:/physical-diffusion-models"
 
 # === Debug ===
 echo "Resolved host bind directory: ${HOST_PROJECTS_DIR}"
 ls -l "${IMAGE}" || { echo "Error: Container image not found!"; exit 1; }
-ls -l "${HOST_PROJECTS_DIR}/physical-diffusion-models/scripts/preprocess-mnist.py" || { echo "Script not found!"; exit 1; }
+ls -l "${HOST_PROJECTS_DIR}/scripts/preprocess-mnist.py" || { echo "Script not found!"; exit 1; }
 
 # === Payload ===
-PAYLOAD="python3 -u /projects/physical-diffusion-models/scripts/preprocess-mnist.py"
+PAYLOAD="python3 -u /physical-diffusion-models/scripts/preprocess-mnist.py"
 
 # === Run ===
 set -ux
