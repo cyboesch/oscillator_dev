@@ -133,7 +133,7 @@ def setup_score_matching_kbT_loss_analytical(gradient_fn, trace_hessian_fn, grad
         
         return jnp.sum(vmap(score_loss_per_sample)(batch))
     
-    def loss_gradient_fn_per_batch(flattened_args, batch):
+    def loss_gradient_fn_per_batch(flattened_args, batch, subkey_gradient=None):
         """Analytical gradient of the loss w.r.t. parameters"""
         n_samples = batch.shape[0]
         
