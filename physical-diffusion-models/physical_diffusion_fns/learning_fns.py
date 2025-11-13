@@ -105,6 +105,65 @@ def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
     return loss_fn_per_batch
 
 
+def setup_score_matching_kbT_loss_analytical(gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn, k_b=1.0, T=1.0):
+    """
+    Analytical version of score matching loss using precomputed analytical derivatives.
+    Much more efficient than automatic differentiation.
+    
+    Args:
+        gradient_fn: Analytical gradient function ∇E(x, params)
+        trace_hessian_fn: Analytical trace of Hessian function Tr(∇²E(x, params))  
+        gradient_wrt_params_fn: Analytical ∂(∇E)/∂params function
+        trace_hessian_wrt_params_fn: Analytical ∂(Tr(∇²E))/∂params function
+        k_b: Boltzmann constant
+        T: Temperature
+    """
+    def loss_fn_per_batch(flattened_args, batch):
+        n_samples = batch.shape[0]
+        
+        def score_loss_per_sample(x):
+            # Score function: ∇ log p = -∇E / (k_b * T)
+            score = -gradient_fn(x, flattened_args) / (k_b * T)
+            
+            # Trace of Hessian of log p: -Tr(∇²E) / (k_b * T)  
+            trace_hess_log_p = -trace_hessian_fn(x, flattened_args) / (k_b * T)
+            
+            # Score matching loss: Tr(∇²log p) + (1/2)||∇log p||²
+            return (trace_hess_log_p + 0.5 * jnp.sum(score**2)) / n_samples
+        
+        return jnp.sum(vmap(score_loss_per_sample)(batch))
+    
+    def loss_gradient_fn_per_batch(flattened_args, batch):
+        """Analytical gradient of the loss w.r.t. parameters"""
+        n_samples = batch.shape[0]
+        
+        def score_loss_gradient_per_sample(x):
+            # Current values
+            score = -gradient_fn(x, flattened_args) / (k_b * T)  # Shape: [n_oscillators]
+            trace_hess_log_p = -trace_hessian_fn(x, flattened_args) / (k_b * T)  # Scalar 
+            
+            # Parameter derivatives
+            grad_wrt_params = -gradient_wrt_params_fn(x, flattened_args) / (k_b * T)  # Shape: [n_oscillators, n_params]
+            trace_hess_wrt_params = -trace_hessian_wrt_params_fn(x, flattened_args) / (k_b * T)  # Shape: [n_params]
+            
+            # Gradient of score matching loss w.r.t. parameters
+            # ∂/∂θ [Tr(∇²log p) + (1/2)||∇log p||²]
+            # = ∂(Tr(∇²log p))/∂θ + ∇log p · ∂(∇log p)/∂θ
+            
+            # First term: gradient of trace of Hessian
+            grad_trace_term = trace_hess_wrt_params
+            
+            # Second term: gradient of ||score||² = 2 * score · ∂score/∂θ
+            # score is [n_oscillators], grad_wrt_params is [n_oscillators, n_params]
+            # Result should be [n_params]
+            grad_score_norm_term = jnp.sum(score[:, None] * grad_wrt_params, axis=0)
+            
+            return (grad_trace_term + grad_score_norm_term) / n_samples
+        
+        return jnp.sum(vmap(score_loss_gradient_per_sample)(batch), axis=0)
+    
+    return loss_fn_per_batch, loss_gradient_fn_per_batch
+
 
 def setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=1.0):
     def gradient_fn_per_batch(params, batch, subkey_gradient=None):

@@ -223,6 +223,192 @@ def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and
     energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
     return energy_fn
 
+
+# Analytical gradient and Hessian trace for the duffing network with external force and nonlinear coupling
+def setup_duffing_network_analytical_derivatives(connectivity, unflatten):
+    """
+    Returns analytical gradient and trace of Hessian functions for the duffing network energy.
+    
+    Energy components:
+    - Self oscillator: E_self(x) = (1/2)*k_lin*x² + (1/4)*k_duff*x⁴ + (1/6)*k_6*x⁶ + bias*x
+    - Coupling: E_coupling(x,y) = c_lin*x*(x-y) + c_lin*y*(y-x) + c_optomech*x²*y + (c_duff/4)*(x-y)⁴
+    """
+    
+    def gradient_self_oscillator(x, k_lin, k_duff, k_6, bias):
+        """Analytical gradient of self oscillator energy w.r.t. x"""
+        return k_lin * x + k_duff * x**3 + k_6 * x**5 + bias
+    
+    def hessian_diag_self_oscillator(x, k_lin, k_duff, k_6, bias):
+        """Analytical diagonal of Hessian (second derivative) of self oscillator energy w.r.t. x"""
+        return k_lin + 3 * k_duff * x**2 + 5 * k_6 * x**4
+    
+    def gradient_coupling_pair_wrt_x(x, y, c_lin, c_optomech, c_duff):
+        """Analytical gradient of coupling energy w.r.t. x for pair (x,y)"""
+        return (2 * c_lin * x - c_lin * y + 
+                2 * c_optomech * x * y + 
+                c_duff * (x - y)**3)
+    
+    def gradient_coupling_pair_wrt_y(x, y, c_lin, c_optomech, c_duff):
+        """Analytical gradient of coupling energy w.r.t. y for pair (x,y)"""
+        return (-c_lin * x + 2 * c_lin * y + 
+                c_optomech * x**2 - 
+                c_duff * (x - y)**3)
+    
+    def hessian_diag_coupling_pair_wrt_x(x, y, c_lin, c_optomech, c_duff):
+        """Analytical diagonal Hessian of coupling energy w.r.t. x for pair (x,y)"""
+        return (2 * c_lin + 
+                2 * c_optomech * y + 
+                3 * c_duff * (x - y)**2)
+    
+    def hessian_diag_coupling_pair_wrt_y(x, y, c_lin, c_optomech, c_duff):
+        """Analytical diagonal Hessian of coupling energy w.r.t. y for pair (x,y)"""
+        return (2 * c_lin + 
+                3 * c_duff * (x - y)**2)
+    
+    def gradient_duffing_network(x, flattened_args, connectivity):
+        """Analytical gradient of the full network energy w.r.t. x"""
+        k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
+        
+        # Initialize gradient vector
+        grad = jnp.zeros_like(x)
+        
+        # Add self oscillator contributions
+        grad_self = vmap(gradient_self_oscillator)(x, k_lin, k_duffing, k_6, bias)
+        grad = grad + grad_self
+        
+        # Add coupling contributions using vectorized operations
+        def _compute_coupling_gradients(c_lin_pair, c_optomech_pair, c_duff_pair, pair):
+            i, j = pair
+            grad_i = gradient_coupling_pair_wrt_x(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
+            grad_j = gradient_coupling_pair_wrt_y(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
+            return jnp.array([i, j]), jnp.array([grad_i, grad_j])
+        
+        # Vectorize over all coupling pairs
+        indices, grad_values = vmap(_compute_coupling_gradients)(c_lin, c_optomech, c_duff, connectivity)
+        
+        # Add coupling contributions to gradient using scatter_add
+        grad = grad.at[indices[:, 0]].add(grad_values[:, 0])
+        grad = grad.at[indices[:, 1]].add(grad_values[:, 1])
+        
+        return grad
+    
+    def trace_hessian_duffing_network(x, flattened_args, connectivity):
+        """Analytical trace of Hessian of the full network energy"""
+        k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
+        
+        # Initialize trace vector (diagonal elements of Hessian)
+        trace_hess = jnp.zeros_like(x)
+        
+        # Add self oscillator contributions to diagonal
+        hess_diag_self = vmap(hessian_diag_self_oscillator)(x, k_lin, k_duffing, k_6, bias)
+        trace_hess = trace_hess + hess_diag_self
+        
+        # Add coupling contributions to diagonal using vectorized operations
+        def _compute_coupling_hessian_diag(c_lin_pair, c_optomech_pair, c_duff_pair, pair):
+            i, j = pair
+            hess_ii = hessian_diag_coupling_pair_wrt_x(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
+            hess_jj = hessian_diag_coupling_pair_wrt_y(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
+            return jnp.array([i, j]), jnp.array([hess_ii, hess_jj])
+        
+        # Vectorize over all coupling pairs
+        indices, hess_values = vmap(_compute_coupling_hessian_diag)(c_lin, c_optomech, c_duff, connectivity)
+        
+        # Add coupling contributions to Hessian diagonal using scatter_add
+        trace_hess = trace_hess.at[indices[:, 0]].add(hess_values[:, 0])
+        trace_hess = trace_hess.at[indices[:, 1]].add(hess_values[:, 1])
+        
+        return jnp.sum(trace_hess)  # Return scalar trace
+    
+    # Analytical parameter derivatives
+    def gradient_wrt_params_of_gradient(x, flattened_args, connectivity):
+        """Analytical parameter derivatives of the gradient: ∂(∇E)/∂params"""
+        k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
+        n_oscillators = len(x)
+        n_params = len(flattened_args)
+        
+        # Initialize parameter gradient matrix [n_oscillators, n_params]
+        param_grad_matrix = jnp.zeros((n_oscillators, n_params))
+        
+        # Self oscillator parameter derivatives
+        # ∂(∂E_self/∂x)/∂k_lin = x, ∂(∂E_self/∂x)/∂k_duff = x³, etc.
+        def _self_param_derivatives(x_i, k_lin_i, k_duff_i, k_6_i, bias_i):
+            return jnp.array([x_i, x_i**3, x_i**5, 0.0, 0.0, 0.0, 1.0])  # [∂/∂k_lin, ∂/∂k_duff, ∂/∂k_6, ∂/∂c_lin, ∂/∂c_optomech, ∂/∂c_duff, ∂/∂bias]
+        
+        # Add self oscillator contributions
+        self_derivs = vmap(_self_param_derivatives)(x, k_lin, k_duffing, k_6, bias)
+        param_grad_matrix = param_grad_matrix + self_derivs
+        
+        # Coupling parameter derivatives (more complex due to pairwise interactions)
+        def _coupling_param_derivatives_x(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair):
+            # ∂(∂E_coupling/∂x_i)/∂c_lin = 2*x_i - x_j
+            # ∂(∂E_coupling/∂x_i)/∂c_optomech = 2*x_i*x_j  
+            # ∂(∂E_coupling/∂x_i)/∂c_duff = (x_i - x_j)³
+            return jnp.array([0.0, 0.0, 0.0, 2*x_i - x_j, 2*x_i*x_j, (x_i - x_j)**3, 0.0])
+        
+        def _coupling_param_derivatives_y(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair):
+            # ∂(∂E_coupling/∂x_j)/∂c_lin = -x_i + 2*x_j
+            # ∂(∂E_coupling/∂x_j)/∂c_optomech = x_i²
+            # ∂(∂E_coupling/∂x_j)/∂c_duff = -(x_i - x_j)³
+            return jnp.array([0.0, 0.0, 0.0, -x_i + 2*x_j, x_i**2, -(x_i - x_j)**3, 0.0])
+        
+        # Add coupling contributions
+        def _compute_coupling_param_derivs(c_lin_pair, c_optomech_pair, c_duff_pair, pair):
+            i, j = pair
+            derivs_i = _coupling_param_derivatives_x(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
+            derivs_j = _coupling_param_derivatives_y(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
+            return jnp.array([i, j]), jnp.stack([derivs_i, derivs_j])
+        
+        # Vectorize over all coupling pairs
+        indices, coupling_derivs = vmap(_compute_coupling_param_derivs)(c_lin, c_optomech, c_duff, connectivity)
+        
+        # Add coupling contributions using scatter_add
+        param_grad_matrix = param_grad_matrix.at[indices[:, 0]].add(coupling_derivs[:, 0])
+        param_grad_matrix = param_grad_matrix.at[indices[:, 1]].add(coupling_derivs[:, 1])
+        
+        return param_grad_matrix
+    
+    def gradient_wrt_params_of_trace_hessian(x, flattened_args, connectivity):
+        """Analytical parameter derivatives of trace of Hessian: ∂(Tr(∇²E))/∂params"""
+        k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
+        n_params = len(flattened_args)
+        
+        # Initialize parameter gradient vector [n_params]
+        param_grad_vector = jnp.zeros(n_params)
+        
+        # Self oscillator parameter derivatives of Hessian diagonal
+        # ∂(∂²E_self/∂x²)/∂k_lin = 1, ∂(∂²E_self/∂x²)/∂k_duff = 3*x², etc.
+        def _self_hess_param_derivatives(x_i, k_lin_i, k_duff_i, k_6_i, bias_i):
+            return jnp.array([1.0, 3*x_i**2, 5*x_i**4, 0.0, 0.0, 0.0, 0.0])
+        
+        # Sum over all oscillators for self contributions
+        self_hess_derivs = vmap(_self_hess_param_derivatives)(x, k_lin, k_duffing, k_6, bias)
+        param_grad_vector = param_grad_vector + jnp.sum(self_hess_derivs, axis=0)
+        
+        # Coupling parameter derivatives of Hessian diagonal
+        def _coupling_hess_param_derivatives(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair):
+            # For both oscillators i and j
+            # ∂(∂²E_coupling/∂x_i²)/∂c_lin = 2, ∂(∂²E_coupling/∂x_j²)/∂c_lin = 2
+            # ∂(∂²E_coupling/∂x_i²)/∂c_optomech = 2*x_j, ∂(∂²E_coupling/∂x_j²)/∂c_optomech = 0
+            # ∂(∂²E_coupling/∂x_i²)/∂c_duff = 6*(x_i-x_j)², ∂(∂²E_coupling/∂x_j²)/∂c_duff = 6*(x_i-x_j)²
+            derivs_i = jnp.array([0.0, 0.0, 0.0, 2.0, 2*x_j, 6*(x_i-x_j)**2, 0.0])
+            derivs_j = jnp.array([0.0, 0.0, 0.0, 2.0, 0.0, 6*(x_i-x_j)**2, 0.0])
+            return derivs_i + derivs_j  # Sum contributions from both oscillators
+        
+        # Sum over all coupling pairs
+        coupling_hess_derivs = vmap(_coupling_hess_param_derivatives)(
+            x[connectivity[:, 0]], x[connectivity[:, 1]], c_lin, c_optomech, c_duff
+        )
+        param_grad_vector = param_grad_vector + jnp.sum(coupling_hess_derivs, axis=0)
+        
+        return param_grad_vector
+
+    gradient_fn = lambda x, flattened_args: gradient_duffing_network(x, flattened_args, connectivity)
+    trace_hessian_fn = lambda x, flattened_args: trace_hessian_duffing_network(x, flattened_args, connectivity)
+    gradient_wrt_params_fn = lambda x, flattened_args: gradient_wrt_params_of_gradient(x, flattened_args, connectivity)
+    trace_hessian_wrt_params_fn = lambda x, flattened_args: gradient_wrt_params_of_trace_hessian(x, flattened_args, connectivity)
+    
+    return gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn
+
 # # general polynomial network
 # def setup_general_polynomial_network_with_external_force_energy_fn(connectivity, unflatten):
 
