@@ -29,9 +29,9 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
-from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch, run_optimization_multi_gpu_sampler, setup_score_matching_kbT_loss_per_batch_hessian
+from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch, run_optimization_multi_gpu_sampler, setup_score_matching_kbT_loss_per_batch_hessian, setup_score_matching_kbT_loss_analytical
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
-from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
+from physical_diffusion_fns.network_fns import setup_duffing_network_with_external_force_energy_fn, setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn,setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn, setup_duffing_network_analytical_derivatives
 
 jax.config.update("jax_enable_x64", True)
 
@@ -81,7 +81,7 @@ max_params_history = 50  # Keep only last 50 parameter sets in memory
 save_all_params_to_disk = True  # Save all params to disk but keep limited in memory
 
 # Set training method and display memory usage warning
-training_method = "SM_at_kbT"
+training_method = "SM_at_kbT_analytical"
 
 
 labels = [0,1]
@@ -195,6 +195,8 @@ if energy_fn_type == "6th_order_duffing_coupling":
 
     # Set up energy fn
     energy_fn = setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn(connectivity, unflatten)
+    # Set up analytical derivatives
+    gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn = setup_duffing_network_analytical_derivatives(connectivity, unflatten)
 elif energy_fn_type == "duffing_coupling":
     k_lin_0 = -1.*jnp.ones(N_osc)
     k_duff_0 = jnp.ones(N_osc)
@@ -210,6 +212,8 @@ elif energy_fn_type == "duffing_coupling":
     constraint_indices = jnp.concatenate([constraint_indices_duff_self, constraint_indices_duff_coupling])
     # Set up energy fn
     energy_fn = setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn(connectivity, unflatten)
+    # Set up analytical derivatives
+    gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn = setup_duffing_network_analytical_derivatives(connectivity, unflatten)
 elif energy_fn_type == "duffing_optomech_coupling":
     k_lin_0 = -1.*jnp.ones(N_osc)
     k_duff_0 = jnp.ones(N_osc)
@@ -222,6 +226,8 @@ elif energy_fn_type == "duffing_optomech_coupling":
     constraint_indices = jnp.arange(N_osc,2*N_osc)
     # Set up energy fn
     energy_fn = setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten)
+    # Set up analytical derivatives (Note: this function is designed for 6th order duffing coupling, may need adjustment for other energy types)
+    gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn = setup_duffing_network_analytical_derivatives(connectivity, unflatten)
 else:
     raise ValueError(f"Unknown energy function type: {energy_fn_type}. Choose from '6th_order_duffing_coupling' or 'duffing_coupling'.")
 
@@ -242,6 +248,15 @@ elif training_method == "SM_at_kbT":
     maximize = False
     learning_rate = learning_rate*Temp
     print(f"Using exact Hessian computation for score matching at kbT={Temp}")
+elif training_method == "SM_at_kbT_analytical":
+    # Use analytical version for much better performance
+    loss_fn_per_batch, gradient_fn_per_batch = setup_score_matching_kbT_loss_analytical(
+        gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn, 
+        k_b=1.0, T=Temp
+    )
+    maximize = False
+    learning_rate = learning_rate*Temp
+    print(f"Using analytical derivatives for score matching at kbT={Temp} - MUCH more efficient!")
 elif training_method == "SM_local_at_kbT":
     # For local gradient, we use the Hutchinson version for the loss (more memory efficient)
     # but the local gradient computation is separate
@@ -259,7 +274,7 @@ elif training_method == "MLE":
     gradient_fn_per_batch = setup_MLE_gradient_per_batch(energy_fn)
     maximize = True
 else:
-    raise ValueError(f"Unknown training method: {training_method}. Choose from 'SM', 'CD1', or 'MLE'.")
+    raise ValueError(f"Unknown training method: {training_method}. Choose from 'SM', 'SM_at_kbT', 'SM_at_kbT_analytical', 'SM_local_at_kbT', 'CD1', or 'MLE'.")
 
 
 #####################################
@@ -394,6 +409,11 @@ if start_t_idx < len(forward_time_pts):
             # Force memory cleanup after each iteration for hessian computation
             optimize_memory()
             print_memory_usage(f"after hessian computation cleanup at t_idx {t_idx}")
+        elif training_method == "SM_at_kbT_analytical":
+            # Analytical version is much more memory efficient, but still do some cleanup
+            if t_idx % 2 == 0:  # Less frequent cleanup needed
+                optimize_memory()
+                print_memory_usage(f"after analytical computation cleanup at t_idx {t_idx}")
         
         # Force garbage collection every few iterations
         if t_idx % 3 == 0:
@@ -474,7 +494,7 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
     forward_params = forward_params.at[0:N_osc].set(1.)
     if ode_solve:
         params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
-    elif training_method == "CD1" or training_method == "SM_at_kbT" or training_method == "SM_local_at_kbT":
+    elif training_method == "CD1" or training_method == "SM_at_kbT" or training_method == "SM_at_kbT_analytical" or training_method == "SM_local_at_kbT":
         params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
     else:
         params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
