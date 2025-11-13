@@ -85,7 +85,7 @@ training_method = "SM_at_kbT_analytical"
 
 
 labels = [0,1]
-resolution = (12,12)
+resolution = (20,20)
 
 n_neighbour_couplings = 1
 energy_fn_type = "6th_order_duffing_coupling"
