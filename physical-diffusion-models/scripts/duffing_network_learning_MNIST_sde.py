@@ -69,7 +69,7 @@ learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000
 n_epochs = 100000
-batch_size = 4*128
+batch_size = 8*32  # Reduced from 512 to test memory issue
 window_size=1000
 tolerance=.1
 patience=100
@@ -346,7 +346,7 @@ if start_t_idx < len(forward_time_pts):
                 t_curr, n_samples = batch_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=key, beta= 1
             )
         
-        params_history, loss_history = run_optimization(
+        params_history, loss_history, current_params, best_loss, best_epoch = run_optimization(
             loss_fn_per_batch=loss_fn_per_batch,
             params_initial=current_params,
             sampler=sampler,
@@ -365,11 +365,6 @@ if start_t_idx < len(forward_time_pts):
         )
         
         print_memory_usage(f"after optimization at t_idx {t_idx}")
-        
-        # Get best parameters BEFORE deleting the history
-        best_loss, current_params, best_idx = get_best_params(params_history, loss_history, maximize=maximize)
-        print(f"Best loss: {best_loss:.4e}")
-        print(f"Found at epoch: {best_idx}")
         
         # Store data for plotting before cleanup
         if plot_steps and t_idx % plot_slice == 0:
