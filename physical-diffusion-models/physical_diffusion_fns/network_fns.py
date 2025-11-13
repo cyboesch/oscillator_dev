@@ -56,132 +56,6 @@ def create_2d_square_lattice_connectivity(grid_size, n_neighbour_couplings):
 # Energy functions
 ########################################################################################
 
-# without external force
-# def setup_duffing_network_energy_fn(connectivity, unflatten):
-#     def energy_self_oscillator(x, k_lin, k_duff):
-#         return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4
-
-#     def energy_self_network(x, k_lin, k_duff):
-#         return jnp.sum(vmap(energy_self_oscillator)(x, k_lin, k_duff))
-
-
-#     def energy_coupling_pair(x, y, c_lin, c_optomech):
-#         return c_lin * x * (x - y) + c_lin * y * (y - x) + c_optomech * (x**2) * y
-
-#     def energy_coupling_network(x, c_lin, c_optomech, connectivity):
-#         # get contribution to total energy from each pair of oscillators
-        
-#         def _coupling_energy_pair(x, c_lin, c_optomech, pair):
-#             # get energy of one pair of oscillators
-#             i, j = pair
-#             return energy_coupling_pair(x[i], x[j], c_lin, c_optomech)
-
-#         # get energy of all pairs of oscillators
-#         return jnp.sum(
-#             vmap(_coupling_energy_pair, in_axes=(None, 0, 0, 0))(
-#                 x, c_lin, c_optomech, connectivity
-#             )
-#         )
-
-
-#     def _energy_duffing_network(x, k_lin, k_duff, c_lin, c_optomech, connectivity):
-#         # returns energy of network of oscillators given input parameters
-#         return (
-#             energy_self_network(x, k_lin, k_duff) +
-#             energy_coupling_network(x, c_lin, c_optomech, connectivity)
-#         ) 
-
-#     def energy_duffing_network(x, flattened_args, connectivity):
-#         k_lin, k_duffing, c_lin, c_optomech = unflatten(flattened_args)
-#         return _energy_duffing_network(x, k_lin, k_duffing, c_lin, c_optomech, connectivity)
-
-#     energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
-#     return energy_fn
-
-# # with external force
-# def setup_duffing_network_with_external_force_energy_fn(connectivity, unflatten):
-#     def energy_self_oscillator(x, k_lin, k_duff, bias):
-#         return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4 + bias * x
-
-#     def energy_self_network(x, k_lin, k_duff, bias):
-#         return jnp.sum(vmap(energy_self_oscillator)(x, k_lin, k_duff, bias))
-
-
-#     def energy_coupling_pair(x, y, c_lin, c_optomech):
-#         return c_lin * x * (x - y) + c_lin * y * (y - x) + c_optomech * (x**2) * y
-
-#     def energy_coupling_network(x, c_lin, c_optomech, connectivity):
-#         # get contribution to total energy from each pair of oscillators
-        
-#         def _coupling_energy_pair(x, c_lin, c_optomech, pair):
-#             # get energy of one pair of oscillators
-#             i, j = pair
-#             return energy_coupling_pair(x[i], x[j], c_lin, c_optomech)
-
-#         # get energy of all pairs of oscillators
-#         return jnp.sum(
-#             vmap(_coupling_energy_pair, in_axes=(None, 0, 0, 0))(
-#                 x, c_lin, c_optomech, connectivity
-#             )
-#         )
-
-#     def _energy_duffing_network(x, k_lin, k_duff, c_lin, c_optomech, bias, connectivity):
-#         # returns energy of network of oscillators given input parameters
-#         return (
-#             energy_self_network(x, k_lin, k_duff, bias) +
-#             energy_coupling_network(x, c_lin, c_optomech, connectivity)
-#         ) 
-
-#     def energy_duffing_network(x, flattened_args, connectivity):
-#         k_lin, k_duffing, c_lin, c_optomech, bias = unflatten(flattened_args)
-#         return _energy_duffing_network(x, k_lin, k_duffing, c_lin, c_optomech, bias, connectivity)
-
-#     energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
-#     return energy_fn
-
-
-# # with external force and duffing nonlinear coupling
-# def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_energy_fn(connectivity, unflatten):
-#     def energy_self_oscillator(x, k_lin, k_duff, bias):
-#         return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4 + bias * x
-
-#     def energy_self_network(x, k_lin, k_duff, bias):
-#         return jnp.sum(vmap(energy_self_oscillator)(x, k_lin, k_duff, bias))
-
-
-#     def energy_coupling_pair(x, y, c_lin, c_optomech, c_duff):
-#         return c_lin * x * (x - y) + c_lin * y * (y - x) + c_optomech * (x**2) * y + c_duff/4 * (x-y)**4
-
-#     def energy_coupling_network(x, c_lin, c_optomech, c_duff, connectivity):
-#         # get contribution to total energy from each pair of oscillators
-        
-#         def _coupling_energy_pair(x, c_lin, c_optomech, c_duff, pair):
-#             # get energy of one pair of oscillators
-#             i, j = pair
-#             return energy_coupling_pair(x[i], x[j], c_lin, c_optomech, c_duff)
-
-#         # get energy of all pairs of oscillators
-#         return jnp.sum(
-#             vmap(_coupling_energy_pair, in_axes=(None, 0, 0, 0, 0))(
-#                 x, c_lin, c_optomech, c_duff, connectivity
-#             )
-#         )
-
-#     def _energy_duffing_network(x, k_lin, k_duff, c_lin, c_optomech, c_duff, bias, connectivity):
-#         # returns energy of network of oscillators given input parameters
-#         return (
-#             energy_self_network(x, k_lin, k_duff, bias) +
-#             energy_coupling_network(x, c_lin, c_optomech,c_duff, connectivity)
-#         ) 
-
-#     def energy_duffing_network(x, flattened_args, connectivity):
-#         k_lin, k_duffing, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
-#         return _energy_duffing_network(x, k_lin, k_duffing, c_lin, c_optomech, c_duff, bias, connectivity)
-
-#     energy_fn = lambda x, flattened_args: energy_duffing_network(x, flattened_args, connectivity)
-#     return energy_fn
-
-
 # with external force and duffing nonlinear coupling
 def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn(connectivity, unflatten):
     def energy_self_oscillator(x, k_lin, k_duff, k_6, bias):
@@ -244,13 +118,13 @@ def setup_duffing_network_analytical_derivatives(connectivity, unflatten):
     
     def gradient_coupling_pair_wrt_x(x, y, c_lin, c_optomech, c_duff):
         """Analytical gradient of coupling energy w.r.t. x for pair (x,y)"""
-        return (2 * c_lin * x - c_lin * y + 
+        return (2 * c_lin * x - 2 * c_lin * y + 
                 2 * c_optomech * x * y + 
                 c_duff * (x - y)**3)
     
     def gradient_coupling_pair_wrt_y(x, y, c_lin, c_optomech, c_duff):
         """Analytical gradient of coupling energy w.r.t. y for pair (x,y)"""
-        return (-c_lin * x + 2 * c_lin * y + 
+        return (-2 * c_lin * x + 2 * c_lin * y + 
                 c_optomech * x**2 - 
                 c_duff * (x - y)**3)
     
@@ -322,44 +196,119 @@ def setup_duffing_network_analytical_derivatives(connectivity, unflatten):
     # Analytical parameter derivatives
     def gradient_wrt_params_of_gradient(x, flattened_args, connectivity):
         """Analytical parameter derivatives of the gradient: ∂(∇E)/∂params"""
-        k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
+        # Unflatten parameters to get the actual structure
+        unflattened_params = unflatten(flattened_args)
         n_oscillators = len(x)
         n_params = len(flattened_args)
         
         # Initialize parameter gradient matrix [n_oscillators, n_params]
         param_grad_matrix = jnp.zeros((n_oscillators, n_params))
         
+        # Handle different parameter structures based on what's available
+        if len(unflattened_params) == 7:  # 6th order duffing coupling
+            k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflattened_params
+            has_k6 = True
+        elif len(unflattened_params) == 6:  # duffing coupling without k_6
+            k_lin, k_duffing, c_lin, c_optomech, c_duff, bias = unflattened_params
+            k_6 = jnp.zeros_like(k_lin)  # Dummy k_6 for compatibility
+            has_k6 = False
+        elif len(unflattened_params) == 5:  # duffing optomech coupling
+            k_lin, k_duffing, c_lin, c_optomech, bias = unflattened_params
+            k_6 = jnp.zeros_like(k_lin)  # Dummy values for compatibility
+            c_duff = jnp.zeros_like(c_lin)
+            has_k6 = False
+        else:
+            raise ValueError(f"Unsupported parameter structure with {len(unflattened_params)} parameter groups")
+        
         # Self oscillator parameter derivatives
         # ∂(∂E_self/∂x)/∂k_lin = x, ∂(∂E_self/∂x)/∂k_duff = x³, etc.
-        def _self_param_derivatives(x_i, k_lin_i, k_duff_i, k_6_i, bias_i):
-            return jnp.array([x_i, x_i**3, x_i**5, 0.0, 0.0, 0.0, 1.0])  # [∂/∂k_lin, ∂/∂k_duff, ∂/∂k_6, ∂/∂c_lin, ∂/∂c_optomech, ∂/∂c_duff, ∂/∂bias]
+        def _self_param_derivatives(osc_idx, x_i, k_lin_i, k_duff_i, k_6_i, bias_i):
+            # Create derivatives array with correct size
+            derivs = jnp.zeros(n_params)
+            
+            # k_lin derivatives (first N_osc parameters)
+            derivs = derivs.at[osc_idx].set(x_i)
+            
+            # k_duff derivatives (second N_osc parameters)  
+            derivs = derivs.at[len(k_lin) + osc_idx].set(x_i**3)
+            
+            # k_6 derivatives (third N_osc parameters if present)
+            if has_k6:
+                derivs = derivs.at[2*len(k_lin) + osc_idx].set(x_i**5)
+            
+            # bias derivatives (last N_osc parameters)
+            derivs = derivs.at[n_params - len(k_lin) + osc_idx].set(1.0)
+            
+            return derivs
         
         # Add self oscillator contributions
-        self_derivs = vmap(_self_param_derivatives)(x, k_lin, k_duffing, k_6, bias)
+        oscillator_indices = jnp.arange(len(x))
+        self_derivs = vmap(_self_param_derivatives)(oscillator_indices, x, k_lin, k_duffing, k_6, bias)
         param_grad_matrix = param_grad_matrix + self_derivs
         
         # Coupling parameter derivatives (more complex due to pairwise interactions)
-        def _coupling_param_derivatives_x(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair):
-            # ∂(∂E_coupling/∂x_i)/∂c_lin = 2*x_i - x_j
+        def _coupling_param_derivatives_x(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair, pair_idx):
+            # Create derivatives array with correct size
+            derivs = jnp.zeros(n_params)
+            
+            # Find the parameter indices for coupling parameters
+            n_osc = len(k_lin)
+            if has_k6:
+                c_lin_start = 3 * n_osc  # After k_lin, k_duff, k_6
+            else:
+                c_lin_start = 2 * n_osc  # After k_lin, k_duff
+            
+            c_optomech_start = c_lin_start + len(c_lin)
+            c_duff_start = c_optomech_start + len(c_optomech)
+            
+            # ∂(∂E_coupling/∂x_i)/∂c_lin = 2*x_i - 2*x_j
+            derivs = derivs.at[c_lin_start + pair_idx].set(2*x_i - 2*x_j)
+            
             # ∂(∂E_coupling/∂x_i)/∂c_optomech = 2*x_i*x_j  
-            # ∂(∂E_coupling/∂x_i)/∂c_duff = (x_i - x_j)³
-            return jnp.array([0.0, 0.0, 0.0, 2*x_i - x_j, 2*x_i*x_j, (x_i - x_j)**3, 0.0])
+            derivs = derivs.at[c_optomech_start + pair_idx].set(2*x_i*x_j)
+            
+            # ∂(∂E_coupling/∂x_i)/∂c_duff = (x_i - x_j)³ (if c_duff exists)
+            if len(c_duff) > 0:
+                derivs = derivs.at[c_duff_start + pair_idx].set((x_i - x_j)**3)
+            
+            return derivs
         
-        def _coupling_param_derivatives_y(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair):
-            # ∂(∂E_coupling/∂x_j)/∂c_lin = -x_i + 2*x_j
+        def _coupling_param_derivatives_y(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair, pair_idx):
+            # Create derivatives array with correct size
+            derivs = jnp.zeros(n_params)
+            
+            # Find the parameter indices for coupling parameters
+            n_osc = len(k_lin)
+            if has_k6:
+                c_lin_start = 3 * n_osc  # After k_lin, k_duff, k_6
+            else:
+                c_lin_start = 2 * n_osc  # After k_lin, k_duff
+            
+            c_optomech_start = c_lin_start + len(c_lin)
+            c_duff_start = c_optomech_start + len(c_optomech)
+            
+            # ∂(∂E_coupling/∂x_j)/∂c_lin = -2*x_i + 2*x_j
+            derivs = derivs.at[c_lin_start + pair_idx].set(-2*x_i + 2*x_j)
+            
             # ∂(∂E_coupling/∂x_j)/∂c_optomech = x_i²
-            # ∂(∂E_coupling/∂x_j)/∂c_duff = -(x_i - x_j)³
-            return jnp.array([0.0, 0.0, 0.0, -x_i + 2*x_j, x_i**2, -(x_i - x_j)**3, 0.0])
+            derivs = derivs.at[c_optomech_start + pair_idx].set(x_i**2)
+            
+            # ∂(∂E_coupling/∂x_j)/∂c_duff = -(x_i - x_j)³ (if c_duff exists)
+            if len(c_duff) > 0:
+                derivs = derivs.at[c_duff_start + pair_idx].set(-(x_i - x_j)**3)
+            
+            return derivs
         
         # Add coupling contributions
-        def _compute_coupling_param_derivs(c_lin_pair, c_optomech_pair, c_duff_pair, pair):
+        def _compute_coupling_param_derivs(c_lin_pair, c_optomech_pair, c_duff_pair, pair, pair_idx):
             i, j = pair
-            derivs_i = _coupling_param_derivatives_x(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
-            derivs_j = _coupling_param_derivatives_y(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair)
+            derivs_i = _coupling_param_derivatives_x(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair, pair_idx)
+            derivs_j = _coupling_param_derivatives_y(x[i], x[j], c_lin_pair, c_optomech_pair, c_duff_pair, pair_idx)
             return jnp.array([i, j]), jnp.stack([derivs_i, derivs_j])
         
-        # Vectorize over all coupling pairs
-        indices, coupling_derivs = vmap(_compute_coupling_param_derivs)(c_lin, c_optomech, c_duff, connectivity)
+        # Vectorize over all coupling pairs with pair indices
+        pair_indices = jnp.arange(len(connectivity))
+        indices, coupling_derivs = vmap(_compute_coupling_param_derivs)(c_lin, c_optomech, c_duff, connectivity, pair_indices)
         
         # Add coupling contributions using scatter_add
         param_grad_matrix = param_grad_matrix.at[indices[:, 0]].add(coupling_derivs[:, 0])
@@ -369,34 +318,86 @@ def setup_duffing_network_analytical_derivatives(connectivity, unflatten):
     
     def gradient_wrt_params_of_trace_hessian(x, flattened_args, connectivity):
         """Analytical parameter derivatives of trace of Hessian: ∂(Tr(∇²E))/∂params"""
-        k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflatten(flattened_args)
+        # Unflatten parameters to get the actual structure
+        unflattened_params = unflatten(flattened_args)
         n_params = len(flattened_args)
         
         # Initialize parameter gradient vector [n_params]
         param_grad_vector = jnp.zeros(n_params)
         
+        # Handle different parameter structures based on what's available
+        if len(unflattened_params) == 7:  # 6th order duffing coupling
+            k_lin, k_duffing, k_6, c_lin, c_optomech, c_duff, bias = unflattened_params
+            has_k6 = True
+        elif len(unflattened_params) == 6:  # duffing coupling without k_6
+            k_lin, k_duffing, c_lin, c_optomech, c_duff, bias = unflattened_params
+            k_6 = jnp.zeros_like(k_lin)  # Dummy k_6 for compatibility
+            has_k6 = False
+        elif len(unflattened_params) == 5:  # duffing optomech coupling
+            k_lin, k_duffing, c_lin, c_optomech, bias = unflattened_params
+            k_6 = jnp.zeros_like(k_lin)  # Dummy values for compatibility
+            c_duff = jnp.zeros_like(c_lin)
+            has_k6 = False
+        else:
+            raise ValueError(f"Unsupported parameter structure with {len(unflattened_params)} parameter groups")
+        
         # Self oscillator parameter derivatives of Hessian diagonal
         # ∂(∂²E_self/∂x²)/∂k_lin = 1, ∂(∂²E_self/∂x²)/∂k_duff = 3*x², etc.
-        def _self_hess_param_derivatives(x_i, k_lin_i, k_duff_i, k_6_i, bias_i):
-            return jnp.array([1.0, 3*x_i**2, 5*x_i**4, 0.0, 0.0, 0.0, 0.0])
+        def _self_hess_param_derivatives(osc_idx, x_i, k_lin_i, k_duff_i, k_6_i, bias_i):
+            # Create derivatives array with correct size
+            derivs = jnp.zeros(n_params)
+            
+            # k_lin derivatives (first N_osc parameters)
+            derivs = derivs.at[osc_idx].set(1.0)
+            
+            # k_duff derivatives (second N_osc parameters)  
+            derivs = derivs.at[len(k_lin) + osc_idx].set(3*x_i**2)
+            
+            # k_6 derivatives (third N_osc parameters if present)
+            if has_k6:
+                derivs = derivs.at[2*len(k_lin) + osc_idx].set(5*x_i**4)
+            
+            # bias derivatives are 0 for Hessian
+            
+            return derivs
         
         # Sum over all oscillators for self contributions
-        self_hess_derivs = vmap(_self_hess_param_derivatives)(x, k_lin, k_duffing, k_6, bias)
+        oscillator_indices = jnp.arange(len(x))
+        self_hess_derivs = vmap(_self_hess_param_derivatives)(oscillator_indices, x, k_lin, k_duffing, k_6, bias)
         param_grad_vector = param_grad_vector + jnp.sum(self_hess_derivs, axis=0)
         
         # Coupling parameter derivatives of Hessian diagonal
-        def _coupling_hess_param_derivatives(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair):
+        def _coupling_hess_param_derivatives(x_i, x_j, c_lin_pair, c_optomech_pair, c_duff_pair, pair_idx):
+            # Create derivatives array with correct size
+            derivs = jnp.zeros(n_params)
+            
+            # Find the parameter indices for coupling parameters
+            n_osc = len(k_lin)
+            if has_k6:
+                c_lin_start = 3 * n_osc  # After k_lin, k_duff, k_6
+            else:
+                c_lin_start = 2 * n_osc  # After k_lin, k_duff
+            
+            c_optomech_start = c_lin_start + len(c_lin)
+            c_duff_start = c_optomech_start + len(c_optomech)
+            
             # For both oscillators i and j
             # ∂(∂²E_coupling/∂x_i²)/∂c_lin = 2, ∂(∂²E_coupling/∂x_j²)/∂c_lin = 2
+            derivs = derivs.at[c_lin_start + pair_idx].set(4.0)  # 2 + 2 from both oscillators
+            
             # ∂(∂²E_coupling/∂x_i²)/∂c_optomech = 2*x_j, ∂(∂²E_coupling/∂x_j²)/∂c_optomech = 0
-            # ∂(∂²E_coupling/∂x_i²)/∂c_duff = 6*(x_i-x_j)², ∂(∂²E_coupling/∂x_j²)/∂c_duff = 6*(x_i-x_j)²
-            derivs_i = jnp.array([0.0, 0.0, 0.0, 2.0, 2*x_j, 6*(x_i-x_j)**2, 0.0])
-            derivs_j = jnp.array([0.0, 0.0, 0.0, 2.0, 0.0, 6*(x_i-x_j)**2, 0.0])
-            return derivs_i + derivs_j  # Sum contributions from both oscillators
+            derivs = derivs.at[c_optomech_start + pair_idx].set(2*x_j)  # Only from oscillator i
+            
+            # ∂(∂²E_coupling/∂x_i²)/∂c_duff = 3*(x_i-x_j)², ∂(∂²E_coupling/∂x_j²)/∂c_duff = 3*(x_i-x_j)²
+            if len(c_duff) > 0:
+                derivs = derivs.at[c_duff_start + pair_idx].set(6*(x_i-x_j)**2)  # 3 + 3 from both oscillators
+            
+            return derivs
         
         # Sum over all coupling pairs
+        pair_indices = jnp.arange(len(connectivity))
         coupling_hess_derivs = vmap(_coupling_hess_param_derivatives)(
-            x[connectivity[:, 0]], x[connectivity[:, 1]], c_lin, c_optomech, c_duff
+            x[connectivity[:, 0]], x[connectivity[:, 1]], c_lin, c_optomech, c_duff, pair_indices
         )
         param_grad_vector = param_grad_vector + jnp.sum(coupling_hess_derivs, axis=0)
         
@@ -409,43 +410,6 @@ def setup_duffing_network_analytical_derivatives(connectivity, unflatten):
     
     return gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn
 
-# # general polynomial network
-# def setup_general_polynomial_network_with_external_force_energy_fn(connectivity, unflatten):
-
-#     # Self oscillator energy: here only a linear bias is used to mimic an external force.
-#     def energy_self_oscillator(x, bias):
-#         return bias * x
-
-#     def energy_self_network(x, bias):
-#         # Apply the self oscillator energy to each oscillator.
-#         # Here we create a bias array of the same shape as x.
-#         bias_array = jnp.full_like(x, bias)
-#         return jnp.sum(vmap(energy_self_oscillator)(x, bias_array))
-
-#     # Coupling energy for a pair (x, y)
-#     def energy_coupling_pair(x, y, a1, a2, a3):
-#         z = a1 * x + a2 * y + a3 * x**2
-#         return z**4 - z**2
-
-#     def energy_coupling_network(x, a1, a2, a3, connectivity):
-#         # For every pair given in connectivity, compute the pair energy.
-#         def _coupling_energy_pair(x, a1, a2, a3, pair):
-#             i, j = pair
-#             return energy_coupling_pair(x[i], x[j], a1, a2, a3)
-#         return jnp.sum(vmap(_coupling_energy_pair, in_axes=(None, 0, 0, 0, 0))(
-#     x, a1, a2, a3, connectivity))
-
-#     # Total energy is the sum of the self energies and the coupling energies.
-#     def _energy_general_polynomial_network(x, a1, a2, a3, bias, connectivity):
-#         return energy_self_network(x, bias) + energy_coupling_network(x, a1, a2, a3, connectivity)
-
-#     def energy_general_polynomial_network(x, flattened_args, connectivity):
-#         # Unflatten to get the coupling parameters a1, a2, a3.
-#         a1, a2, a3, bias = unflatten(flattened_args)
-#         return _energy_general_polynomial_network(x, a1, a2, a3, bias, connectivity)
-
-#     energy_fn = lambda x, flattened_args: energy_general_polynomial_network(x, flattened_args, connectivity)
-#     return energy_fn
 
 
 ########################################################################################
