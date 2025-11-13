@@ -69,7 +69,7 @@ learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000
 n_epochs = 100000
-batch_size = 8*32  # Reduced from 512 to test memory issue
+batch_size = 32  # Reduced from 512 to test memory issue
 window_size=1000
 tolerance=.1
 patience=100
@@ -87,7 +87,7 @@ training_method = "SM_at_kbT_analytical"
 labels = [0,1]
 resolution = (20,20)
 
-n_neighbour_couplings = 1
+n_neighbour_couplings = 6
 energy_fn_type = "6th_order_duffing_coupling"
 
 # SDE parameters
