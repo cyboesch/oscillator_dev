@@ -86,7 +86,7 @@ CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
 # Memory optimization parameters
-max_params_history = 10  # Keep only last 10 parameter sets in memory
+max_params_history = n_time_steps  # Keep only last 10 parameter sets in memory
 save_all_params_to_disk = True  # Save all params to disk but keep limited in memory
 chunk_size = 4  # Process samples one by one for maximum memory efficiency
 
@@ -108,7 +108,7 @@ print(f"  - SDE time steps: 25 (reduced from 100)")
 print(f"\nTotal memory reductions applied:")
 print(f"  - Batch size: {batch_size} (extreme reduction)")
 print(f"  - Sequential processing: eliminates vmap memory overhead")
-print(f"  - Sequential SDE solving: eliminates vmap overhead, stores only final states")
+print(f"  - Chunked parallel SDE solving: balances performance and memory, stores only final states")
 print(f"  - Gradient checkpointing: trades computation for memory")
 print(f"  - Expected memory reduction: ~50-100x vs original")
 
@@ -130,9 +130,9 @@ print(f"  - Estimated oscillators: {resolution[0]**2}")
 print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - EXTREMELY REDUCED for memory efficiency
-n_trajectories = 5   # Reduced to 5 for extreme memory efficiency with large network
-rtol_sde = 1e-4      # Relaxed for memory efficiency
-atol_sde = 1e-5      # Relaxed for memory efficiency
+n_trajectories = 20   # Reduced to 5 for extreme memory efficiency with large network
+rtol_sde = 1e-6      # Relaxed for memory efficiency
+atol_sde = 1e-7      # Relaxed for memory efficiency
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 
@@ -574,58 +574,75 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
     keys_brownian = jr.split(subkey, n_trajectories)
     print('keys_brownian', keys_brownian)
 
-    # ULTRA MEMORY-EFFICIENT: Process trajectories one by one with minimal memory footprint
-    print(f"Processing {n_trajectories} trajectories sequentially for extreme memory efficiency...")
+    # HYBRID APPROACH: Process trajectories in small parallel chunks
+    # This balances memory efficiency with CPU utilization
+    chunk_size_sde = 4  # Process 4 trajectories at a time
+    print(f"Processing {n_trajectories} trajectories in chunks of {chunk_size_sde} for balanced performance...")
     
-    # Generate keys for each trajectory
+    # Generate all initial states and keys upfront
+    key, subkey = jr.split(key)
+    initial_states = sample_forward_process(t_final, n_trajectories, sigma_final=sigma_forward, D=Temp, samples0=samples_target, key=subkey)
     key, subkey = jr.split(key)
     keys_brownian = jr.split(subkey, n_trajectories)
     
-    # Initialize list to store only final states (not full trajectories)
+    # Initialize list to store final states
     final_states_list = []
     
-    # Process each trajectory individually with minimal memory usage
-    for i in range(n_trajectories):
-        print(f"  Processing trajectory {i+1}/{n_trajectories}")
+    # Process trajectories in chunks
+    n_chunks = (n_trajectories + chunk_size_sde - 1) // chunk_size_sde
+    
+    for chunk_idx in range(n_chunks):
+        start_idx = chunk_idx * chunk_size_sde
+        end_idx = min(start_idx + chunk_size_sde, n_trajectories)
+        chunk_size_actual = end_idx - start_idx
         
-        # Generate initial state for this trajectory only
-        traj_key, _ = jr.split(keys_brownian[i])
-        initial_state = sample_forward_process(
-            t_final, 1, sigma_final=sigma_forward, D=Temp, 
-            samples0=samples_target, key=traj_key
-        )[0]  # Take the single sample
+        print(f"  Processing chunk {chunk_idx+1}/{n_chunks}: trajectories {start_idx+1}-{end_idx}")
         
-        # Solve SDE for this single trajectory
-        solution = solve_SDE(
-            drift_fn,
-            diffusion_fn,
-            initial_state,
-            keys_brownian[i],
-            t0,
-            t1,
-            ts.shape[0],
-            dt0,
-            rtol=rtol,
-            atol=atol
+        # Get chunk data
+        chunk_initial_states = initial_states[start_idx:end_idx]
+        chunk_keys = keys_brownian[start_idx:end_idx]
+        
+        # Vectorized solve for this chunk
+        vectorized_solve_SDE = vmap(
+            lambda init_state, key_b: solve_SDE(
+                drift_fn,
+                diffusion_fn,
+                init_state,
+                key_b,
+                t0,
+                t1,
+                ts.shape[0],
+                dt0,
+                rtol=rtol,
+                atol=atol
+            ),
+            in_axes=(0, 0)
         )
         
-        # Store only the FINAL state, not the full trajectory
-        final_states_list.append(solution.ys[-1])  # Only the last time step
+        # Solve chunk in parallel
+        chunk_solutions = vectorized_solve_SDE(chunk_initial_states, chunk_keys)
         
-        # Clear the solution object immediately
-        del solution, initial_state
+        # Extract only final states from this chunk
+        chunk_final_states = chunk_solutions.ys[:, -1, :]  # Shape: (chunk_size, N_osc)
         
-        # Force garbage collection after each trajectory
+        # Add to final states list
+        for i in range(chunk_size_actual):
+            final_states_list.append(chunk_final_states[i])
+        
+        # Clear chunk data immediately
+        del chunk_solutions, chunk_initial_states, chunk_keys, chunk_final_states
+        
+        # Force garbage collection after each chunk
         import gc
         gc.collect()
         
         # Clear JAX cache periodically
-        if i % 2 == 0:
+        if chunk_idx % 2 == 0:
             jax.clear_caches()
     
     # Convert final states to array
     final_samples_scaled = jnp.stack(final_states_list)  # Shape: (n_trajectories, N_osc)
-    print(f"Completed all {n_trajectories} trajectories (storing only final states)")
+    print(f"Completed all {n_trajectories} trajectories in {n_chunks} chunks")
     
     # Skip saving full trajectories to save memory
     print("Skipping full trajectory storage to save memory")
@@ -698,7 +715,7 @@ axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sd
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
-plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_batch_{batch_size}_chunk_{chunk_size}.png')
+plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_batch_{batch_size}_chunk_{chunk_size}_atol_{atol_sde}_rtol_{rtol_sde}.png')
 plt.close()
 
 print_memory_usage("final")

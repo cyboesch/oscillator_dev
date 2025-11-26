@@ -63,7 +63,7 @@ additional_rescaling = 1.
 # Forward process parameters
 Temp = 0.1
 n_time_steps = 15
-t_forward = 5.0
+t_forward = 3.
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -127,8 +127,8 @@ print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - REDUCED for memory efficiency
 n_trajectories = 100  # Reduced from 100 to 20 for memory efficiency
-rtol_sde = 1e-6      # Relaxed from 1e-9 for memory efficiency
-atol_sde = 1e-7      # Relaxed from 1e-10 for memory efficiency
+rtol_sde = 1e-9      # Relaxed from 1e-9 for memory efficiency
+atol_sde = 1e-10      # Relaxed from 1e-10 for memory efficiency
 
 start_from_scratch = False
 
@@ -654,7 +654,7 @@ axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sd
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
-plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_batch_{batch_size}_chunk_{chunk_size}.png')
+plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_atol_{atol_sde}_rtol_{rtol_sde}.png')
 plt.close()
 
 print_memory_usage("final")
