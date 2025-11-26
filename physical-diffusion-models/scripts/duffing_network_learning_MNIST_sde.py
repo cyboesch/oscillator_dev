@@ -437,6 +437,9 @@ if start_t_idx < len(forward_time_pts):
                     plot_parameter_evolution(
                         params_history=params_ds,
                         loss_history=loss_ds,
+                        best_params=current_params,
+                        best_loss=best_loss,
+                        best_idx=best_epoch,
                         time = t_curr,
                         time_index = t_idx,
                         unflatten=unflatten,
