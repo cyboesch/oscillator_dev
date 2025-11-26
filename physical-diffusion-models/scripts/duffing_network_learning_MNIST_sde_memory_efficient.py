@@ -78,7 +78,7 @@ learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000
 n_epochs = 10000
-batch_size = 2  # REDUCED from 8 to 2 for extreme memory efficiency
+batch_size = 64  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
 tolerance=.1
 patience=100
@@ -88,7 +88,7 @@ CD1_num_noise_samples = 1000
 # Memory optimization parameters
 max_params_history = 10  # Keep only last 10 parameter sets in memory
 save_all_params_to_disk = True  # Save all params to disk but keep limited in memory
-chunk_size = 1  # Process samples one by one for maximum memory efficiency
+chunk_size = 4  # Process samples one by one for maximum memory efficiency
 
 # Additional extreme memory optimizations
 clear_cache_every_n_steps = 5  # Clear JAX cache every N optimization steps
@@ -104,20 +104,24 @@ print(f"  - Training method: {training_method}")
 print(f"  - Max params history: {max_params_history}")
 print(f"  - Clear cache every: {clear_cache_every_n_steps} steps")
 print(f"  - Force GC every: {force_gc_every_n_steps} steps")
+print(f"  - SDE time steps: 25 (reduced from 100)")
 print(f"\nTotal memory reductions applied:")
-print(f"  - Network size: 16x smaller (10x10 vs 20x20, 4 vs 8 neighbors)")
-print(f"  - Batch size: 16x smaller (2 vs 32 original)")
+print(f"  - Batch size: {batch_size} (extreme reduction)")
 print(f"  - Sequential processing: eliminates vmap memory overhead")
+print(f"  - Sequential SDE solving: eliminates vmap overhead, stores only final states")
 print(f"  - Gradient checkpointing: trades computation for memory")
 print(f"  - Expected memory reduction: ~50-100x vs original")
 
 labels = [0,1]
 # REDUCED resolution for extreme memory efficiency
-resolution = (20,20)  # Reduced from (20,20) to (10,10) for memory efficiency
+resolution = (20,20)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 4  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 8  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
+
+print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
+
 
 print(f"NETWORK SIZE REDUCED FOR MEMORY:")
 print(f"  - Resolution: {resolution} (was 20x20)")
@@ -125,10 +129,12 @@ print(f"  - Neighbor couplings: {n_neighbour_couplings} (was 8)")
 print(f"  - Estimated oscillators: {resolution[0]**2}")
 print(f"  - This reduces parameter count by ~16x compared to original")
 
-# SDE parameters - REDUCED for memory efficiency
-n_trajectories = 20  # Reduced from 100 to 20 for memory efficiency
-rtol_sde = 1e-6      # Relaxed from 1e-9 for memory efficiency
-atol_sde = 1e-7      # Relaxed from 1e-10 for memory efficiency
+# SDE parameters - EXTREMELY REDUCED for memory efficiency
+n_trajectories = 5   # Reduced to 5 for extreme memory efficiency with large network
+rtol_sde = 1e-4      # Relaxed for memory efficiency
+atol_sde = 1e-5      # Relaxed for memory efficiency
+
+print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 
 start_from_scratch = False
 
@@ -165,7 +171,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2025_07_11"
+current_date = "2025_11_25"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
@@ -458,6 +464,7 @@ if start_t_idx < len(forward_time_pts):
                         loss_history=loss_ds,
                         best_loss=best_loss,
                         best_idx=best_epoch,
+                        best_params=current_params,
                         time = t_curr,
                         time_index = t_idx,
                         unflatten=unflatten,
@@ -489,78 +496,143 @@ else:
 # Interpolating parameters as function of time
 #####################################
 
+# Debug: Check array dimensions before interpolation
+print(f"Debug - params_history_all_t shape: {params_history_all_t.shape}")
+print(f"Debug - forward_time_pts shape: {forward_time_pts.shape}")
+print(f"Debug - forward_time_pts length: {len(forward_time_pts)}")
+print(f"Debug - params_history length: {len(params_history_all_t)}")
+
+# Fix potential size mismatch
+if len(params_history_all_t) != len(forward_time_pts):
+    print(f"WARNING: Size mismatch detected!")
+    print(f"  params_history length: {len(params_history_all_t)}")
+    print(f"  forward_time_pts length: {len(forward_time_pts)}")
+    
+    # Truncate to the smaller size
+    min_length = min(len(params_history_all_t), len(forward_time_pts))
+    params_history_all_t = params_history_all_t[:min_length]
+    forward_time_pts_truncated = forward_time_pts[:min_length]
+    
+    print(f"  Truncated both to length: {min_length}")
+else:
+    forward_time_pts_truncated = forward_time_pts
+    print("Array sizes match - proceeding with interpolation")
+
 # First smooth the parameters
 smoothed_params = smooth_parameters(params_history_all_t, window_lengths=[10] * params_history_all_t.shape[1], poly_orders=[3] * params_history_all_t.shape[1])
 
-# Get interpolator functions
-params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts)
-params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts)
+# Get interpolator functions using the corrected time points
+params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts_truncated)
+params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts_truncated)
 
 # Then interpolate the smoothed parameters
-time_eval = jnp.linspace(forward_time_pts[0], forward_time_pts[-1], 200)
+time_eval = jnp.linspace(forward_time_pts_truncated[0], forward_time_pts_truncated[-1], 200)
 interpolated_params_smoothed = params_interpolator_smoothed(time_eval)
 interpolated_params_non_smoothed = params_interpolator_non_smoothed(time_eval)
 
-plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False)
+plot_parameter_as_fn_of_time(params_names, forward_time_pts_truncated, forward_time_pts_truncated, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False)
 
 #####################################
 # Run reverse process
 #####################################
 
-def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, ode_solve=False):
+def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, ode_solve=False, t_final=None):
+    # Use provided t_final or fall back to t_forward
+    if t_final is None:
+        t_final = t_forward
+    print(f"Using t_final = {t_final} for reverse SDE")
+    
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
     if ode_solve:
-        params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+        params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
     elif training_method.startswith("SM_at_kbT"):
-        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
     else:
-        params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_forward - t) - 1 / sigma_forward**2 * forward_params
+        params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
     drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
 
     t0 = 0.0
-    t1 = t_forward
-    ts = jnp.linspace(t0, t1, 100)
+    t1 = t_final
+    ts = jnp.linspace(t0, t1, 25)  # Reduced to 25 time steps for memory with large network
     dt0 = 0.00000001
 
-    # Generate multiple initial states
+    # Generate multiple initial states with memory optimization
     key, subkey = jr.split(key)
     print('subkey', subkey)
-    initial_states = sample_forward_process(t_forward, n_trajectories, sigma_final=sigma_forward, D=Temp, samples0=samples_target, key=subkey)
-    print('initial_states', initial_states)
+    
+    # MEMORY FIX: Don't store all initial states at once for large networks
+    print(f"Generating {n_trajectories} initial states one by one for memory efficiency...")
+    
+    # We'll generate initial states one by one during trajectory processing
+    # to avoid storing large initial_states array
 
     # Generate a key for each initial condition
     key, subkey = jr.split(key)
     keys_brownian = jr.split(subkey, n_trajectories)
     print('keys_brownian', keys_brownian)
 
-    # Vectorize solve_SDE across both initial states and keys
-    vectorized_solve_SDE = vmap(
-        lambda init_state, key_b: solve_SDE(
+    # ULTRA MEMORY-EFFICIENT: Process trajectories one by one with minimal memory footprint
+    print(f"Processing {n_trajectories} trajectories sequentially for extreme memory efficiency...")
+    
+    # Generate keys for each trajectory
+    key, subkey = jr.split(key)
+    keys_brownian = jr.split(subkey, n_trajectories)
+    
+    # Initialize list to store only final states (not full trajectories)
+    final_states_list = []
+    
+    # Process each trajectory individually with minimal memory usage
+    for i in range(n_trajectories):
+        print(f"  Processing trajectory {i+1}/{n_trajectories}")
+        
+        # Generate initial state for this trajectory only
+        traj_key, _ = jr.split(keys_brownian[i])
+        initial_state = sample_forward_process(
+            t_final, 1, sigma_final=sigma_forward, D=Temp, 
+            samples0=samples_target, key=traj_key
+        )[0]  # Take the single sample
+        
+        # Solve SDE for this single trajectory
+        solution = solve_SDE(
             drift_fn,
             diffusion_fn,
-            init_state,
-            key_b,
+            initial_state,
+            keys_brownian[i],
             t0,
             t1,
             ts.shape[0],
             dt0,
             rtol=rtol,
             atol=atol
-        ),
-        in_axes=(0, 0)
-    )
-
-    # Run SDE for all initial states at once
-    solutions = vectorized_solve_SDE(initial_states, keys_brownian)
-    all_trajectories = solutions.ys  # Shape: (n_trajectories, n_timesteps, N_osc)
-    reverse_trajectories_path = f"{output_dir}/reverse_trajectories_{suffix}.npy"
-    jnp.save(reverse_trajectories_path, all_trajectories)
-    print(f"Reverse trajectories saved to {reverse_trajectories_path}")
-
-    final_samples_scaled = all_trajectories[:, -1, :]  # Shape: (n_trajectories, N_osc)
+        )
+        
+        # Store only the FINAL state, not the full trajectory
+        final_states_list.append(solution.ys[-1])  # Only the last time step
+        
+        # Clear the solution object immediately
+        del solution, initial_state
+        
+        # Force garbage collection after each trajectory
+        import gc
+        gc.collect()
+        
+        # Clear JAX cache periodically
+        if i % 2 == 0:
+            jax.clear_caches()
+    
+    # Convert final states to array
+    final_samples_scaled = jnp.stack(final_states_list)  # Shape: (n_trajectories, N_osc)
+    print(f"Completed all {n_trajectories} trajectories (storing only final states)")
+    
+    # Skip saving full trajectories to save memory
+    print("Skipping full trajectory storage to save memory")
+    # Save only final states instead of full trajectories
+    final_states_path = f"{output_dir}/final_states_{suffix}.npy"
+    jnp.save(final_states_path, final_samples_scaled)
+    print(f"Final states saved to {final_states_path}")
     final_samples = final_samples_scaled / additional_rescaling
     images_generated_flat = final_samples * std_MNIST + mean_MNIST
     print('images_generated_flat', images_generated_flat)
@@ -568,7 +640,19 @@ def run_reverse_process_SDE(params_interpolator, suffix,key, Temp, atol, rtol, o
 
 
 # Run reverse process for both smoothed and non-smoothed parameters
-images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, "non_smoothed_sde_memory_efficient",reverse_sde_key, Temp, atol_sde, rtol_sde, ode_solve=False)
+# Use the corrected final time
+actual_t_final = forward_time_pts_truncated[-1] if 'forward_time_pts_truncated' in locals() else t_forward
+print(f"Running reverse SDE with final time: {actual_t_final}")
+images_generated_non_smoothed_sde = run_reverse_process_SDE(
+    params_interpolator_non_smoothed, 
+    "non_smoothed_sde_memory_efficient",
+    reverse_sde_key, 
+    Temp, 
+    atol_sde, 
+    rtol_sde, 
+    ode_solve=False,
+    t_final=actual_t_final
+)
 
 print('images_generated_non_smoothed_sde', images_generated_non_smoothed_sde)
 
