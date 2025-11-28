@@ -456,12 +456,12 @@ def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T
     
     return drift_fn, diffusion_fn
 
-def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6):
+def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6, brownian_tolerance=1e-12):
     N_osc = initial_state.shape[0]
     ts = jnp.linspace(t0, t1, N_save)
     w_shape = (N_osc,)  # state is just phases for each oscillator
     brownian_motion = diffrax.VirtualBrownianTree(
-        t0, t1, 1.e-11, w_shape, key_brownian, diffrax.SpaceTimeLevyArea
+        t0, t1, brownian_tolerance, w_shape, key_brownian, diffrax.SpaceTimeLevyArea
     )
     terms = MultiTerm(ODETerm(drift_fn), ControlTerm(diffusion_fn, brownian_motion))
     saveat = diffrax.SaveAt(ts=ts)
