@@ -76,7 +76,7 @@ print('forward_time_pts', forward_time_pts)
 # Optimization parameters - EXTREMELY REDUCED FOR MEMORY
 learning_rate = 1.
 lr_decay_rate = 0.95
-lr_decay_steps = 6000
+lr_decay_steps = 6000 
 n_epochs = 10000
 batch_size = 64  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
@@ -131,8 +131,9 @@ print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - EXTREMELY REDUCED for memory efficiency
 n_trajectories = 20   # Reduced to 5 for extreme memory efficiency with large network
-rtol_sde = 1e-6      # Relaxed for memory efficiency
-atol_sde = 1e-7      # Relaxed for memory efficiency
+rtol_sde = 1e-3      # Relaxed for memory efficiency
+atol_sde = 1e-5      # REDUCED from 1e-5 to 1e-8 for memory efficiency
+brownian_tolerance = 1e-8
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 
@@ -171,7 +172,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-current_date = "2025_11_25"
+# current_date = "2025_11_25"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
@@ -536,9 +537,9 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts_truncated, forward_t
 # Run reverse process
 #####################################
 
-def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, ode_solve=False, t_final=None):
+def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, brownian_tolerance, ode_solve=False, t_final=None):
     # Use provided t_final or fall back to t_forward
-    if t_final is None:
+    if t_final is None: 
         t_final = t_forward
     print(f"Using t_final = {t_final} for reverse SDE")
     
@@ -556,7 +557,12 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
 
     t0 = 0.0
     t1 = t_final
-    ts = jnp.linspace(t0, t1, 25)  # Reduced to 25 time steps for memory with large network
+    
+    # Number of output time points to save (doesn't affect numerical accuracy)
+    # The adaptive solver uses rtol/atol to control internal step size automatically
+    n_time_steps_sde = 100  # Fixed number of output points for trajectory visualization
+    
+    ts = jnp.linspace(t0, t1, n_time_steps_sde)
     dt0 = 0.00000001
 
     # Generate multiple initial states with memory optimization
@@ -574,10 +580,9 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
     keys_brownian = jr.split(subkey, n_trajectories)
     print('keys_brownian', keys_brownian)
 
-    # HYBRID APPROACH: Process trajectories in small parallel chunks
-    # This balances memory efficiency with CPU utilization
-    chunk_size_sde = 4  # Process 4 trajectories at a time
-    print(f"Processing {n_trajectories} trajectories in chunks of {chunk_size_sde} for balanced performance...")
+    # RESTORED SIMPLE APPROACH: Process all trajectories at once (like the working version)
+    # This avoids numerical instabilities from chunked processing and memory clearing
+    print(f"Processing all {n_trajectories} trajectories at once (stable approach)...")
     
     # Generate all initial states and keys upfront
     key, subkey = jr.split(key)
@@ -585,64 +590,31 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
     key, subkey = jr.split(key)
     keys_brownian = jr.split(subkey, n_trajectories)
     
-    # Initialize list to store final states
-    final_states_list = []
+    # Vectorized solve for all trajectories at once (like the original working version)
+    vectorized_solve_SDE = vmap(
+        lambda init_state, key_b: solve_SDE(
+            drift_fn,
+            diffusion_fn,
+            init_state,
+            key_b,
+            t0,
+            t1,
+            ts.shape[0],
+            dt0,
+            brownian_tolerance=brownian_tolerance,
+            rtol=rtol,
+            atol=atol
+        ),
+        in_axes=(0, 0)
+    )
     
-    # Process trajectories in chunks
-    n_chunks = (n_trajectories + chunk_size_sde - 1) // chunk_size_sde
+    # Run SDE for all initial states at once - no chunking, no memory clearing
+    print("Running SDE solver for all trajectories...")
+    solutions = vectorized_solve_SDE(initial_states, keys_brownian)
     
-    for chunk_idx in range(n_chunks):
-        start_idx = chunk_idx * chunk_size_sde
-        end_idx = min(start_idx + chunk_size_sde, n_trajectories)
-        chunk_size_actual = end_idx - start_idx
-        
-        print(f"  Processing chunk {chunk_idx+1}/{n_chunks}: trajectories {start_idx+1}-{end_idx}")
-        
-        # Get chunk data
-        chunk_initial_states = initial_states[start_idx:end_idx]
-        chunk_keys = keys_brownian[start_idx:end_idx]
-        
-        # Vectorized solve for this chunk
-        vectorized_solve_SDE = vmap(
-            lambda init_state, key_b: solve_SDE(
-                drift_fn,
-                diffusion_fn,
-                init_state,
-                key_b,
-                t0,
-                t1,
-                ts.shape[0],
-                dt0,
-                rtol=rtol,
-                atol=atol
-            ),
-            in_axes=(0, 0)
-        )
-        
-        # Solve chunk in parallel
-        chunk_solutions = vectorized_solve_SDE(chunk_initial_states, chunk_keys)
-        
-        # Extract only final states from this chunk
-        chunk_final_states = chunk_solutions.ys[:, -1, :]  # Shape: (chunk_size, N_osc)
-        
-        # Add to final states list
-        for i in range(chunk_size_actual):
-            final_states_list.append(chunk_final_states[i])
-        
-        # Clear chunk data immediately
-        del chunk_solutions, chunk_initial_states, chunk_keys, chunk_final_states
-        
-        # Force garbage collection after each chunk
-        import gc
-        gc.collect()
-        
-        # Clear JAX cache periodically
-        if chunk_idx % 2 == 0:
-            jax.clear_caches()
-    
-    # Convert final states to array
-    final_samples_scaled = jnp.stack(final_states_list)  # Shape: (n_trajectories, N_osc)
-    print(f"Completed all {n_trajectories} trajectories in {n_chunks} chunks")
+    # Extract only final states to save memory (don't store full trajectories)
+    final_samples_scaled = solutions.ys[:, -1, :]  # Shape: (n_trajectories, N_osc)
+    print(f"Completed all {n_trajectories} trajectories successfully")
     
     # Skip saving full trajectories to save memory
     print("Skipping full trajectory storage to save memory")
@@ -650,19 +622,24 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
     final_states_path = f"{output_dir}/final_states_{suffix}.npy"
     jnp.save(final_states_path, final_samples_scaled)
     print(f"Final states saved to {final_states_path}")
+    
+    # Clean up large arrays after use (but not during computation)
+    del solutions, initial_states, keys_brownian
+    import gc
+    gc.collect()
+    print("Cleaned up memory after SDE completion")
     final_samples = final_samples_scaled / additional_rescaling
     images_generated_flat = final_samples * std_MNIST + mean_MNIST
     print('images_generated_flat', images_generated_flat)
     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
 
-# Run reverse process for both smoothed and non-smoothed parameters
 # Use the corrected final time
 actual_t_final = forward_time_pts_truncated[-1] if 'forward_time_pts_truncated' in locals() else t_forward
 print(f"Running reverse SDE with final time: {actual_t_final}")
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
     params_interpolator_non_smoothed, 
-    "non_smoothed_sde_memory_efficient",
+    f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}",
     reverse_sde_key, 
     Temp, 
     atol_sde, 
@@ -709,13 +686,13 @@ for idx in range(num_examples):
 
 # Add titles with increased font size on the left-most subplot of each block
 axes[0, 0].set_title("True images", loc='left', fontsize=16)
-axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}", loc='left', fontsize=16)
+axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
 
 # Adjust spacing between subplots
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
-plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_batch_{batch_size}_chunk_{chunk_size}_atol_{atol_sde}_rtol_{rtol_sde}.png')
+plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}.png')
 plt.close()
 
 print_memory_usage("final")
