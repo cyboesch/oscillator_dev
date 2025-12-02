@@ -78,7 +78,7 @@ learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 10000
-batch_size = 64  # Batch size (doesn't affect reverse SDE memory usage)
+batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
 tolerance=.1
 patience=100
@@ -86,7 +86,7 @@ CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
 # Memory optimization parameters
-max_params_history = n_time_steps  # Keep only last 10 parameter sets in memory
+max_params_history = 15  # Keep only last 10 parameter sets in memory
 save_all_params_to_disk = True  # Save all params to disk but keep limited in memory
 chunk_size = 4  # Process samples one by one for maximum memory efficiency
 
@@ -131,9 +131,9 @@ print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - EXTREMELY REDUCED for memory efficiency
 n_trajectories = 20   # Reduced to 5 for extreme memory efficiency with large network
-rtol_sde = 1e-3      # Relaxed for memory efficiency
-atol_sde = 1e-5      # REDUCED from 1e-5 to 1e-8 for memory efficiency
-brownian_tolerance = 1e-8
+rtol_sde = 1e-4      # Relaxed for memory efficiency
+atol_sde = 1e-6      # REDUCED from 1e-5 to 1e-8 for memory efficiency
+brownian_tolerance = 1e-11
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 
@@ -172,7 +172,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2025_11_25"
+# current_date = "2025_11_28"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
@@ -540,7 +540,7 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts_truncated, forward_t
 def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, brownian_tolerance, ode_solve=False, t_final=None):
     # Use provided t_final or fall back to t_forward
     if t_final is None: 
-        t_final = t_forward
+        t_final = t_forward #/n_time_steps * 10
     print(f"Using t_final = {t_final} for reverse SDE")
     
     forward_params = jnp.zeros_like(params_flattened_initial)
@@ -644,6 +644,7 @@ images_generated_non_smoothed_sde = run_reverse_process_SDE(
     Temp, 
     atol_sde, 
     rtol_sde, 
+    brownian_tolerance,
     ode_solve=False,
     t_final=actual_t_final
 )
@@ -686,7 +687,7 @@ for idx in range(num_examples):
 
 # Add titles with increased font size on the left-most subplot of each block
 axes[0, 0].set_title("True images", loc='left', fontsize=16)
-axes[n_rows, 0].set_title(f"SDE sampled images, rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
+axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
 
 # Adjust spacing between subplots
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
