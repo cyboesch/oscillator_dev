@@ -686,7 +686,7 @@ for idx in range(num_examples):
 
 # Add titles with increased font size on the left-most subplot of each block
 axes[0, 0].set_title("True images", loc='left', fontsize=16)
-axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
+axes[n_rows, 0].set_title(f"SDE sampled images, rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
 
 # Adjust spacing between subplots
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
