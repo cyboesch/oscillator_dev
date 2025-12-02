@@ -11,6 +11,8 @@
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=12
 #SBATCH --gres=gpu:1
+# Exclude problematic nodes (add more as you find them)
+#SBATCH --exclude=neu306
 
 echo "Starting job..."
 echo "Hostname: $(hostname)"
@@ -26,7 +28,20 @@ echo "Resolved host bind directory: ${HOST_PROJECTS_DIR}"
 ls -l "${IMAGE}" || { echo "Error: Container image not found!"; exit 1; }
 ls -l "${HOST_PROJECTS_DIR}/scripts/duffing_network_learning_MNIST_sde_memory_efficient.py" || { echo "Script not found!"; exit 1; }
 
+# === GPU Health Check ===
+echo "Checking GPU availability..."
+if nvidia-smi > /dev/null 2>&1; then
+    echo "nvidia-smi works - GPUs detected:"
+    nvidia-smi --query-gpu=name,driver_version,memory.total --format=csv,noheader
+    export JAX_PLATFORMS=cuda,cpu
+else
+    echo "WARNING: nvidia-smi failed - forcing CPU-only mode"
+    export JAX_PLATFORMS=cpu
+fi
+
 # === Payload ===
+# Set JAX to fallback to CPU if CUDA fails
+export JAX_PLATFORMS=cuda,cpu
 PAYLOAD="python3 -u /physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde_memory_efficient.py"
 
 # === Run ===
