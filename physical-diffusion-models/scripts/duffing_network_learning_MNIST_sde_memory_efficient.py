@@ -131,11 +131,12 @@ print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - EXTREMELY REDUCED for memory efficiency
 n_trajectories = 20   # Reduced to 5 for extreme memory efficiency with large network
-rtol_sde = 1e-4      # Relaxed for memory efficiency
-atol_sde = 1e-6      # REDUCED from 1e-5 to 1e-8 for memory efficiency
-brownian_tolerance = 1e-11
+rtol_sde = 1e-6      # Relaxed for memory efficiency
+atol_sde = 1e-8      # REDUCED from 1e-5 to 1e-8 for memory efficiency
+brownian_tolerance = 1e-12
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
+print(f"  - SDE tolerances: rtol={rtol_sde}, atol={atol_sde}, brownian_tol={brownian_tolerance}")
 
 start_from_scratch = False
 
