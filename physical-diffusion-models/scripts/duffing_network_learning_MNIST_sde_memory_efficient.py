@@ -63,7 +63,7 @@ additional_rescaling = 1.
 # Forward process parameters
 Temp = 0.005
 n_time_steps = 15
-t_forward = 5.0
+t_forward = 3.0
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -86,7 +86,7 @@ CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
 # Memory optimization parameters
-max_params_history = 15  # Keep only last 10 parameter sets in memory
+max_params_history = n_time_steps  # Keep only last 10 parameter sets in memory
 save_all_params_to_disk = True  # Save all params to disk but keep limited in memory
 chunk_size = 4  # Process samples one by one for maximum memory efficiency
 
@@ -117,7 +117,7 @@ labels = [0,1]
 resolution = (20,20)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 8  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 10  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
@@ -131,8 +131,8 @@ print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - EXTREMELY REDUCED for memory efficiency
 n_trajectories = 20   # Reduced to 5 for extreme memory efficiency with large network
-rtol_sde = 1e-6      # Relaxed for memory efficiency
-atol_sde = 1e-8      # REDUCED from 1e-5 to 1e-8 for memory efficiency
+rtol_sde = 1e-8      # Relaxed for memory efficiency
+atol_sde = 1e-9      # REDUCED from 1e-5 to 1e-8 for memory efficiency
 brownian_tolerance = 1e-12
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
