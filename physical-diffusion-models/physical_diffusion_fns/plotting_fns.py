@@ -157,9 +157,9 @@ def plot_parameter_evolution(params_history, loss_history, best_params, best_los
     print(f"Best loss: {loss_history[best_idx]:.4e}")
     print(f"Found at epoch: {best_idx * 1}")
 
-    # Create subplots: one per parameter plus loss
+    # Create subplots: one per parameter plus loss plus zoomed loss
     n_params = len(param_names)
-    fig, axes = plt.subplots(n_params + 1, 1, figsize=figsize)
+    fig, axes = plt.subplots(n_params + 2, 1, figsize=figsize)
 
     # Plot each parameter evolution at fixed indices
     for idx, param_name in enumerate(param_names):
@@ -179,13 +179,28 @@ def plot_parameter_evolution(params_history, loss_history, best_params, best_los
 
     # Plot subsampled loss
     loss_plot = np.array(loss_history)[idxs]
-    ax_loss = axes[-1]
+    ax_loss = axes[-2]
     ax_loss.plot(idxs, loss_plot, label='Loss')
     ax_loss.set_title(f'Evolution of Loss\nBest value: {best_loss:.3e}')
     ax_loss.set_xlabel('Step index')
     ax_loss.set_ylabel('Loss')
     ax_loss.legend()
     ax_loss.grid(True)
+
+    # Plot last 30 steps of loss evolution (zoom-in)
+    ax_loss_zoom = axes[-1]
+    loss_array = np.array(loss_history)
+    n_total = len(loss_array)
+    start_idx = max(0, n_total - 30)
+    last_30_indices = np.arange(start_idx, n_total)
+    last_30_loss = loss_array[start_idx:]
+    
+    ax_loss_zoom.plot(last_30_indices, last_30_loss, label='Loss (Last 30 steps)', color='red')
+    ax_loss_zoom.set_title(f'Loss Evolution - Last 30 Steps\nFinal value: {loss_array[-1]:.3e}')
+    ax_loss_zoom.set_xlabel('Step index')
+    ax_loss_zoom.set_ylabel('Loss')
+    ax_loss_zoom.legend()
+    ax_loss_zoom.grid(True)
 
     plt.tight_layout()
     plt.suptitle(title, y=1.02)
