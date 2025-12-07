@@ -85,9 +85,8 @@ patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
-# Memory optimization parameters
-max_params_history = n_time_steps  # Keep only last 10 parameter sets in memory
-save_all_params_to_disk = True  # Save all params to disk but keep limited in memory
+# Parameter storage - store all optimization time steps
+save_all_params_to_disk = True  # Save all params to disk
 chunk_size = 4  # Process samples one by one for maximum memory efficiency
 
 # Additional extreme memory optimizations
@@ -101,7 +100,6 @@ print(f"\nEXTREME MEMORY OPTIMIZATION ENABLED:")
 print(f"  - Batch size reduced to: {batch_size}")
 print(f"  - Chunk size: {chunk_size}")
 print(f"  - Training method: {training_method}")
-print(f"  - Max params history: {max_params_history}")
 print(f"  - Clear cache every: {clear_cache_every_n_steps} steps")
 print(f"  - Force GC every: {force_gc_every_n_steps} steps")
 print(f"  - SDE time steps: 25 (reduced from 100)")
@@ -331,16 +329,13 @@ elif os.path.exists(params_history_path) and os.path.exists(time_index_path):
     full_params_history = jnp.load(params_history_path)
     current_params = full_params_history[-1]
     
-    # Memory optimization: Keep only last N parameter sets in memory
-    if len(full_params_history) > max_params_history:
-        params_history_all_t = full_params_history[-max_params_history:].tolist()
-    else:
-        params_history_all_t = full_params_history.tolist()
+    # Store all parameter sets in memory
+    params_history_all_t = full_params_history.tolist()
     
     with open(time_index_path, 'r') as f:
         start_t_idx = int(f.read())
     print(f'Resuming from time index {start_t_idx}')
-    print(f'Keeping last {len(params_history_all_t)} parameter sets in memory')
+    print(f'Loaded {len(params_history_all_t)} parameter sets in memory')
 else:
     print('No existing parameters found, starting from beginning')
     start_t_idx = 0
@@ -420,10 +415,6 @@ if start_t_idx < len(forward_time_pts):
         
         params_history_all_t.append(current_params)
         
-        # Memory optimization: Keep only last N parameter sets in memory
-        if len(params_history_all_t) > max_params_history:
-            params_history_all_t = params_history_all_t[-max_params_history:]
-        
         # Memory optimization: Clear large arrays immediately after use
         del params_history, loss_history
         
@@ -443,17 +434,7 @@ if start_t_idx < len(forward_time_pts):
         print_memory_usage(f"after memory cleanup at t_idx {t_idx}")
         
         # Save current state after each time step
-        if save_all_params_to_disk:
-            # For disk storage, we need to load, append, and save to keep all history
-            if os.path.exists(params_history_path):
-                full_params_history = jnp.load(params_history_path).tolist()
-                full_params_history.append(current_params)
-                jnp.save(params_history_path, jnp.array(full_params_history))
-            else:
-                jnp.save(params_history_path, jnp.array([current_params]))
-        else:
-            # Save only current limited history
-            jnp.save(params_history_path, jnp.array(params_history_all_t))
+        jnp.save(params_history_path, jnp.array(params_history_all_t))
         print('params saved')
         with open(time_index_path, 'w') as f:
             f.write(str(t_idx + 1))  # Save next time index to resume from
@@ -484,7 +465,7 @@ if start_t_idx < len(forward_time_pts):
                     print("Skipping plot - no data prepared")
         print('end plotting')
         print_memory_usage(f"end of iteration t_idx {t_idx}")
-        print(f"Params history length in memory: {len(params_history_all_t)}")
+        print(f"Total params history length: {len(params_history_all_t)}")
         print("---")
     
     print('Optimization complete; saved parameters to', output_dir)
@@ -496,52 +477,35 @@ else:
 
 #####################################
 # Interpolating parameters as function of time
+# All optimization time steps are stored and used
 #####################################
 
-# Debug: Check array dimensions before interpolation
-print(f"Debug - params_history_all_t shape: {params_history_all_t.shape}")
-print(f"Debug - forward_time_pts shape: {forward_time_pts.shape}")
-print(f"Debug - forward_time_pts length: {len(forward_time_pts)}")
-print(f"Debug - params_history length: {len(params_history_all_t)}")
-
-# Fix potential size mismatch
-if len(params_history_all_t) != len(forward_time_pts):
-    print(f"WARNING: Size mismatch detected!")
-    print(f"  params_history length: {len(params_history_all_t)}")
-    print(f"  forward_time_pts length: {len(forward_time_pts)}")
-    
-    # Truncate to the smaller size
-    min_length = min(len(params_history_all_t), len(forward_time_pts))
-    params_history_all_t = params_history_all_t[:min_length]
-    forward_time_pts_truncated = forward_time_pts[:min_length]
-    
-    print(f"  Truncated both to length: {min_length}")
-else:
-    forward_time_pts_truncated = forward_time_pts
-    print("Array sizes match - proceeding with interpolation")
+# Parameters and time points should always match since we store all optimization steps
+print(f"params_history_all_t shape: {params_history_all_t.shape}")
+print(f"forward_time_pts shape: {forward_time_pts.shape}")
+print(f"Both arrays have length: {len(params_history_all_t)}")
 
 # First smooth the parameters
 smoothed_params = smooth_parameters(params_history_all_t, window_lengths=[10] * params_history_all_t.shape[1], poly_orders=[3] * params_history_all_t.shape[1])
 
-# Get interpolator functions using the corrected time points
-params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts_truncated)
-params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts_truncated)
+# Get interpolator functions
+params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts)
+params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts)
 
 # Then interpolate the smoothed parameters
-time_eval = jnp.linspace(forward_time_pts_truncated[0], forward_time_pts_truncated[-1], 200)
+time_eval = jnp.linspace(forward_time_pts[0], forward_time_pts[-1], 200)
 interpolated_params_smoothed = params_interpolator_smoothed(time_eval)
 interpolated_params_non_smoothed = params_interpolator_non_smoothed(time_eval)
 
-plot_parameter_as_fn_of_time(params_names, forward_time_pts_truncated, forward_time_pts_truncated, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False)
+plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, params_history_all_t, params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False)
 
 #####################################
 # Run reverse process
 #####################################
 
 def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, brownian_tolerance, ode_solve=False, t_final=None):
-    # Use provided t_final or fall back to t_forward
-    if t_final is None: 
-        t_final = t_forward #/n_time_steps * 10
+    # Always use t_forward as the final time
+    t_final = t_forward
     print(f"Using t_final = {t_final} for reverse SDE")
     
     forward_params = jnp.zeros_like(params_flattened_initial)
@@ -635,9 +599,8 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
 
-# Use the corrected final time
-actual_t_final = forward_time_pts_truncated[-1] if 'forward_time_pts_truncated' in locals() else t_forward
-print(f"Running reverse SDE with final time: {actual_t_final}")
+# Use t_forward as the final time
+print(f"Running reverse SDE with final time: {t_forward}")
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
     params_interpolator_non_smoothed, 
     f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}",
@@ -647,7 +610,7 @@ images_generated_non_smoothed_sde = run_reverse_process_SDE(
     rtol_sde, 
     brownian_tolerance,
     ode_solve=False,
-    t_final=actual_t_final
+    t_final=t_forward
 )
 
 print('images_generated_non_smoothed_sde', images_generated_non_smoothed_sde)
