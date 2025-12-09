@@ -51,7 +51,7 @@ print(f"Number of devices: {num_devices}")
 # Set random seeds
 ##################################### 
 
-key_seed = 123
+key_seed = 1234
 master_key  = jax.random.PRNGKey(key_seed)          # single seed
 optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
 
@@ -63,18 +63,18 @@ additional_rescaling = 1.
 # Forward process parameters
 Temp = 0.005
 n_time_steps = 15
-t_forward = 5.0
+t_forward = 4.0
 sigma_forward = 1.
-exponential_time_pts = True
+exponential_time_pts = False
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
-    forward_time_pts = jnp.linspace(0., t_forward, n_time_steps)
+    forward_time_pts = jnp.linspace(.2, t_forward, n_time_steps)
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters - EXTREMELY REDUCED FOR MEMORY
-learning_rate = 10.
+learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 10000
@@ -115,7 +115,7 @@ labels = [0,1]
 resolution = (20,20)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 10  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 16  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
@@ -156,6 +156,7 @@ optimization_folder = (
     + f"exp_time_pts_{exponential_time_pts}_"
     f"t_forward_{t_forward}_"
     f"n_timesteps_{n_time_steps}_"
+    f"forward_time_pts_{forward_time_pts[0]}_to_{forward_time_pts[-1]}_"
     f"sigma_forward_{sigma_forward}_"
     f"lr_{learning_rate}_"
     f"lr_decay_rate_{lr_decay_rate}_"
