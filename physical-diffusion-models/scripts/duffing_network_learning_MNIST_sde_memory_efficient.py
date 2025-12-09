@@ -70,7 +70,7 @@ if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
-    forward_time_pts = jnp.linspace(.2, t_forward, n_time_steps)
+    forward_time_pts = jnp.linspace(1.9, t_forward, n_time_steps)
 print('forward_time_pts', forward_time_pts)
 
 # Optimization parameters - EXTREMELY REDUCED FOR MEMORY
