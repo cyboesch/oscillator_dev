@@ -29,7 +29,7 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
-from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch, run_optimization_multi_gpu_sampler
+from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch, run_optimization_multi_gpu_sampler, setup_score_matching_kbT_loss_per_batch
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
 from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
@@ -51,50 +51,52 @@ print(f"Number of devices: {num_devices}")
 # Set random seeds
 ##################################### 
 
-key_seed = 1234
+key_seed = 1
 master_key  = jax.random.PRNGKey(key_seed)          # single seed
 optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
 ##################################### 
-std_of_added_noise = 0.005
+std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 15
-t_forward = 4.0
+n_time_steps = 10
+t_forward = 2.0
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
-    forward_time_pts = jnp.linspace(1.9, t_forward, n_time_steps)
+    forward_time_pts = jnp.linspace(0.0, t_forward, n_time_steps)
 print('forward_time_pts', forward_time_pts)
 
-# Optimization parameters - EXTREMELY REDUCED FOR MEMORY
+# Optimization - EXTREMELY REDUCED FOR MEMORY
 learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
-n_epochs = 10000
-batch_size = 2*512  # Batch size (doesn't affect reverse SDE memory usage)
+n_epochs = 100000
+batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
 tolerance=.1
-patience=100
+patience=1000
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
 # Parameter storage - store all optimization time steps
 save_all_params_to_disk = True  # Save all params to disk
-chunk_size = 4  # Process samples one by one for maximum memory efficiency
+chunk_size = batch_size  # Process samples one by one for maximum memory efficiency
 
 # Additional extreme memory optimizations
 clear_cache_every_n_steps = 5  # Clear JAX cache every N optimization steps
 force_gc_every_n_steps = 10   # Force garbage collection every N steps
 
 # Set training method and display memory usage warning
-training_method = "SM_at_kbT_minimal_memory"  # Use most memory-efficient version
+# training_method = "SM_at_kbT_minimal_memory"  # Use most memory-efficient version
+
+training_method = "SM_at_kbT"
 
 print(f"\nEXTREME MEMORY OPTIMIZATION ENABLED:")
 print(f"  - Batch size reduced to: {batch_size}")
@@ -112,10 +114,10 @@ print(f"  - Expected memory reduction: ~50-100x vs original")
 
 labels = [0,1]
 # REDUCED resolution for extreme memory efficiency
-resolution = (20,20)  # Reduced from (20,20) for memory efficiency
+resolution = (16,16)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 16  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 8  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
@@ -128,9 +130,9 @@ print(f"  - Estimated oscillators: {resolution[0]**2}")
 print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - EXTREMELY REDUCED for memory efficiency
-n_trajectories = 20   # Reduced to 5 for extreme memory efficiency with large network
-rtol_sde = 1e-8      # Relaxed for memory efficiency
-atol_sde = 1e-9      # REDUCED from 1e-5 to 1e-8 for memory efficiency
+n_trajectories = 40   # Reduced to 5 for extreme memory efficiency with large network
+rtol_sde = 1e-4      # Relaxed for memory efficiency
+atol_sde = 1e-6    # REDUCED from 1e-5 to 1e-8 for memory efficiency
 brownian_tolerance = 1e-12
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
@@ -299,6 +301,12 @@ elif training_method == "SM_at_kbT_minimal_memory":
     learning_rate = learning_rate*Temp
     print(f"Using MINIMAL memory version with JAX autodiff at kbT={Temp}")
     print(f"Avoiding all large parameter gradient matrices")
+elif training_method == "SM_at_kbT":
+    loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=Temp)
+    gradient_fn_per_batch = None
+    maximize = False
+    learning_rate = learning_rate*Temp
+    print(f"Using exact Hessian computation for score matching at kbT={Temp}")
 else:
     raise ValueError(f"Only memory-efficient training methods are supported in this version.")
 
