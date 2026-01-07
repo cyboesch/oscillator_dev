@@ -62,8 +62,8 @@ std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 20
-t_forward = 4.0
+n_time_steps = 15
+t_forward = 3.0
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -87,7 +87,7 @@ CD1_num_noise_samples = 1000
 
 # Parameter storage - store all optimization time steps
 save_all_params_to_disk = True  # Save all params to disk
-chunk_size = batch_size   # Process samples one by one for maximum memory efficiency
+chunk_size = 4   # Process samples one by one for maximum memory efficiency
 
 # Additional extreme memory optimizations
 clear_cache_every_n_steps = 5  # Clear JAX cache every N optimization steps
@@ -114,10 +114,10 @@ print(f"  - Expected memory reduction: ~50-100x vs original")
 
 labels = [0,1]
 # REDUCED resolution for extreme memory efficiency
-resolution = (16,16)  # Reduced from (20,20) for memory efficiency
+resolution = (18,18)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 6  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 8  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
