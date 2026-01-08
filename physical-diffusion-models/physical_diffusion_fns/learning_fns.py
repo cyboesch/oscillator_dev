@@ -473,7 +473,8 @@ def run_optimization(loss_fn_per_batch,
         n_epochs: Maximum number of optimization steps.
         maximize: Whether to maximize (rather than minimize) the loss.
         window_size: Number of recent epochs over which to compute the moving average.
-        tolerance: Minimum improvement required in the moving average to reset the patience counter.
+        tolerance: Minimum RELATIVE improvement required in the moving average to reset the patience counter.
+                   E.g., tolerance=0.001 means 0.1% improvement required.
         patience: Number of consecutive windows without sufficient improvement before stopping.
 
     Returns:
@@ -552,8 +553,15 @@ def run_optimization(loss_fn_per_batch,
         # Check convergence if we have enough history
         if epoch % 100 == 0 and len(loss_history) >= window_size:
             current_moving_avg = jnp.mean(jnp.array(loss_history[-window_size:]))
-            # If the moving average hasn't improved by the tolerance, increase the counter
-            if current_moving_avg < best_moving_avg - tolerance:
+            # If the moving average hasn't improved by the relative tolerance, increase the counter
+            # Use relative improvement: (best - current) / |best| > tolerance
+            if best_moving_avg == 0:
+                # Avoid division by zero
+                relative_improvement = jnp.abs(current_moving_avg)
+            else:
+                relative_improvement = (best_moving_avg - current_moving_avg) / jnp.abs(best_moving_avg)
+            
+            if relative_improvement > tolerance:
                 best_moving_avg = current_moving_avg
                 patience_counter = 0
             else:
