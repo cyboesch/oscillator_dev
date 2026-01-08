@@ -62,8 +62,8 @@ std_of_added_noise = 0.01
 additional_rescaling = 1.
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 15
-t_forward = 3.0
+n_time_steps = 100
+t_forward = 4.0
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -80,7 +80,7 @@ lr_decay_steps = 6000
 n_epochs = 100000
 batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
-tolerance=.1
+tolerance=.01
 patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
