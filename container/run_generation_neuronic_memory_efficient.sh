@@ -9,7 +9,7 @@
 #SBATCH --partition=all
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=16
+#SBATCH --cpus-per-task=20
 #SBATCH --gres=gpu:1
 # Exclude problematic nodes (add more as you find them)
 #SBATCH --exclude=neu306
