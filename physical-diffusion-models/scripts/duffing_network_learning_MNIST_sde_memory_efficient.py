@@ -58,14 +58,14 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
 ##################################### 
-std_of_added_noise = 0.01
+std_of_added_noise = 0.05
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
 n_time_steps = 200
 t_forward = 4.0
 sigma_forward = 1.
-exponential_time_pts = False
+exponential_time_pts = True
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
