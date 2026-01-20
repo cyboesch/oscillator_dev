@@ -139,7 +139,7 @@ brownian_tolerance = 1e-12
 # Instead of "cheating" by sampling from the analytical forward marginal, we run an
 # overdamped Langevin / SDE chain using the parameters at t=0 of the reverse process.
 use_equilibrium_init = True
-t_equilibrium = 2.0              # chain runtime (in SDE time units)
+t_equilibrium = 10.0              # chain runtime (in SDE time units)
 n_equilibrium_save = 2000        # number of saved points along the chain
 equilibrium_burnin_frac = 0.5    # fraction of chain discarded as burn-in
 equilibrium_thinning = 5         # keep every k-th post-burnin sample
@@ -635,6 +635,8 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
         params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
     else:
         params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
+        
+    params_equilibrium = lambda t: Temp*params_interpolator(t_equilibrium - t)
 
     # Setup SDE functions
     drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
@@ -656,7 +658,8 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
         print("Initializing reverse trajectories from an equilibrium chain (physical init)...")
 
         # parameters at reverse time 0
-        params_reverse_t0 = params_interpolator_reverse_plus_linear(0.0)
+        # params_reverse_t0 = params_interpolator_reverse_plus_linear(0.0)
+        params_reverse_t0 = params_equilibrium(0.0)
 
         # equilibrium overdamped Langevin at fixed parameters
         drift_eq, diffusion_eq = setup_overdamped_SDE(
@@ -808,7 +811,7 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
 print(f"Running reverse SDE with final time: {t_forward}")
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
     params_interpolator_non_smoothed, 
-    f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}",
+    f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}_use_equilibrium_init_{use_equilibrium_init}",
     reverse_sde_key, 
     Temp, 
     atol_sde, 
