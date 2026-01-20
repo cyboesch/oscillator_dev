@@ -26,7 +26,7 @@ RUNTIME_ARGS="--nv --bind ${HOST_PROJECTS_DIR}:/physical-diffusion-models"
 # === Debug ===
 echo "Resolved host bind directory: ${HOST_PROJECTS_DIR}"
 ls -l "${IMAGE}" || { echo "Error: Container image not found!"; exit 1; }
-ls -l "${HOST_PROJECTS_DIR}/scripts/duffing_network_learning_MNIST_sde_memory_efficient.py" || { echo "Script not found!"; exit 1; }
+ls -l "${HOST_PROJECTS_DIR}/scripts/duffing_network_learning_MNIST_sde_memory_efficient_equilibrium_initial_conds_sampling.py" || { echo "Script not found!"; exit 1; }
 
 # === GPU Health Check ===
 echo "Checking GPU availability..."
@@ -42,7 +42,7 @@ fi
 # === Payload ===
 # Set JAX to fallback to CPU if CUDA fails
 export JAX_PLATFORMS=cuda,cpu
-PAYLOAD="python3 -u /physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde_memory_efficient.py"
+PAYLOAD="python3 -u /physical-diffusion-models/scripts/duffing_network_learning_MNIST_sde_memory_efficient_equilibrium_initial_conds_sampling.py"
 
 # === Run ===
 set -ux
