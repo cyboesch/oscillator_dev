@@ -63,7 +63,7 @@ additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
 n_time_steps = 200
-t_forward = 4.0
+t_forward = 3.0
 sigma_forward = 1.
 exponential_time_pts = True
 if exponential_time_pts:
@@ -138,7 +138,8 @@ brownian_tolerance = 1e-12
 # Reverse SDE stabilization: analytic Gaussian end segment
 # We keep the learned model up to t_analytic_start, then blend analytically to the
 # exact Gaussian terminal at t_forward.
-t_analytic_start = 3.0
+t_analytic_start = t_forward
+t_analytic_end = 4
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 print(f"  - SDE tolerances: rtol={rtol_sde}, atol={atol_sde}, brownian_tol={brownian_tolerance}")
@@ -527,24 +528,34 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, p
 #####################################
 
 def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, brownian_tolerance, ode_solve=False, t_final=None):
-    # Always use t_forward as the final time
-    t_final = t_forward
-    print(f"Using t_final = {t_final} for reverse SDE")
+    # Here, `t_forward` is the horizon of the learned parameter trajectory.
+    # We optionally extend the reverse run to `t_analytic_end` using an analytic Gaussian end segment.
+    if t_final is None:
+        t_final = float(t_analytic_end)
+    print(f"Using t_final = {t_final} for reverse SDE (learned params up to t_forward={t_forward})")
     
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
 
     # Forward-time interpolator with analytic Gaussian end:
-    # for forward times s in [t_analytic_start, t_forward], blend learned params -> exact Gaussian params.
+    # - learned params are defined on s ∈ [0, t_forward]
+    # - for s ∈ [t_analytic_start, t_analytic_end], we blend params(t_analytic_start) -> Gaussian
     t_switch = float(t_analytic_start)
+    t_end = float(t_analytic_end)
+    # clamp switch to learned horizon for safety
+    t_switch = float(min(t_switch, float(t_forward)))
     params_at_switch = params_interpolator(t_switch)
     gaussian_params = params_gaussian_terminal
 
     def params_interpolator_with_analytic_end(s):
         s = jnp.asarray(s)
-        alpha = (s - t_switch) / (t_final - t_switch)
+        # never evaluate learned interpolator past its domain
+        s_clamped = jnp.minimum(s, float(t_forward))
+        learned = params_interpolator(s_clamped)
+        # for s > t_switch, freeze learned params at switch before blending
+        learned = jnp.where(s[..., None] > t_switch, params_at_switch, learned)
+        alpha = (s - t_switch) / (t_end - t_switch)
         alpha = jnp.clip(alpha, 0.0, 1.0)
-        learned = params_interpolator(s)
         return (1.0 - alpha) * learned + alpha * gaussian_params
 
     if ode_solve:
@@ -637,8 +648,8 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
     return images_generated_flat.reshape(-1, resolution[0], resolution[1])
 
 
-# Use t_forward as the final time
-print(f"Running reverse SDE with final time: {t_forward}")
+# Use analytic end time as the final time for reverse integration
+print(f"Running reverse SDE with final time: {t_analytic_end} (learned horizon t_forward={t_forward})")
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
     params_interpolator_non_smoothed, 
     f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}_analytic_end_t_analytic_start_{t_analytic_start}",
@@ -648,7 +659,7 @@ images_generated_non_smoothed_sde = run_reverse_process_SDE(
     rtol_sde, 
     brownian_tolerance,
     ode_solve=False,
-    t_final=t_forward
+    t_final=t_analytic_end
 )
 
 print('images_generated_non_smoothed_sde', images_generated_non_smoothed_sde)
