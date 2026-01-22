@@ -58,14 +58,14 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
 ##################################### 
-std_of_added_noise = 0.05
+std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
 n_time_steps = 200
-t_forward = 4.0
+t_forward = 3.0
 sigma_forward = 1.
-exponential_time_pts = True
+exponential_time_pts = False
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
@@ -134,6 +134,12 @@ n_trajectories = 40   # Reduced to 5 for extreme memory efficiency with large ne
 rtol_sde = 1e-4      # Relaxed for memory efficiency
 atol_sde = 1e-6    # REDUCED from 1e-5 to 1e-8 for memory efficiency
 brownian_tolerance = 1e-12
+# Initial condition option for reverse process:
+# - False: sample x_{t_final} by pushing data samples through the forward OU process for time t_final
+# - True : sample directly from the asymptotic forward Gaussian N(0, Temp * sigma_forward^2 I)
+init_from_final_gaussian = False
+init_from_forward_moment_matched_gaussian = True  # Gaussian approx to p_{t_forward} matching mean/cov of forward marginal
+moment_matched_use_full_cov = False  # True: full cov; False: diagonal-only
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 print(f"  - SDE tolerances: rtol={rtol_sde}, atol={atol_sde}, brownian_tol={brownian_tolerance}")
@@ -176,7 +182,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_01_15"
+current_date = "2026_01_18"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
@@ -210,6 +216,8 @@ images_flat_true = images_flat_raw + gaussian_noise
 # Normalize the data
 samples_target_unscaled, mean_MNIST, std_MNIST = normalize_samples(images_flat_true)
 samples_target = samples_target_unscaled*additional_rescaling
+downsampling_for_initial_condition = False
+downsampling_factor = 100
 
 
 
@@ -514,7 +522,22 @@ plot_parameter_as_fn_of_time(params_names, forward_time_pts, forward_time_pts, p
 # Run reverse process
 #####################################
 
-def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, brownian_tolerance, ode_solve=False, t_final=None):
+def run_reverse_process_SDE(
+    params_interpolator,
+    suffix,
+    key,
+    Temp,
+    atol,
+    rtol,
+    brownian_tolerance,
+    ode_solve=False,
+    t_final=None,
+    init_from_final_gaussian: bool = False,
+    downsampling_for_initial_condition: bool = False,
+    downsampling_factor: int = 100,
+    init_from_forward_moment_matched_gaussian: bool = False,
+    moment_matched_use_full_cov: bool = False,
+):
     # Always use t_forward as the final time
     t_final = t_forward
     print(f"Using t_final = {t_final} for reverse SDE")
@@ -562,8 +585,75 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
     
     # Generate all initial states and keys upfront
     key, subkey = jr.split(key)
-    initial_states = sample_forward_process(t_final, n_trajectories, sigma_final=sigma_forward, D=Temp, samples0=samples_target, key=subkey)
+    if init_from_final_gaussian and init_from_forward_moment_matched_gaussian:
+        print(
+            "WARNING: Both init_from_final_gaussian and init_from_forward_moment_matched_gaussian are True. "
+            "Using init_from_final_gaussian."
+        )
+
+    if init_from_final_gaussian:
+        # As t -> infinity, forward OU marginal tends to N(0, D * sigma_final^2 I)
+        std_asymptotic = jnp.sqrt(Temp) * sigma_forward
+        initial_states = std_asymptotic * jr.normal(subkey, shape=(n_trajectories, N_osc))
+    elif init_from_forward_moment_matched_gaussian:
+        # Gaussian approximation to p_t(x) matching mean/cov of the true forward marginal:
+        # x_t = a_t x_0 + sigma_t eps, eps ~ N(0,I)
+        # mean(x_t) = a_t mean(x_0)
+        # cov(x_t)  = a_t^2 cov(x_0) + sigma_t^2 I
+        a_t = jnp.exp(-t_final / (sigma_forward**2))
+        sigma_t2 = Temp * (sigma_forward**2) * (
+            1.0 - jnp.exp(-2.0 * t_final / (sigma_forward**2))
+        )
+
+        # Optional subsampling of dataset points (NOT dimensions)
+        if downsampling_for_initial_condition:
+            samples0 = samples_target[::downsampling_factor]
+            print("Using downsampled samples_target for moment-matched Gaussian:", samples0.shape)
+        else:
+            samples0 = samples_target
+            print("Using full samples_target for moment-matched Gaussian:", samples0.shape)
+
+        mu0 = jnp.mean(samples0, axis=0)  # (N_osc,)
+
+        if moment_matched_use_full_cov:
+            # Full covariance is feasible for MNIST (784 dims), but can be heavy for larger networks.
+            x0 = samples0.astype(jnp.float32)
+            mu0_f32 = jnp.mean(x0, axis=0, keepdims=True)
+            xc = x0 - mu0_f32
+            cov0 = (xc.T @ xc) / x0.shape[0]  # (N_osc, N_osc)
+            cov_t = (a_t**2) * cov0 + sigma_t2 * jnp.eye(N_osc, dtype=cov0.dtype)
+            mu_t = (a_t * mu0).astype(cov_t.dtype)
+            initial_states = jr.multivariate_normal(
+                subkey, mean=mu_t, cov=cov_t, shape=(n_trajectories,)
+            ).astype(jnp.float64)
+        else:
+            # Diagonal approximation (cheap, matches per-dimension variance)
+            var0 = jnp.var(samples0, axis=0)  # (N_osc,)
+            mu_t = a_t * mu0
+            var_t = (a_t**2) * var0 + sigma_t2
+            initial_states = mu_t + jnp.sqrt(var_t) * jr.normal(
+                subkey, shape=(n_trajectories, N_osc)
+            )
+    else:
+        if downsampling_for_initial_condition:
+            # Downsample dataset points only (NOT feature dimensions)
+            samples_target_downsampled = samples_target[::downsampling_factor]
+            print("samples_target_downsampled shape:", samples_target_downsampled.shape)
+        else:
+            print("Using full samples_target for initial condition")
+            samples_target_downsampled = samples_target
+        initial_states = sample_forward_process(
+            t_final,
+            n_trajectories,
+            sigma_final=sigma_forward,
+            D=Temp,
+            samples0=samples_target_downsampled,
+            key=subkey
+        )
     key, subkey = jr.split(key)
+    
+    initial_states = 0.0*initial_states
+    
     keys_brownian = jr.split(subkey, n_trajectories)
     
     # Vectorized solve for all trajectories at once (like the original working version)
@@ -612,16 +702,37 @@ def run_reverse_process_SDE(params_interpolator, suffix, key, Temp, atol, rtol, 
 
 # Use t_forward as the final time
 print(f"Running reverse SDE with final time: {t_forward}")
+reverse_sde_suffix_base = f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}"
+if init_from_final_gaussian:
+    init_method = "asymptotic_gaussian"
+elif init_from_forward_moment_matched_gaussian:
+    init_method = "moment_matched_gaussian_fullcov" if moment_matched_use_full_cov else "moment_matched_gaussian_diag"
+else:
+    init_method = "true_forward_marginal"
+
+reverse_sde_suffix = (
+    f"{reverse_sde_suffix_base}"
+    f"_init_method_{init_method}"
+    f"_downsampling_for_initial_condition_{downsampling_for_initial_condition}"
+    f"_downsampling_factor_{downsampling_factor}"
+    f"_initial_states_zero_TEST"
+)
+
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
     params_interpolator_non_smoothed, 
-    f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}",
+    reverse_sde_suffix,
     reverse_sde_key, 
     Temp, 
     atol_sde, 
     rtol_sde, 
     brownian_tolerance,
     ode_solve=False,
-    t_final=t_forward
+    t_final=t_forward,
+    init_from_final_gaussian=init_from_final_gaussian,
+    downsampling_for_initial_condition=downsampling_for_initial_condition,
+    downsampling_factor=downsampling_factor,
+    init_from_forward_moment_matched_gaussian=init_from_forward_moment_matched_gaussian,
+    moment_matched_use_full_cov=moment_matched_use_full_cov,
 )
 
 print('images_generated_non_smoothed_sde', images_generated_non_smoothed_sde)
@@ -668,7 +779,7 @@ axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sd
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
-plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}.png')
+plt.savefig(f'{plot_folder}/samples_{reverse_sde_suffix}.png')
 plt.close()
 
 print_memory_usage("final")
