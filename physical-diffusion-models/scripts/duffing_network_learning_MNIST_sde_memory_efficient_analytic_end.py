@@ -58,14 +58,14 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
 ##################################### 
-std_of_added_noise = 0.05
+std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
 n_time_steps = 200
 t_forward = 3.0
 sigma_forward = 1.
-exponential_time_pts = True
+exponential_time_pts = False
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
@@ -182,7 +182,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_01_15"
+current_date = "2026_01_18"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 plot_folder = os.path.join(output_dir, 'aaa_final_plots')
@@ -706,7 +706,7 @@ axes[n_rows, 0].set_title(f"SDE sampled images (Memory Efficient), rtol={rtol_sd
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
 
 # Save the figure
-plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}.png')
+plt.savefig(f'{plot_folder}/samples_memory_efficient_dim_{resolution[0]}_n_couplings_{n_neighbour_couplings}_Temp_{Temp}_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}_analytic_end_til_analytic_time_span_{t_analytic_start}_to_{t_analytic_end}.png')
 plt.close()
 
 print_memory_usage("final")
