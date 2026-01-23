@@ -62,8 +62,8 @@ std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 200
-t_forward = 3.0
+n_time_steps = 100
+t_forward = 5.0
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -80,7 +80,9 @@ lr_decay_steps = 6000
 n_epochs = 100000
 batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
-tolerance=.1
+tolerance_start=.1
+tolerance_end=1e-5
+tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
@@ -175,17 +177,18 @@ optimization_folder = (
     f"batch_{batch_size}_"
     f"chunk_{chunk_size}_"
     f"window_{window_size}_"
-    f"tol_{tolerance}_"
+    f"tol_start_{tolerance_start}_tol_end_{tolerance_end}_"
     f"patience_{patience}"
 )
 
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-current_date = "2026_01_18"
+# current_date = "2026_01_18"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
-output_dir = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
-plot_folder = os.path.join(output_dir, 'aaa_final_plots')
+output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
+output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
+plot_folder = os.path.join(output_dir_root, 'final_plots')
 
 
 # Create directories if they don't exist
@@ -399,7 +402,7 @@ if start_t_idx < len(forward_time_pts):
             n_epochs=n_epochs,
             maximize=maximize,
             window_size=window_size,
-            tolerance=tolerance,
+            tolerance=tolerance_schedule[t_idx],
             patience=patience,
             constraint_indices=constraint_indices,
             lr_decay_rate=lr_decay_rate,
