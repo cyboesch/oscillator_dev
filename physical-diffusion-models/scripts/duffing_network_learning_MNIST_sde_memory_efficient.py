@@ -62,8 +62,8 @@ std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 200
-t_forward = 5.0
+n_time_steps = 100
+t_forward = 4.
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -81,7 +81,7 @@ n_epochs = 100000
 batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
 tolerance_start=.1
-tolerance_end=1e-3
+tolerance_end=1e-1
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 patience=100
 CD1_dt = 0.00001
