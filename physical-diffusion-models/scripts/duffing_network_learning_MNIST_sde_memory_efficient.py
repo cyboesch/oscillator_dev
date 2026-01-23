@@ -152,7 +152,7 @@ start_from_scratch = False
 ## Filenames
 #####################################
 
-problem_type_folder = f"MNIST_generation"
+problem_type_folder = f"MNIST_generation_unit_potential_subtracted"
 
 system_specifics = f"n_couplings_{n_neighbour_couplings}_Temp_{Temp}_energy_fn_type_{energy_fn_type}"
 

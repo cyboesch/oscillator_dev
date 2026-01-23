@@ -59,7 +59,7 @@ def create_2d_square_lattice_connectivity(grid_size, n_neighbour_couplings):
 # with external force and duffing nonlinear coupling
 def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn(connectivity, unflatten):
     def energy_self_oscillator(x, k_lin, k_duff, k_6, bias):
-        return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4 + 1 / 6 * k_6 * x**6 + bias * x
+        return 1 / 2 * k_lin * x**2 + 1/2*x**2 + 1 / 4 * k_duff * x**4 + 1 / 6 * k_6 * x**6 + bias * x
 
     def energy_self_network(x, k_lin, k_duff, k_6, bias):
         return jnp.sum(vmap(energy_self_oscillator)(x, k_lin, k_duff, k_6, bias))

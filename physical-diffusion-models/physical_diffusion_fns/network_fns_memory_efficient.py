@@ -20,10 +20,10 @@ def setup_duffing_network_analytical_derivatives_memory_efficient(connectivity, 
     
     # Keep the original gradient and trace hessian functions (they're already efficient)
     def gradient_self_oscillator(x, k_lin, k_duff, k_6, bias):
-        return k_lin * x + k_duff * x**3 + k_6 * x**5 + bias
+        return x + k_lin * x + k_duff * x**3 + k_6 * x**5 + bias
     
     def hessian_diag_self_oscillator(x, k_lin, k_duff, k_6, bias):
-        return k_lin + 3 * k_duff * x**2 + 5 * k_6 * x**4
+        return 1 +k_lin + 3 * k_duff * x**2 + 5 * k_6 * x**4
     
     def gradient_coupling_pair_wrt_x(x, y, c_lin, c_optomech, c_duff):
         return (2 * c_lin * x - 2 * c_lin * y + 
