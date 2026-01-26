@@ -62,8 +62,8 @@ std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 100
-t_forward = 4.
+n_time_steps = 50
+t_forward = 3.0
 sigma_forward = 1.
 exponential_time_pts = False
 if exponential_time_pts:
@@ -143,6 +143,11 @@ init_from_final_gaussian = False
 init_from_forward_moment_matched_gaussian = True  # Gaussian approx to p_{t_forward} matching mean/cov of forward marginal
 moment_matched_use_full_cov = False  # True: full cov; False: diagonal-only
 
+# ELSE:
+# Use forward distribution with donsampling
+downsampling_for_initial_condition = False
+downsampling_factor = 100
+
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 print(f"  - SDE tolerances: rtol={rtol_sde}, atol={atol_sde}, brownian_tol={brownian_tolerance}")
 
@@ -184,7 +189,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_01_18"
+# current_date = "2026_01_26"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
@@ -219,8 +224,7 @@ images_flat_true = images_flat_raw + gaussian_noise
 # Normalize the data
 samples_target_unscaled, mean_MNIST, std_MNIST = normalize_samples(images_flat_true)
 samples_target = samples_target_unscaled*additional_rescaling
-downsampling_for_initial_condition = False
-downsampling_factor = 100
+
 
 
 
@@ -241,7 +245,7 @@ print(f"Estimated parameter count: {7*N_osc + 3*num_connections}")
 #####################################
 # Define initial parameters and energy fn
 if energy_fn_type == "6th_order_duffing_coupling":
-    k_lin_0 = -1.*jnp.ones(N_osc)
+    k_lin_0 = -2.*jnp.ones(N_osc)
     k_duff_0 = jnp.ones(N_osc)
     k_6_0 = jnp.ones(N_osc)
     c_lin_0 = jnp.zeros(num_connections)
@@ -655,7 +659,7 @@ def run_reverse_process_SDE(
         )
     key, subkey = jr.split(key)
     
-    initial_states = 0.0*initial_states
+    initial_states = initial_states
     
     keys_brownian = jr.split(subkey, n_trajectories)
     
@@ -712,13 +716,14 @@ elif init_from_forward_moment_matched_gaussian:
     init_method = "moment_matched_gaussian_fullcov" if moment_matched_use_full_cov else "moment_matched_gaussian_diag"
 else:
     init_method = "true_forward_marginal"
-
+    if downsampling_for_initial_condition:
+        init_method = f"{init_method}_downsampling_for_initial_condition_{downsampling_for_initial_condition}_downsampling_factor_{downsampling_factor}"
+    else: init_method = f"{init_method}_no_downsampling"
+    
 reverse_sde_suffix = (
     f"{reverse_sde_suffix_base}"
     f"_init_method_{init_method}"
-    f"_downsampling_for_initial_condition_{downsampling_for_initial_condition}"
-    f"_downsampling_factor_{downsampling_factor}"
-    f"_initial_states_zero_TEST"
+
 )
 
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
