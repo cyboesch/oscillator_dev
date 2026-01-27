@@ -62,15 +62,18 @@ std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 100
+n_time_steps = 200
 t_forward = 5.0
 sigma_forward = 1.
 exponential_time_pts = False
+solve_opt_in_reverse = True
 if exponential_time_pts:
     forward_time_pts = jnp.exp(jnp.linspace(jnp.log(1e-7), jnp.log(t_forward), n_time_steps))
     forward_time_pts = forward_time_pts.at[0].set(0.)
 else:
     forward_time_pts = jnp.linspace(0.0, t_forward, n_time_steps)
+if solve_opt_in_reverse:
+    forward_time_pts = forward_time_pts[::-1]
 print('forward_time_pts', forward_time_pts)
 
 # Optimization - EXTREMELY REDUCED FOR MEMORY
@@ -78,11 +81,13 @@ learning_rate = 0.5
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
-batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
+batch_size = 2*512  # Batch size (doesn't affect reverse SDE memory usage)
 window_size=1000
-tolerance_start=.1
-tolerance_end=1e-5
+tolerance_start=1e-1
+tolerance_end=1e-4
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
+if solve_opt_in_reverse:
+    tolerance_schedule = tolerance_schedule[::-1]
 patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
@@ -163,7 +168,7 @@ MNIST_specifics = f"labels_{labels}_resolution_{resolution[0]}_x_{resolution[1]}
 data_folder = f"added_gaussian_noise_std_{std_of_added_noise}_key_seed_{key_seed}_additional_rescaling_{additional_rescaling}"
 
 optimization_folder = (
-    f"training_method_{training_method}_"
+    f"training_method_{training_method}_solve_opt_in_reverse_{solve_opt_in_reverse}_"
     + (f"CD1_dt_{CD1_dt}_CD1_num_noise_samples_{CD1_num_noise_samples}_" if training_method == "CD1" else "")
     + f"exp_time_pts_{exponential_time_pts}_"
     f"t_forward_{t_forward}_"
@@ -241,10 +246,10 @@ print(f"Estimated parameter count: {7*N_osc + 3*num_connections}")
 #####################################
 # Define initial parameters and energy fn
 if energy_fn_type == "6th_order_duffing_coupling":
-    k_lin_0 = -1.*jnp.ones(N_osc)
-    k_duff_0 = jnp.ones(N_osc)
+    k_lin_0 = 1.*jnp.ones(N_osc)
+    k_duff_0 = 0*jnp.ones(N_osc)
     k_6_0 = jnp.ones(N_osc)
-    c_lin_0 = jnp.zeros(num_connections)
+    c_lin_0 = jnp.ones(num_connections)
     c_optomech_0 = jnp.zeros(num_connections)
     c_duff_0 = jnp.zeros(num_connections)
     biases_0 = jnp.zeros(N_osc)
@@ -547,12 +552,19 @@ def run_reverse_process_SDE(
     
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
-    if ode_solve:
-        params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
-    elif training_method.startswith("SM_at_kbT"):
-        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
+    
+    if solve_opt_in_reverse:
+        tau = lambda t: t
     else:
-        params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(t_final - t) - 1 / sigma_forward**2 * forward_params
+        tau = lambda t: t_final-t
+    
+    if ode_solve:
+        params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(tau(t)) - 1 / sigma_forward**2 * forward_params
+        
+    elif training_method.startswith("SM_at_kbT"):
+        params_interpolator_reverse_plus_linear = lambda t: 2*params_interpolator(tau(t)) - 1 / sigma_forward**2 * forward_params
+    else:
+        params_interpolator_reverse_plus_linear = lambda t: 2*Temp*params_interpolator(tau(t)) - 1 / sigma_forward**2 * forward_params
 
     # Setup SDE functions
     drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, params_interpolator_reverse_plus_linear, N_osc, time_dependent_parms=True, Temp=Temp)
