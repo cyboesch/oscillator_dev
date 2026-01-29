@@ -29,7 +29,7 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
-from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch, run_optimization_multi_gpu_sampler, setup_score_matching_kbT_loss_per_batch
+from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch, setup_score_matching_kbT_loss_per_batch
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
 from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
@@ -61,9 +61,9 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
-Temp = 0.005
-n_time_steps = 150
-t_forward = 5.0
+Temp = 0.1
+n_time_steps = 100
+t_forward = 1.0
 sigma_forward = 1.
 exponential_time_pts = False
 solve_opt_in_reverse = True
@@ -82,13 +82,13 @@ lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
 batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
-window_size=2000
-tolerance_start=1e-4
-tolerance_end=1e-4
+window_size=1000
+tolerance_start=1e-2
+tolerance_end=1e-2
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 if solve_opt_in_reverse:
     tolerance_schedule = tolerance_schedule[::-1]
-patience=400
+patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
@@ -144,9 +144,13 @@ brownian_tolerance = 1e-12
 # Initial condition option for reverse process:
 # - False: sample x_{t_final} by pushing data samples through the forward OU process for time t_final
 # - True : sample directly from the asymptotic forward Gaussian N(0, Temp * sigma_forward^2 I)
-init_from_final_gaussian = True
+init_from_final_gaussian = True 
 init_from_forward_moment_matched_gaussian = False  # Gaussian approx to p_{t_forward} matching mean/cov of forward marginal
 moment_matched_use_full_cov = False  # True: full cov; False: diagonal-only
+downsampling_for_initial_condition = False
+use_forward_marginals_for_initial_condition = False
+downsampling_factor = 100
+use_same_initial_condition_for_all_trajectories = False  # True: use the same initial condition for all trajectories (for testing)
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
 print(f"  - SDE tolerances: rtol={rtol_sde}, atol={atol_sde}, brownian_tol={brownian_tolerance}")
@@ -189,7 +193,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_01_27"
+current_date = "2026_01_27"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
@@ -224,8 +228,7 @@ images_flat_true = images_flat_raw + gaussian_noise
 # Normalize the data
 samples_target_unscaled, mean_MNIST, std_MNIST = normalize_samples(images_flat_true)
 samples_target = samples_target_unscaled*additional_rescaling
-downsampling_for_initial_condition = False
-downsampling_factor = 100
+
 
 
 
@@ -540,9 +543,11 @@ def run_reverse_process_SDE(
     brownian_tolerance,
     ode_solve=False,
     t_final=None,
+    use_forward_marginals_for_initial_condition: bool = False,
     init_from_final_gaussian: bool = False,
     downsampling_for_initial_condition: bool = False,
     downsampling_factor: int = 100,
+    use_same_initial_condition_for_all_trajectories: bool = False,
     init_from_forward_moment_matched_gaussian: bool = False,
     moment_matched_use_full_cov: bool = False,
 ):
@@ -649,7 +654,7 @@ def run_reverse_process_SDE(
             initial_states = mu_t + jnp.sqrt(var_t) * jr.normal(
                 subkey, shape=(n_trajectories, N_osc)
             )
-    else:
+    elif use_forward_marginals_for_initial_condition:
         if downsampling_for_initial_condition:
             # Downsample dataset points only (NOT feature dimensions)
             samples_target_downsampled = samples_target[::downsampling_factor]
@@ -667,7 +672,11 @@ def run_reverse_process_SDE(
         )
     key, subkey = jr.split(key)
     
-    initial_states = initial_states
+    if use_same_initial_condition_for_all_trajectories:
+        # Use the same initial condition for all trajectories (for testing)
+        initial_states = jnp.tile(initial_states[0:1], (n_trajectories, 1))
+    else:
+        initial_states = initial_states
     
     keys_brownian = jr.split(subkey, n_trajectories)
     
@@ -722,14 +731,16 @@ if init_from_final_gaussian:
     init_method = "asymptotic_gaussian"
 elif init_from_forward_moment_matched_gaussian:
     init_method = "moment_matched_gaussian_fullcov" if moment_matched_use_full_cov else "moment_matched_gaussian_diag"
-else:
-    init_method = "true_forward_marginal"
+elif use_forward_marginals_for_initial_condition:
+    if downsampling_for_initial_condition:
+        init_method = f"true_forward_marginal_downsampled_factor_{downsampling_factor}"
+    else:
+        init_method = "true_forward_marginal"
 
 reverse_sde_suffix = (
     f"{reverse_sde_suffix_base}"
     f"_init_method_{init_method}"
-    f"_downsampling_for_initial_condition_{downsampling_for_initial_condition}"
-    f"_downsampling_factor_{downsampling_factor}"
+    f"_use_same_initial_condition_for_all_trajectories_{use_same_initial_condition_for_all_trajectories}"
 )
 
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
