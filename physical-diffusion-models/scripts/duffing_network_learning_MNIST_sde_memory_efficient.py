@@ -58,12 +58,12 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
 ##################################### 
-std_of_added_noise = 0.1
+std_of_added_noise = 0.2
 additional_rescaling = 1
 # Forward process parameters
-Temp = 0.1
+Temp = 0.02
 n_time_steps = 100
-t_forward = 1.0
+t_forward = 4.5
 sigma_forward = 1.
 exponential_time_pts = False
 solve_opt_in_reverse = True
@@ -193,7 +193,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-current_date = "2026_01_27"
+# current_date = "2026_01_27"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
