@@ -58,12 +58,12 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
 ##################################### 
-std_of_added_noise = 0.2
+std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
-Temp = 0.02
+Temp = 1.0
 n_time_steps = 100
-t_forward = 4.5
+t_forward = 3.0
 sigma_forward = 1.
 exponential_time_pts = False
 solve_opt_in_reverse = True
