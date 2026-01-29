@@ -62,7 +62,7 @@ std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.005
-n_time_steps = 200
+n_time_steps = 150
 t_forward = 5.0
 sigma_forward = 1.
 exponential_time_pts = False
@@ -81,14 +81,14 @@ learning_rate = 0.5
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
-batch_size = 2*512  # Batch size (doesn't affect reverse SDE memory usage)
-window_size=1000
-tolerance_start=1e-1
+batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
+window_size=2000
+tolerance_start=1e-4
 tolerance_end=1e-4
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 if solve_opt_in_reverse:
     tolerance_schedule = tolerance_schedule[::-1]
-patience=100
+patience=400
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
@@ -144,8 +144,8 @@ brownian_tolerance = 1e-12
 # Initial condition option for reverse process:
 # - False: sample x_{t_final} by pushing data samples through the forward OU process for time t_final
 # - True : sample directly from the asymptotic forward Gaussian N(0, Temp * sigma_forward^2 I)
-init_from_final_gaussian = False
-init_from_forward_moment_matched_gaussian = True  # Gaussian approx to p_{t_forward} matching mean/cov of forward marginal
+init_from_final_gaussian = True
+init_from_forward_moment_matched_gaussian = False  # Gaussian approx to p_{t_forward} matching mean/cov of forward marginal
 moment_matched_use_full_cov = False  # True: full cov; False: diagonal-only
 
 print(f"  - SDE trajectories: {n_trajectories} (reduced from 100, final states only)")
@@ -189,7 +189,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_01_18"
+# current_date = "2026_01_27"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
@@ -552,11 +552,11 @@ def run_reverse_process_SDE(
     
     forward_params = jnp.zeros_like(params_flattened_initial)
     forward_params = forward_params.at[0:N_osc].set(1.)
-    
-    if solve_opt_in_reverse:
-        tau = lambda t: t
-    else:
-        tau = lambda t: t_final-t
+
+    # Reverse-time SDE is integrated over t in [0, T] with initial condition at forward time T.
+    # Therefore parameters must be evaluated at the corresponding forward time tau(t) = T - t,
+    # independent of whether the *optimization* was performed forward or backward in time.
+    tau = lambda t: t_final - t
     
     if ode_solve:
         params_interpolator_reverse_plus_linear = lambda t: Temp*params_interpolator(tau(t)) - 1 / sigma_forward**2 * forward_params
@@ -667,7 +667,7 @@ def run_reverse_process_SDE(
         )
     key, subkey = jr.split(key)
     
-    initial_states = 0.0*initial_states
+    initial_states = initial_states
     
     keys_brownian = jr.split(subkey, n_trajectories)
     
@@ -730,7 +730,6 @@ reverse_sde_suffix = (
     f"_init_method_{init_method}"
     f"_downsampling_for_initial_condition_{downsampling_for_initial_condition}"
     f"_downsampling_factor_{downsampling_factor}"
-    f"_initial_states_zero_TEST"
 )
 
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
