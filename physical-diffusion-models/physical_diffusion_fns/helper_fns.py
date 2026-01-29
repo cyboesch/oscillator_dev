@@ -325,11 +325,20 @@ def interpolate_parameters(params, time_points):
         the interpolated parameters. For scalar `t`, the result is shape (n_params,);
         for vector `t`, the result is shape (len(t), n_params).
     """
-    
+
+    # IMPORTANT: jnp.interp requires `xp` (here: time_points) to be increasing.
+    # We may optimize/store parameters in reverse time order (e.g. T -> 0),
+    # so we sort time_points and permute params accordingly to make interpolation well-defined.
+    params = jnp.asarray(params)
+    time_points = jnp.asarray(time_points)
+    sort_idx = jnp.argsort(time_points)
+    time_points_sorted = time_points[sort_idx]
+    params_sorted = params[sort_idx]
+
     def _interpolator(t):
         # Transpose params to shape (n_params, n_timesteps) so that each row is a trajectory.
         # Use vmap to apply jnp.interp over each parameter trajectory.
-        interpolated = jax.vmap(lambda param: jnp.interp(t, time_points, param))(params.T)
+        interpolated = jax.vmap(lambda param: jnp.interp(t, time_points_sorted, param))(params_sorted.T)
         # If t is an array, jnp.interp returns an array for each parameter, resulting in a
         # (n_params, len(t)) array. Transpose it so that each row corresponds to a time point.
         if jnp.ndim(t) > 0:
