@@ -9,6 +9,7 @@ from diffrax import ControlTerm, MultiTerm, ODETerm
 from functools import partial
 from jax.experimental.pjit import pjit
 import optax
+from collections import deque
 from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE
 
 
@@ -518,9 +519,13 @@ def run_optimization(loss_fn_per_batch,
         params = optax.apply_updates(params, updates)
         return params, opt_state, loss_val
 
+    # Sparse history for plotting (every 100 epochs) - bounded memory
     params_history = []
     loss_history = []
-    best_moving_avg = jnp.inf
+    
+    # Fixed-size window for early stopping - constant memory regardless of epochs
+    loss_window = deque(maxlen=window_size)
+    best_moving_avg = float('inf')
     patience_counter = 0
     
     # Track best parameters throughout optimization
@@ -541,8 +546,10 @@ def run_optimization(loss_fn_per_batch,
             # Project the subset of parameters (e.g., those at index 0:10) to be at least epsilon:
             params = params.at[constraint_indices].set(jnp.maximum(params[constraint_indices], epsilon))
 
-        params_history.append(params)
-        loss_history.append(loss)
+        # Store history sparsely (every 100 epochs) to save memory
+        if epoch % 100 == 0:
+            params_history.append(params)
+            loss_history.append(loss)
         
         # Update best parameters if current loss is better
         if (not maximize and loss < best_loss) or (maximize and loss > best_loss):
@@ -550,16 +557,19 @@ def run_optimization(loss_fn_per_batch,
             best_params = params.copy()  # Make a copy to avoid reference issues
             best_epoch = epoch
 
+        # Add to fixed-size window for early stopping (deque auto-drops old values)
+        loss_window.append(float(loss))
+
         # Check convergence if we have enough history
-        if epoch % 100 == 0 and len(loss_history) >= window_size:
-            current_moving_avg = jnp.mean(jnp.array(loss_history[-window_size:]))
+        if epoch % 100 == 0 and len(loss_window) >= window_size:
+            current_moving_avg = sum(loss_window) / len(loss_window)
             # If the moving average hasn't improved by the relative tolerance, increase the counter
             # Use relative improvement: (best - current) / |best| > tolerance
             if best_moving_avg == 0:
                 # Avoid division by zero
-                relative_improvement = jnp.abs(current_moving_avg)
+                relative_improvement = abs(current_moving_avg)
             else:
-                relative_improvement = (best_moving_avg - current_moving_avg) / jnp.abs(best_moving_avg)
+                relative_improvement = (best_moving_avg - current_moving_avg) / abs(best_moving_avg)
             
             if relative_improvement > tolerance:
                 best_moving_avg = current_moving_avg
