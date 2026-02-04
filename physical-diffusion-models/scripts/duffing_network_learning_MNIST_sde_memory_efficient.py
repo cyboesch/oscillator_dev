@@ -61,9 +61,9 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 std_of_added_noise = 0.1
 additional_rescaling = 1
 # Forward process parameters
-Temp = 0.02
+Temp = 1.0
 n_time_steps = 100
-t_forward = 4.0
+t_forward = 5.0
 sigma_forward = 1.
 exponential_time_pts = False
 solve_opt_in_reverse = True
@@ -77,18 +77,18 @@ if solve_opt_in_reverse:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization - EXTREMELY REDUCED FOR MEMORY
-learning_rate = 0.1
+learning_rate = 0.00001
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
 batch_size = 512  # Batch size (doesn't affect reverse SDE memory usage)
-window_size=2000
-tolerance_start=1e-2
-tolerance_end=1e-2
+window_size=1000
+tolerance_start=1e-3
+tolerance_end=1e-3
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 if solve_opt_in_reverse:
     tolerance_schedule = tolerance_schedule[::-1]
-patience=200
+patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
