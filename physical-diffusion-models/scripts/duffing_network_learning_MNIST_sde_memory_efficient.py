@@ -58,12 +58,12 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
 ##################################### 
-std_of_added_noise = 0.1
+std_of_added_noise = 0.01
 additional_rescaling = 1
 # Forward process parameters
-Temp = 1.0
-n_time_steps = 100
-t_forward = 5.0
+Temp = 0.02
+n_time_steps = 120
+t_forward = 5.
 sigma_forward = 1.
 exponential_time_pts = False
 solve_opt_in_reverse = True
@@ -77,7 +77,7 @@ if solve_opt_in_reverse:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization - EXTREMELY REDUCED FOR MEMORY
-learning_rate = 0.00001
+learning_rate = 0.1
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
@@ -88,7 +88,7 @@ tolerance_end=1e-3
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 if solve_opt_in_reverse:
     tolerance_schedule = tolerance_schedule[::-1]
-patience=100
+patience=200
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
@@ -124,7 +124,7 @@ labels = [0,1]
 resolution = (28,28)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 8  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 12  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
@@ -193,7 +193,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_01_27"
+# current_date = "2026_02_05"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
