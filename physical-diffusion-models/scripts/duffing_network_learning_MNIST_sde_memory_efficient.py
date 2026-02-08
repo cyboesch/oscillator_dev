@@ -62,7 +62,7 @@ std_of_added_noise = 0.01
 additional_rescaling = 1
 # Forward process parameters
 Temp = 0.02
-n_time_steps = 120
+n_time_steps = 100
 t_forward = 5.
 sigma_forward = 1.
 exponential_time_pts = False
@@ -121,10 +121,10 @@ print(f"  - Expected memory reduction: ~50-100x vs original")
 
 labels = [0,1]
 # REDUCED resolution for extreme memory efficiency
-resolution = (28,28)  # Reduced from (20,20) for memory efficiency
+resolution = (16,16)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 12  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 10  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
