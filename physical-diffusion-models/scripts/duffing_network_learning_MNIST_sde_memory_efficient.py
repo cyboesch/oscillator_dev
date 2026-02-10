@@ -61,9 +61,9 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 std_of_added_noise = 0.01
 additional_rescaling = 1
 # Forward process parameters
-Temp = 0.02
+Temp = 0.01
 n_time_steps = 100
-t_forward = 5.
+t_forward = 6.
 sigma_forward = 1.
 exponential_time_pts = False
 solve_opt_in_reverse = True
@@ -77,7 +77,7 @@ if solve_opt_in_reverse:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization - EXTREMELY REDUCED FOR MEMORY
-learning_rate = 0.1
+learning_rate = 1.
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
@@ -88,7 +88,7 @@ tolerance_end=1e-3
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 if solve_opt_in_reverse:
     tolerance_schedule = tolerance_schedule[::-1]
-patience=200
+patience=100
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
@@ -124,7 +124,7 @@ labels = [0,1]
 resolution = (16,16)  # Reduced from (20,20) for memory efficiency
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 10  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 8  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
