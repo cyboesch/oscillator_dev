@@ -61,11 +61,66 @@ def load_and_preprocess_mnist(labels=None, resolution=(8, 8), step=1):
     
     return images_array, labels_array
 
+
+def balance_classes(images, labels_array, seed=42):
+    """Balance the dataset so each class has equal number of samples.
+    
+    Args:
+        images: Array of images
+        labels_array: Array of labels
+        seed: Random seed for reproducibility when subsampling
+        
+    Returns:
+        Tuple of (balanced_images, balanced_labels) as JAX arrays
+    """
+    unique_labels = np.unique(labels_array)
+    
+    # Count samples per class
+    counts = {label: np.sum(labels_array == label) for label in unique_labels}
+    min_count = min(counts.values())
+    
+    print(f"Class counts before balancing: {counts}")
+    print(f"Balancing to {min_count} samples per class")
+    
+    # Set random seed for reproducibility
+    rng = np.random.default_rng(seed)
+    
+    balanced_images = []
+    balanced_labels = []
+    
+    for label in unique_labels:
+        # Get indices for this class
+        indices = np.where(labels_array == label)[0]
+        # Randomly select min_count samples
+        selected_indices = rng.choice(indices, size=min_count, replace=False)
+        balanced_images.append(images[selected_indices])
+        balanced_labels.append(labels_array[selected_indices])
+    
+    # Concatenate and shuffle
+    balanced_images = jnp.concatenate(balanced_images, axis=0)
+    balanced_labels = jnp.concatenate(balanced_labels, axis=0)
+    
+    # Shuffle the combined dataset
+    shuffle_indices = rng.permutation(len(balanced_labels))
+    balanced_images = balanced_images[shuffle_indices]
+    balanced_labels = balanced_labels[shuffle_indices]
+    
+    print(f"Final balanced dataset size: {len(balanced_labels)}")
+    
+    return balanced_images, balanced_labels
+
+
 # %%
 labels = [0,1]
-resolution = (18,18)
+resolution = (28,28)
 step = 1
+balanced = True  # Set to True to balance classes, False to keep original distribution
+
 images, labels_array = load_and_preprocess_mnist(labels=labels, resolution=resolution, step=step)
+
+# Balance the dataset if requested
+if balanced:
+    images, labels_array = balance_classes(images, labels_array)
 
 # Plot a few examples
 num_examples = 10  # number of examples to display
@@ -85,7 +140,7 @@ plt.tight_layout()
 # plt.show()
 
 # %%
-specifics = f"labels_{labels}_resolution_{resolution}"
+specifics = f"labels_{labels}_resolution_{resolution}_balanced_{balanced}"
 
 # Create the target directory if it doesn't exist.
 PROJECT_DIRECTORY: Path = Path(__file__).parent.parent.absolute()
