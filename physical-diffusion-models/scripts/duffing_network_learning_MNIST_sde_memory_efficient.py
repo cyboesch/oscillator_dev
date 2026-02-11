@@ -61,9 +61,9 @@ optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 
 std_of_added_noise = 0.01
 additional_rescaling = 1
 # Forward process parameters
-Temp = 0.01
-n_time_steps = 100
-t_forward = 6.
+Temp = 0.02
+n_time_steps = 120
+t_forward = 5.
 sigma_forward = 1.
 exponential_time_pts = False
 solve_opt_in_reverse = True
@@ -77,7 +77,11 @@ if solve_opt_in_reverse:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization - EXTREMELY REDUCED FOR MEMORY
-learning_rate = 1.
+learning_rate_start = 0.1*Temp
+learning_rate_end = 0.001*Temp
+learning_rate_schedule = jnp.linspace(learning_rate_start, learning_rate_end, n_time_steps)
+if solve_opt_in_reverse:
+    learning_rate_schedule = learning_rate_schedule[::-1]
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
@@ -88,7 +92,11 @@ tolerance_end=1e-3
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 if solve_opt_in_reverse:
     tolerance_schedule = tolerance_schedule[::-1]
-patience=100
+patience_start=100
+patience_end=400
+patience_schedule = jnp.linspace(patience_start, patience_end, n_time_steps)
+if solve_opt_in_reverse:
+    patience_schedule = patience_schedule[::-1]
 CD1_dt = 0.00001
 CD1_num_noise_samples = 1000
 
@@ -121,10 +129,11 @@ print(f"  - Expected memory reduction: ~50-100x vs original")
 
 labels = [0,1]
 # REDUCED resolution for extreme memory efficiency
-resolution = (16,16)  # Reduced from (20,20) for memory efficiency
+resolution = (28,28)  # Reduced from (20,20) for memory efficiency
+balanced = True
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 8  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 12  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
@@ -177,23 +186,23 @@ optimization_folder = (
     + f"exp_time_pts_{exponential_time_pts}_"
     f"t_forward_{t_forward}_"
     f"n_timesteps_{n_time_steps}_"
-    f"forward_time_pts_{forward_time_pts[0]}_to_{forward_time_pts[-1]}_"
+    # f"forward_time_pts_{forward_time_pts[0]}_to_{forward_time_pts[-1]}_"
     f"sigma_forward_{sigma_forward}_"
-    f"lr_{learning_rate}_"
+    f"lr_{learning_rate_start}_to_{learning_rate_end}_"
     # f"lr_decay_rate_{lr_decay_rate}_"
     # f"lr_decay_steps_{lr_decay_steps}_"
     f"epochs_{n_epochs}_"
     f"batch_{batch_size}_"
     # f"chunk_{chunk_size}_"
     f"window_{window_size}_"
-    f"tol_start_{tolerance_start}_tol_end_{tolerance_end}_"
-    f"patience_{patience}"
+    f"tol_{tolerance_start}_to_{tolerance_end}_"
+    f"patience_{patience_start}_to_{patience_end}_"
 )
 
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_02_05"
+# current_date = "2026_02_08"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
@@ -212,7 +221,7 @@ print(f"Plot directory: {plot_folder}")
 ##################################### 
 import numpy as np
 # Load the saved .npy file
-path_to_data = os.path.join(here,"..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}.npy")
+path_to_data = os.path.join(here,"..", "data", "MNIST", f"mnist_labels_{labels}_resolution_{resolution}_balanced_{balanced}.npy")
 data_np = np.load(path_to_data)
 
 
@@ -290,7 +299,6 @@ if training_method == "SM_at_kbT_analytical_memory_efficient":
         k_b=1.0, T=Temp, max_batch_size=chunk_size
     )
     maximize = False
-    learning_rate = learning_rate*Temp
     print(f"Using ULTRA memory-efficient analytical derivatives for score matching at kbT={Temp}")
     print(f"Processing samples one-by-one to minimize memory usage")
 elif training_method == "SM_at_kbT_analytical_chunked":
@@ -300,7 +308,6 @@ elif training_method == "SM_at_kbT_analytical_chunked":
         k_b=1.0, T=Temp, chunk_size=chunk_size
     )
     maximize = False
-    learning_rate = learning_rate*Temp
     print(f"Using chunked memory-efficient analytical derivatives for score matching at kbT={Temp}")
     print(f"Chunk size: {chunk_size}")
 elif training_method == "SM_at_kbT_extreme_efficient":
@@ -310,7 +317,6 @@ elif training_method == "SM_at_kbT_extreme_efficient":
         k_b=1.0, T=Temp
     )
     maximize = False
-    learning_rate = learning_rate*Temp
     print(f"Using EXTREME memory-efficient version with gradient checkpointing at kbT={Temp}")
     print(f"Processing samples one-by-one with checkpointing")
 elif training_method == "SM_at_kbT_minimal_memory":
@@ -319,14 +325,12 @@ elif training_method == "SM_at_kbT_minimal_memory":
         gradient_fn, trace_hessian_fn, k_b=1.0, T=Temp
     )
     maximize = False
-    learning_rate = learning_rate*Temp
     print(f"Using MINIMAL memory version with JAX autodiff at kbT={Temp}")
     print(f"Avoiding all large parameter gradient matrices")
 elif training_method == "SM_at_kbT":
     loss_fn_per_batch = setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=Temp)
     gradient_fn_per_batch = None
     maximize = False
-    learning_rate = learning_rate*Temp
     print(f"Using exact Hessian computation for score matching at kbT={Temp}")
 else:
     raise ValueError(f"Only memory-efficient training methods are supported in this version.")
@@ -406,12 +410,12 @@ if start_t_idx < len(forward_time_pts):
             mask=mask,
             gradient_fn_per_batch=gradient_fn_per_batch,
             key=optimization_subkey,
-            learning_rate=learning_rate,
+            learning_rate=learning_rate_schedule[t_idx],
             n_epochs=n_epochs,
             maximize=maximize,
             window_size=window_size,
             tolerance=tolerance_schedule[t_idx],
-            patience=patience,
+            patience=patience_schedule[t_idx],
             constraint_indices=constraint_indices,
             lr_decay_rate=lr_decay_rate,
             lr_decay_steps=lr_decay_steps
