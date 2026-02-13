@@ -813,4 +813,42 @@ plt.savefig(f'{plot_folder}/samples_{reverse_sde_suffix}.png')
 plt.close()
 
 print_memory_usage("final")
+
+#####################################
+# Clipped version: true vs generated (clipped to [0,1])
+#####################################
+images_true_clipped = np.clip(np.array(images_true), 0, 1)
+images_generated_clipped = np.clip(np.array(images_generated_non_smoothed_sde), 0, 1)
+
+fig, axes = plt.subplots(2 * n_rows, 10, figsize=(15, 3 * n_rows))
+
+# Plot clipped true images in the first n_rows rows
+for idx in range(num_examples):
+    row = idx // 10
+    col = idx % 10
+    ax = axes[row, col]
+    img = images_true_clipped[idx]
+    if img.shape[-1] == 1:
+        img = img.squeeze(-1)
+    ax.imshow(img, cmap='gray')
+    ax.axis('off')
+
+# Plot clipped generated images in the next n_rows rows
+for idx in range(num_examples):
+    row = (idx // 10) + n_rows
+    col = idx % 10
+    ax = axes[row, col]
+    img = images_generated_clipped[idx]
+    if img.shape[-1] == 1:
+        img = img.squeeze(-1)
+    ax.imshow(img, cmap='gray')
+    ax.axis('off')
+
+axes[0, 0].set_title("True images (clipped to [0,1])", loc='left', fontsize=16)
+axes[n_rows, 0].set_title(f"SDE sampled images (clipped to [0,1]), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
+
+plt.subplots_adjust(wspace=0.01, hspace=0.5)
+plt.savefig(f'{plot_folder}/samples_{reverse_sde_suffix}_clipped.png')
+plt.close()
+
 print("Memory-efficient script completed successfully!")
