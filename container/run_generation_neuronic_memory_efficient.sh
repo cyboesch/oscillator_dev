@@ -5,7 +5,7 @@
 #SBATCH --error=MNIST_generation_%j.err
 #SBATCH --mail-user=cb7454@princeton.edu
 #SBATCH --mail-type=end
-#SBATCH --time=160:00:00
+#SBATCH --time=400:00:00
 #SBATCH --partition=all
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
