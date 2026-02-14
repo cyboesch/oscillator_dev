@@ -53,8 +53,10 @@ print(f"Number of devices: {num_devices}")
 ##################################### 
 
 key_seed = 1
+key_seed_reverse = None  # None => derive from master_key (reproduces original behavior); set to an int for independent reverse sampling
 master_key  = jax.random.PRNGKey(key_seed)          # single seed
-optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
+optimization_key, _default_reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
+reverse_sde_key = jax.random.PRNGKey(key_seed_reverse) if key_seed_reverse is not None else _default_reverse_sde_key
 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
@@ -78,7 +80,7 @@ if solve_opt_in_reverse:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization - EXTREMELY REDUCED FOR MEMORY
-learning_rate_start = 0.0002
+learning_rate_start = 2e-5
 learning_rate_end = 0.002
 learning_rate_schedule = jnp.linspace(learning_rate_start, learning_rate_end, n_time_steps)
 if solve_opt_in_reverse:
@@ -93,7 +95,7 @@ tolerance_end=1e-3
 tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)
 if solve_opt_in_reverse:
     tolerance_schedule = tolerance_schedule[::-1]
-patience_start=600
+patience_start=300
 patience_end=100
 patience_schedule = jnp.linspace(patience_start, patience_end, n_time_steps)
 if solve_opt_in_reverse:
@@ -134,7 +136,7 @@ resolution = (28,28)  # Reduced from (20,20) for memory efficiency
 balanced = True
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 14  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 6  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
@@ -203,7 +205,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_02_08"
+# current_date = "2026_02_11"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
@@ -746,6 +748,7 @@ reverse_sde_suffix = (
     f"{reverse_sde_suffix_base}"
     f"_init_method_{init_method}"
     f"_use_same_initial_condition_for_all_trajectories_{use_same_initial_condition_for_all_trajectories}"
+    + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
 )
 
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
@@ -817,8 +820,9 @@ print_memory_usage("final")
 #####################################
 # Clipped version: true vs generated (clipped to [0,1])
 #####################################
-images_true_clipped = np.clip(np.array(images_true), 0, 1)
-images_generated_clipped = np.clip(np.array(images_generated_non_smoothed_sde), 0, 1)
+clip_value = 1.0
+images_true_clipped = np.clip(np.array(images_true), 0, clip_value)
+images_generated_clipped = np.clip(np.array(images_generated_non_smoothed_sde), 0, clip_value)
 
 fig, axes = plt.subplots(2 * n_rows, 10, figsize=(15, 3 * n_rows))
 
@@ -844,11 +848,11 @@ for idx in range(num_examples):
     ax.imshow(img, cmap='gray')
     ax.axis('off')
 
-axes[0, 0].set_title("True images (clipped to [0,1])", loc='left', fontsize=16)
-axes[n_rows, 0].set_title(f"SDE sampled images (clipped to [0,1]), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
+axes[0, 0].set_title(f"True images (clipped to [0,{clip_value}])", loc='left', fontsize=16)
+axes[n_rows, 0].set_title(f"SDE sampled images (clipped to [0,{clip_value}]), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}", loc='left', fontsize=16)
 
 plt.subplots_adjust(wspace=0.01, hspace=0.5)
-plt.savefig(f'{plot_folder}/samples_{reverse_sde_suffix}_clipped.png')
+plt.savefig(f'{plot_folder}/samples_{reverse_sde_suffix}_clipped_0_to_{clip_value}.png')
 plt.close()
 
 print("Memory-efficient script completed successfully!")
