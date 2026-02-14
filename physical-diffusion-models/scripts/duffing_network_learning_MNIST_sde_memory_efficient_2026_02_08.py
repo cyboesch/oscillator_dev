@@ -52,8 +52,10 @@ print(f"Number of devices: {num_devices}")
 ##################################### 
 
 key_seed = 1
+key_seed_reverse = 28
 master_key  = jax.random.PRNGKey(key_seed)          # single seed
-optimization_key, reverse_sde_key, image_noise_added_key = jr.split(master_key, 3)
+reverse_sde_key = jax.random.PRNGKey(key_seed_reverse)
+optimization_key, image_noise_added_key = jr.split(master_key)
 
 ##################################### 
 # Set parameters - MEMORY OPTIMIZED
@@ -77,7 +79,7 @@ if solve_opt_in_reverse:
 print('forward_time_pts', forward_time_pts)
 
 # Optimization - EXTREMELY REDUCED FOR MEMORY
-learning_rate = 0.01
+learning_rate = 0.1
 lr_decay_rate = 0.95
 lr_decay_steps = 6000 
 n_epochs = 100000
@@ -138,7 +140,7 @@ print(f"  - This reduces parameter count by ~16x compared to original")
 
 # SDE parameters - EXTREMELY REDUCED for memory efficiency
 n_trajectories = 40   # Reduced to 5 for extreme memory efficiency with large network
-rtol_sde = 1e-4      # Relaxed for memory efficiency
+rtol_sde = 1e-4     # Relaxed for memory efficiency
 atol_sde = 1e-6    # REDUCED from 1e-5 to 1e-8 for memory efficiency
 brownian_tolerance = 1e-12
 # Initial condition option for reverse process:
@@ -740,7 +742,7 @@ elif use_forward_marginals_for_initial_condition:
 reverse_sde_suffix = (
     f"{reverse_sde_suffix_base}"
     f"_init_method_{init_method}"
-    f"_use_same_initial_condition_for_all_trajectories_{use_same_initial_condition_for_all_trajectories}"
+    f"_use_same_initial_condition_for_all_trajectories_{use_same_initial_condition_for_all_trajectories}_reverse_rng_seed{key_seed_reverse}"
 )
 
 images_generated_non_smoothed_sde = run_reverse_process_SDE(
