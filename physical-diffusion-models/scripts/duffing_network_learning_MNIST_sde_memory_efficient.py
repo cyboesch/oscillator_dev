@@ -136,7 +136,7 @@ resolution = (28,28)  # Reduced from (20,20) for memory efficiency
 balanced = True
 
 # REDUCED neighbor couplings for memory efficiency  
-n_neighbour_couplings = 6  # Reduced from 8 to 4 for memory efficiency
+n_neighbour_couplings = 14  # Reduced from 8 to 4 for memory efficiency
 energy_fn_type = "6th_order_duffing_coupling"
 
 print(f"  - Network size: reduced to {resolution[0]}x{resolution[1]} with {n_neighbour_couplings} neighbors")
@@ -205,7 +205,7 @@ optimization_folder = (
 # Setup output directories
 here = os.path.dirname(os.path.abspath(__file__))
 current_date = datetime.now().strftime("%Y_%m_%d")
-# current_date = "2026_02_11"
+current_date = "2026_02_11"
 base_dir = os.path.join(here,"..","out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
