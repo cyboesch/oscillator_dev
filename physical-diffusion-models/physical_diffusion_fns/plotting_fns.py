@@ -154,8 +154,8 @@ def plot_parameter_evolution(params_history, loss_history, best_params, best_los
     raw_idxs = np.linspace(0, n_points - 1, num_samples)
     idxs = np.unique(np.round(raw_idxs).astype(int))
 
-    print(f"Best loss: {loss_history[best_idx]:.4e}")
-    print(f"Found at epoch: {best_idx * 1}")
+    print(f"Best loss: {best_loss:.4e}")
+    print(f"Found at epoch: {best_idx}")
 
     # Create subplots: one per parameter plus loss plus zoomed loss
     n_params = len(param_names)
