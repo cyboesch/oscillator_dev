@@ -13,30 +13,6 @@ from collections import deque
 from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE
 
 
-########################################################################################
-# Maximum log likelihood
-#####################################################################################
-
-def setup_MLE_loss_per_batch(energy_fn):
-    def loss_fn_per_batch(flattened_args,batch):
-        _loss_fn_per_batch = lambda x: -energy_fn(x,flattened_args)
-        return jnp.sum(vmap(_loss_fn_per_batch)(batch))
-    return loss_fn_per_batch
-
-def setup_MLE_gradient_per_batch(energy_fn, N_osc, gamma=1.0, k_b=1.0, T=1.0, t0=0.0, t1=10.0, N_samples=1000, dt0=0.01, initial_state=jnp.array([0.,0.])):
-    
-    def gradient_fn_per_batch(flattened_args,batch):
-        drift_fn, diffusion_fn = setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma, k_b, T)
-        solution = solve_SDE(drift_fn, diffusion_fn, initial_state, t0, t1, N_samples, dt0)
-        
-        d_energy_d_params = lambda x: grad(energy_fn, argnums=1)(x, flattened_args)
-        expected_val_d_energy_d_params_clamped_batch = jnp.sum(vmap(d_energy_d_params)(batch), axis=0)/batch.shape[0]
-        
-        expected_val_d_energy_d_params_free = jnp.sum(vmap(d_energy_d_params)(solution.ys), axis=0)/solution.ys.shape[0]
-
-        return expected_val_d_energy_d_params_free-expected_val_d_energy_d_params_clamped_batch
-         
-    return gradient_fn_per_batch
 
 ########################################################################################
 # Score matching 
