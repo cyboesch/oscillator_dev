@@ -470,3 +470,215 @@ def visualize_connectivity_with_non_local_couplings(connectivity, grid_size_x=8,
         plt.savefig(path + f"/connectivity_n_neighbour_couplings_{n_neighbour_couplings}.png", dpi=300, bbox_inches='tight')
     plt.close()
     
+
+
+from matplotlib.colors import LinearSegmentedColormap
+from matplotlib.lines import Line2D
+
+# Print-friendly color schemes with high contrast
+# Option 1: Grayscale with high contrast (best for B&W printing)
+grayscale_cmap = LinearSegmentedColormap.from_list("grayscale_contrast", 
+                                                   ["white", "lightgray", "gray", "darkgray", "black"])
+
+# Option 2: Blue-white-red diverging (good contrast, colorblind friendly)
+bwr_cmap = LinearSegmentedColormap.from_list("blue_white_red", 
+                                             ["darkblue", "blue", "lightblue", "white", 
+                                              "lightcoral", "red", "darkred"])
+
+# Option 3: Viridis-like but with higher contrast
+viridis_contrast = LinearSegmentedColormap.from_list("viridis_contrast",
+                                                     ["#440154", "#31688e", "#35b779", "#fde725"])
+
+# Option 4: Custom high-contrast scheme (purple to yellow)
+purple_yellow = LinearSegmentedColormap.from_list("purple_yellow",
+                                                  ["#2d1b69", "#5d2a8a", "#8e44ad", "#c39bd3", 
+                                                   "#f7dc6f", "#f4d03f", "#f1c40f"])
+
+def plot_sampels_energy_marginals_for_SGM_vs_ES(
+    energy_fn,
+    params_reverse,
+    params_equil,
+    reverse_samples,
+    sde_samples_direct,
+    weights, means, covs,       # GMM params
+    *,                           # everything below here must be named
+    x1_range=(-1.5, 1.5),
+    x2_range=(-1.5, 1.5),
+    n_points=200,
+    num_bins=50,
+    sample_stride=10,
+    figsize=(7, 4),
+    fontsize=10,
+    label_fontsize=14,
+    iso_levels=5,
+    colormap='grayscale',        # NEW: colormap option
+    contour_linewidth=2.0,       # NEW: thicker contour lines
+    scatter_size=3,              # NEW: larger scatter points
+    scatter_alpha=0.8,           # NEW: higher alpha for visibility
+    plot_folder=None,
+    n_trajectories=None,
+    atol=None,
+    rtol=None,
+    Temp=None,
+):
+    """
+    Print-friendly version with improved color schemes and visibility.
+    
+    colormap options:
+    - 'grayscale': High-contrast grayscale (best for B&W printing)
+    - 'bwr': Blue-white-red diverging
+    - 'viridis_contrast': High-contrast viridis-like
+    - 'purple_yellow': Purple to yellow high contrast
+    - 'plasma': Original plasma (for comparison)
+    """
+    
+    # Select colormap
+    cmap_dict = {
+        'grayscale': grayscale_cmap,
+        'bwr': bwr_cmap,
+        'viridis_contrast': viridis_contrast,
+        'purple_yellow': purple_yellow,
+        'plasma': 'plasma'
+    }
+    selected_cmap = cmap_dict.get(colormap, grayscale_cmap)
+    
+    # 1) Grid
+    x1 = jnp.linspace(x1_range[0], x1_range[1], n_points)
+    x2 = jnp.linspace(x2_range[0], x2_range[1], n_points)
+    X1, X2 = jnp.meshgrid(x1, x2)
+    dx, dy = x1[1] - x1[0], x2[1] - x2[0]
+
+    # 2) Exact marginals for histograms
+    x_lin = jnp.linspace(x1_range[0], x1_range[1], 1000)
+    marginal_x1 = sum(
+        w * jnp.exp(-0.5*((x_lin - m[0])**2)/C[0,0]) / jnp.sqrt(2*jnp.pi*C[0,0])
+        for w,m,C in zip(weights, means, covs)
+    )
+    marginal_x2 = sum(
+        w * jnp.exp(-0.5*((x_lin - m[1])**2)/C[1,1]) / jnp.sqrt(2*jnp.pi*C[1,1])
+        for w,m,C in zip(weights, means, covs)
+    )
+
+    # 3) True 2D GMM density on grid
+    true_prob = jnp.zeros_like(X1)
+    for w, m, C in zip(weights, means, covs):
+        diff = jnp.stack([X1 - m[0], X2 - m[1]], axis=-1)
+        invC = jnp.linalg.inv(C)
+        exponent = jnp.einsum('...i,ij,...j->...', diff, invC, diff)
+        norm = jnp.sqrt((2*jnp.pi)**2 * jnp.linalg.det(C))
+        true_prob += w * jnp.exp(-0.5 * exponent) / norm
+
+    # 4) Compute E & model P for both methods
+    E_list, P_list = [], []
+    for params in (params_reverse, params_equil):
+        E = jnp.zeros_like(X1)
+        for i in range(n_points):
+            for j in range(n_points):
+                x = jnp.array([X1[i,j], X2[i,j]])
+                E = E.at[i,j].set(energy_fn(x, params))
+        P = jnp.exp(-E)
+        P /= (jnp.sum(P) * dx * dy)
+        E_list.append(E)
+        P_list.append(P)
+
+    # 5) Figure setup with improved styling
+    fig, axes = plt.subplots(2, 3, figsize=figsize)
+    labels = ['(a)','(b)','(c)','(d)','(e)','(f)']
+    for ax, lab in zip(axes.flatten(), labels):
+        ax.text(0.02, 0.95, lab,
+                transform=ax.transAxes,
+                fontsize=label_fontsize,
+                fontweight='bold',
+                va='top', ha='left',
+                bbox=dict(boxstyle="round,pad=0.3", facecolor="white", alpha=0.8))
+
+    row_titles = ['Reverse Trajectory', 'Equilibrium Sampling']
+
+    # 6) Plot rows with improved visibility
+    for row, (title, samples) in enumerate(zip(row_titles,
+                                              (reverse_samples, sde_samples_direct))):
+        # — combined marginals with thicker lines
+        ax = axes[row,0]
+        ax.hist(samples[:,0], bins=num_bins, density=True,
+                alpha=0.6, color='blue', label='x$_1$', edgecolor='darkblue', linewidth=0.5)
+        ax.hist(samples[:,1], bins=num_bins, density=True,
+                alpha=0.6, color='red',  label='x$_2$', edgecolor='darkred', linewidth=0.5)
+        ax.plot(x_lin, marginal_x1, '--', color='darkblue', lw=3, label='Exact $p(x_1)$')
+        ax.plot(x_lin, marginal_x2, '--', color='darkred', lw=3, label='Exact $p(x_2)$')
+        ax.set_ylim(0, 13)
+        ax.set_xlabel('x$_1$, x$_2$', fontsize=fontsize)
+        ax.set_ylabel('Density', fontsize=fontsize)
+        ax.legend(fontsize=fontsize-2, loc='upper right')
+        ax.tick_params(labelsize=fontsize-2)
+        ax.grid(True, alpha=0.3)
+
+        # — energy map with improved colormap
+        ax = axes[row,1]
+        cf = ax.contourf(X1, X2, E_list[row], levels=30,
+                         cmap=selected_cmap, alpha=0.95)
+        cbar = plt.colorbar(cf, ax=ax)
+        cbar.set_label(r'$\hat{E}_{\theta(0)}$', fontsize=label_fontsize)
+        cbar.ax.tick_params(labelsize=label_fontsize-2)
+        
+        # Improved scatter points
+        scatter_color = 'white' if colormap == 'grayscale' else 'black'
+        ax.scatter(samples[::sample_stride,0],
+                   samples[::sample_stride,1],
+                   c=scatter_color, s=scatter_size, alpha=scatter_alpha,
+                   edgecolors='black' if scatter_color == 'white' else 'white',
+                   linewidths=0.5)
+        ax.set_xlabel('x$_1$', fontsize=fontsize)
+        ax.set_ylabel('x$_2$', fontsize=fontsize)
+        ax.tick_params(labelsize=fontsize-2)
+
+        # — probability map with improved contours
+        ax = axes[row,2]
+        cf = ax.contourf(X1, X2, P_list[row], levels=30,
+                         cmap=selected_cmap, alpha=0.95)
+        cbar = plt.colorbar(cf, ax=ax)
+        cbar.set_label(
+            r'$p_{\theta(0)} = \exp[-\hat{E}_{\theta(0)}/k_\mathrm{B}T]/Z_{\theta(0)}$',
+            fontsize=label_fontsize
+        )
+        cbar.ax.tick_params(labelsize=label_fontsize-2)
+        
+        # Improved scatter points
+        ax.scatter(samples[::sample_stride,0],
+                   samples[::sample_stride,1],
+                   c=scatter_color, s=scatter_size, alpha=scatter_alpha,
+                   edgecolors='black' if scatter_color == 'white' else 'white',
+                   linewidths=0.5)
+        
+        # Thicker, more visible contour lines
+        iso = ax.contour(X1, X2, true_prob,
+                         levels=iso_levels,
+                         colors='yellow',
+                         linestyles='--',
+                         linewidths=contour_linewidth)
+        ax.clabel(iso, fmt='%.2f', fontsize=fontsize-2, inline=True)
+        
+        iso_proxy = Line2D(
+            [0],[0],
+            color='yellow',
+            linestyle='--',
+            linewidth=contour_linewidth,
+            label=r'$p(x_1,x_2)$'
+        )
+        ax.legend(handles=[iso_proxy], fontsize=fontsize-2, loc='upper right')
+
+        ax.set_xlabel('x$_1$', fontsize=fontsize)
+        ax.set_ylabel('x$_2$', fontsize=fontsize)
+        ax.tick_params(labelsize=fontsize-2)
+
+        # sanity check
+        tot = jnp.sum(P_list[row]) * dx * dy
+        print(f"{title:>22} total prob ≈ {tot:.6f}")
+
+    # fig.suptitle(f'Print-Friendly Version (colormap: {colormap})', fontsize=label_fontsize+2)
+    fig.tight_layout(rect=[0,0,1,0.95])
+    
+    # Save with colormap info in filename
+    if plot_folder is not None:
+        plt.savefig(f"{plot_folder}/fig_2D_mixture_comparison_print_friendly_{colormap}_Temp_{Temp}_num_traj_{n_trajectories}_atol_{atol}_rtol_{rtol}.png", 
+                    dpi=300, bbox_inches='tight')
+    plt.show()
