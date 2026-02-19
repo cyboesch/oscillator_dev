@@ -30,7 +30,7 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
-from physical_diffusion_fns.learning_fns import setup_MLE_loss_per_batch, setup_MLE_gradient_per_batch, CD1_gradient, setup_score_matching_loss_per_batch, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch
+from physical_diffusion_fns.learning_fns import  CD1_gradient, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
 from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
@@ -263,7 +263,7 @@ print(f"Network size: {N_osc} oscillators, {num_connections} connections")
 print(f"Estimated parameter count: {7*N_osc + 3*num_connections}")
 
 #####################################
-# Define initial parameters and energy fn
+# Setup initial energy fn andparameters
 if energy_fn_type == "6th_order_duffing_coupling":
     k_lin_0 = 1.*jnp.ones(N_osc)
     k_duff_0 = 0*jnp.ones(N_osc)
