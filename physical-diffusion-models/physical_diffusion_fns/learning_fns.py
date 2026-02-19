@@ -1,40 +1,38 @@
 import jax
-from jax import grad, vmap,pmap, hessian, jacfwd
-from jax.sharding import Mesh, PartitionSpec as P
-from jax.experimental import pjit
+from jax import grad, vmap, hessian, jacfwd
 import jax.numpy as jnp
 import jax.random as jr
-import diffrax
-from diffrax import ControlTerm, MultiTerm, ODETerm
 from functools import partial
-from jax.experimental.pjit import pjit
 import optax
 from collections import deque
-from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE
-
 
 
 ########################################################################################
 # Score matching 
 ########################################################################################
-
-def setup_score_matching_loss_per_batch(energy_fn):
-    def loss_fn_per_batch(flattened_args,batch):
-        n_samples = batch.shape[0]
-        def log_propability_unnormalized(x):
-            return -energy_fn(x, flattened_args)
-        
-        current_score = grad(log_propability_unnormalized)
-        current_score2 = hessian(log_propability_unnormalized)
-        
-        current_score_loss_per_sample = lambda x: (jnp.trace(current_score2(x)) + 1/2 * jnp.sum(current_score(x)**2))/n_samples   
-        return jnp.sum(vmap(current_score_loss_per_sample)(batch))
-    return loss_fn_per_batch
-
 def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
     """
-    Original version using exact Hessian computation.
-    Memory intensive but theoretically exact.
+    Construct a score matching loss function using automatic differentiation.
+
+    Implements the score matching objective from Hyvarinen (2005), adapted to
+    a Boltzmann distribution at temperature T. The loss for each sample x is:
+
+        L(x) = (1 / k_b T) * tr(H(x)) + (1 / 2 (k_b T)^2) * ||s(x)||^2
+
+    where s(x) = grad log p(x) is the score (gradient of the unnormalized
+    log-density) and H(x) is the Hessian of the log-density, both computed
+    via JAX autodiff from the provided energy function.
+
+    Args:
+        energy_fn: Callable (x, params) -> scalar energy. The unnormalized
+            log-probability is defined as -energy_fn(x, params).
+        k_b: Boltzmann constant (default 1.0).
+        T: Temperature (default 1.0).
+
+    Returns:
+        loss_fn_per_batch: Callable (flattened_args, batch) -> scalar loss
+            averaged over the batch, suitable for use with gradient-based
+            optimizers.
     """
     def loss_fn_per_batch(flattened_args,batch):
         n_samples = batch.shape[0]
@@ -47,6 +45,40 @@ def setup_score_matching_kbT_loss_per_batch(energy_fn, k_b=1.0, T=1.0):
         current_score_loss_per_sample = lambda x: (jnp.trace(current_score2(x))/(k_b*T) + 1/2 * jnp.sum(current_score(x)**2)/(k_b*T)**2)/n_samples   
         return jnp.sum(vmap(current_score_loss_per_sample)(batch))
     return loss_fn_per_batch
+
+
+def setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=1.0):
+    def gradient_fn_per_batch(params, batch, subkey_gradient=None):
+        """
+        params:     array of shape (P,)
+        batch:      array of shape (N, D)
+        returns:    array of shape (P,)
+        """
+        kBT = k_b * T  # just to shorten expressions
+
+        def per_sample_grad(x):
+            # 1) ∇ₓE(x; params)   shape (D,)
+            dE_dx = grad(energy_fn, argnums=0)(x, params)
+
+            # 3) ∂²E/(∂p ∂x):   shape (P, D)
+            d2E_dpdx = jacfwd(lambda xx: grad(energy_fn, argnums=1)(xx, params))(x)
+
+            # 4) ∂³E/(∂p ∂x ∂x): shape (P, D, D)
+            d3E = jacfwd(lambda xx: jacfwd(lambda yy: grad(energy_fn, argnums=1)(yy, params))(xx))(x)
+
+            # 5) trace over the last two dims → shape (P,)
+            trace_term = jnp.trace(d3E, axis1=1, axis2=2)
+
+            # 6) dot the mixed second derivative with ∇ₓE → shape (P,)
+            dot_term = jnp.dot(d2E_dpdx, dE_dx)
+
+            # combine
+            return -trace_term / kBT + dot_term / kBT**2
+
+        # 7) vectorize over the batch and take the mean
+        grads = vmap(per_sample_grad)(batch)    # shape (N, P)
+        return jnp.mean(grads, axis=0)          # shape (P,)
+    return gradient_fn_per_batch
 
 
 def setup_score_matching_kbT_loss_analytical(gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn, k_b=1.0, T=1.0):
@@ -107,41 +139,6 @@ def setup_score_matching_kbT_loss_analytical(gradient_fn, trace_hessian_fn, grad
         return jnp.sum(vmap(score_loss_gradient_per_sample)(batch), axis=0)
     
     return loss_fn_per_batch, loss_gradient_fn_per_batch
-
-
-def setup_score_matching_kbT_local_gradient_per_batch(energy_fn, k_b=1.0, T=1.0):
-    def gradient_fn_per_batch(params, batch, subkey_gradient=None):
-        """
-        params:     array of shape (P,)
-        batch:      array of shape (N, D)
-        returns:    array of shape (P,)
-        """
-        kBT = k_b * T  # just to shorten expressions
-
-        def per_sample_grad(x):
-            # 1) ∇ₓE(x; params)   shape (D,)
-            dE_dx = grad(energy_fn, argnums=0)(x, params)
-
-            # 3) ∂²E/(∂p ∂x):   shape (P, D)
-            d2E_dpdx = jacfwd(lambda xx: grad(energy_fn, argnums=1)(xx, params))(x)
-
-            # 4) ∂³E/(∂p ∂x ∂x): shape (P, D, D)
-            d3E = jacfwd(lambda xx: jacfwd(lambda yy: grad(energy_fn, argnums=1)(yy, params))(xx))(x)
-
-            # 5) trace over the last two dims → shape (P,)
-            trace_term = jnp.trace(d3E, axis1=1, axis2=2)
-
-            # 6) dot the mixed second derivative with ∇ₓE → shape (P,)
-            dot_term = jnp.dot(d2E_dpdx, dE_dx)
-
-            # combine
-            return -trace_term / kBT + dot_term / kBT**2
-
-        # 7) vectorize over the batch and take the mean
-        grads = vmap(per_sample_grad)(batch)    # shape (N, P)
-        return jnp.mean(grads, axis=0)          # shape (P,)
-    return gradient_fn_per_batch
-
 
 
 
