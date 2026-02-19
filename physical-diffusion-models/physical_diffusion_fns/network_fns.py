@@ -57,7 +57,7 @@ def create_2d_square_lattice_connectivity(grid_size, n_neighbour_couplings):
 ########################################################################################
 
 # with external force and duffing nonlinear coupling
-def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn(connectivity, unflatten):
+def setup_energy_fn(connectivity, unflatten):
     def energy_self_oscillator(x, k_lin, k_duff, k_6, bias):
         return 1 / 2 * k_lin * x**2 + 1 / 4 * k_duff * x**4 + 1 / 6 * k_6 * x**6 + bias * x
 
@@ -101,11 +101,40 @@ def setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and
 # Analytical gradient and Hessian trace for the duffing network with external force and nonlinear coupling
 def setup_duffing_network_analytical_derivatives(connectivity, unflatten):
     """
-    Returns analytical gradient and trace of Hessian functions for the duffing network energy.
-    
-    Energy components:
-    - Self oscillator: E_self(x) = (1/2)*k_lin*x² + (1/4)*k_duff*x⁴ + (1/6)*k_6*x⁶ + bias*x
-    - Coupling: E_coupling(x,y) = c_lin*x*(x-y) + c_lin*y*(y-x) + c_optomech*x²*y + (c_duff/4)*(x-y)⁴
+    Constructs closed-form derivative functions for the Duffing oscillator network
+    energy, avoiding the overhead of automatic differentiation.
+
+    The total network energy is E = E_self + E_coupling, where
+
+        E_self(x_i) = (1/2) k_lin x_i² + (1/4) k_duff x_i⁴
+                     + (1/6) k_6 x_i⁶ + bias x_i
+
+        E_coupling(x_i, x_j) = c_lin x_i(x_i - x_j) + c_lin x_j(x_j - x_i)
+                              + c_optomech x_i² x_j + (c_duff/4)(x_i - x_j)⁴
+
+    Supports three parameter layouts via ``unflatten``:
+        - 7 groups: (k_lin, k_duff, k_6, c_lin, c_optomech, c_duff, bias)
+        - 6 groups: (k_lin, k_duff, c_lin, c_optomech, c_duff, bias)  — no 6th-order term
+        - 5 groups: (k_lin, k_duff, c_lin, c_optomech, bias)           — no Duffing coupling
+
+    Args:
+        connectivity: int array of shape (n_pairs, 2) listing coupled oscillator
+            index pairs, as produced by ``create_2d_square_lattice_connectivity``.
+        unflatten: callable that maps a flat parameter vector to the tuple of
+            per-oscillator and per-pair parameter arrays described above.
+
+    Returns:
+        Tuple of four functions, each with signature ``(x, flattened_args)``:
+            gradient_fn:
+                ∇_x E — gradient of the energy w.r.t. oscillator coordinates.
+            trace_hessian_fn:
+                Tr(∇²_x E) — scalar trace of the Hessian (Laplacian of E).
+            gradient_wrt_params_fn:
+                ∂(∇_x E)/∂θ — Jacobian of the gradient w.r.t. parameters,
+                shape (n_oscillators, n_params).
+            trace_hessian_wrt_params_fn:
+                ∂(Tr(∇²_x E))/∂θ — gradient of the Hessian trace w.r.t.
+                parameters, shape (n_params,).
     """
     
     def gradient_self_oscillator(x, k_lin, k_duff, k_6, bias):
