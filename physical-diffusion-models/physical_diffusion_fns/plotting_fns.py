@@ -679,6 +679,6 @@ def plot_sampels_energy_marginals_for_SGM_vs_ES(
     
     # Save with colormap info in filename
     if plot_folder is not None:
-        plt.savefig(f"{plot_folder}/fig_2D_mixture_comparison_print_friendly_{colormap}_Temp_{Temp}_num_traj_{n_trajectories}_atol_{atol}_rtol_{rtol}.png", 
+        plt.savefig(f"{plot_folder}/fig_2D_mixture_comparison_SGM_vs_ES_Temp_{Temp}_num_traj_{n_trajectories}_atol_{atol}_rtol_{rtol}.png", 
                     dpi=300, bbox_inches='tight')
     plt.show()
