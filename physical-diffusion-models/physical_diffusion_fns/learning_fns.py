@@ -206,6 +206,76 @@ def setup_force_matching_LOSS_and_GRADIENT_per_batch_analytical(gradient_fn, tra
     return loss_fn_per_batch, loss_gradient_fn_per_batch
 
 
+def solve_quadratic_score_matching(
+    params_initial,
+    sampler,
+    hessian_fn,
+    gradient_fn_per_batch,
+    loss_fn_per_batch=None,
+    mask=None,
+    key=jr.PRNGKey(0),
+    maximize=False,
+    constraint_indices=None,
+    epsilon=0.01,
+):
+    """
+    One-step Newton solve for the score matching loss (quadratic in params).
+
+    Solves θ* = θ - H⁻¹ ∇L in a single step. No learning rate or iteration needed.
+
+    Args:
+        params_initial: Initial parameter vector, shape (P,).
+        sampler: Callable (key) -> batch of samples, shape (N, D).
+        hessian_fn: Callable (x, flattened_args) -> Hessian matrix (P, P).
+        gradient_fn_per_batch: Callable (params, batch, subkey=None) -> gradient (P,).
+        loss_fn_per_batch: Optional, for computing loss at solution.
+        mask: Optional mask of shape (P,). Zeros out updates for masked params.
+        key: PRNG key for sampling.
+        maximize: If True, maximize instead of minimize (negate gradient).
+        constraint_indices: Optional indices to project to >= epsilon.
+        epsilon: Minimum value for constrained params (default 0.01).
+
+    Returns:
+        params_history: List with single element [params] (for compatibility).
+        loss_history: List with single element [loss] if loss_fn_per_batch provided.
+        params: Optimal parameters from one Newton step.
+        best_loss: Loss at solution (or None).
+        best_epoch: 0 (for compatibility).
+    """
+    subkey_sampler, = jr.split(key, 1)
+    batch = sampler(subkey_sampler)
+
+    H = hessian_fn(batch, params_initial)
+    g = gradient_fn_per_batch(params_initial, batch, subkey_gradient=None)
+
+    if maximize:
+        g = -g
+
+    if mask is not None:
+        g = g * mask
+        # Zero out Hessian rows/cols for masked params; set H[i,i]=1 so Δθ[i]=0
+        H = H * mask[:, None] * mask[None, :]
+        H = H + (1.0 - mask) * jnp.eye(H.shape[0])
+
+    # Solve H @ Δθ = -g  =>  Δθ = -H⁻¹ @ g
+    delta_params = -jnp.linalg.solve(H, g)
+
+    if mask is not None:
+        delta_params = delta_params * mask
+
+    params = params_initial + delta_params
+
+    if constraint_indices is not None:
+        params = params.at[constraint_indices].set(
+            jnp.maximum(params[constraint_indices], epsilon)
+        )
+
+    loss = loss_fn_per_batch(params, batch) if loss_fn_per_batch is not None else None
+    params_history = [params]
+    loss_history = [loss] if loss is not None else []
+
+    return params_history, loss_history, params, loss, 0
+
 
 ########################################################################################
 # CD-1 gradient
