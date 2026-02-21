@@ -217,11 +217,12 @@ def solve_quadratic_score_matching(
     maximize=False,
     constraint_indices=None,
     epsilon=0.01,
+    hessian_reg=1e-6,
 ):
     """
     One-step Newton solve for the score matching loss (quadratic in params).
 
-    Solves θ* = θ - H⁻¹ ∇L in a single step. No learning rate or iteration needed.
+    Solves θ* = θ - (H + λI)⁻¹ ∇L in a single step. No learning rate or iteration needed.
 
     Args:
         params_initial: Initial parameter vector, shape (P,).
@@ -234,6 +235,8 @@ def solve_quadratic_score_matching(
         maximize: If True, maximize instead of minimize (negate gradient).
         constraint_indices: Optional indices to project to >= epsilon.
         epsilon: Minimum value for constrained params (default 0.01).
+        hessian_reg: Ridge regularization added to Hessian (H + λI) for numerical
+            stability when H is singular or ill-conditioned (default 1e-6).
 
     Returns:
         params_history: List with single element [params] (for compatibility).
@@ -256,6 +259,9 @@ def solve_quadratic_score_matching(
         # Zero out Hessian rows/cols for masked params; set H[i,i]=1 so Δθ[i]=0
         H = H * mask[:, None] * mask[None, :]
         H = H + (1.0 - mask) * jnp.eye(H.shape[0])
+
+    # Add ridge regularization for numerical stability (singular/ill-conditioned H)
+    H = H + hessian_reg * jnp.eye(H.shape[0])
 
     # Solve H @ Δθ = -g  =>  Δθ = -H⁻¹ @ g
     delta_params = -jnp.linalg.solve(H, g)
