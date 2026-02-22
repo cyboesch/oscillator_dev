@@ -440,47 +440,6 @@ def setup_duffing_network_analytical_derivatives(connectivity, unflatten):
     return gradient_fn, trace_hessian_fn, gradient_wrt_params_fn, trace_hessian_wrt_params_fn
 
 
-def setup_score_matching_loss_hessian(gradient_wrt_params_fn, k_b=1.0, T=1.0):
-    """
-    Constructs the analytical Hessian of the score matching loss w.r.t. parameters.
-
-    The score matching loss is quadratic in the parameters, so its Hessian is constant
-    (independent of params) and depends only on the batch of states x.
-
-    For p(x) ∝ exp(−E(x;θ) / kT), the loss per sample is
-        L(x, θ) = −Tr(∇²_x E)/(k_b T) + (1/2) ||∇_x E||²/(k_b T)²
-
-    The first term is linear in θ (Hessian = 0). The second term is quadratic:
-    ∇_x E is a sum of terms θ_p f_p(x), i.e. ∇_x E = G(x) @ θ where
-    G(x) = ∂(∇_x E)/∂θ. Hence ||∇_x E||² = θᵀ G(x)ᵀ G(x) θ and
-    ∂²L/∂θ² = G(x)ᵀ G(x) / (k_b T)² per sample.
-
-    Args:
-        gradient_wrt_params_fn: Callable (x, flattened_args) -> array (D, P).
-            Jacobian ∂(∇_x E)/∂θ, from setup_duffing_network_analytical_derivatives.
-        k_b: Boltzmann constant (default 1.0).
-        T: Temperature (default 1.0).
-
-    Returns:
-        hessian_fn: Callable (x, flattened_args) -> array (P, P).
-            If x has shape (D,), returns Hessian for a single sample.
-            If x has shape (N, D), returns batch-averaged Hessian.
-            flattened_args is used only for structure (values ignored); n_params is
-            extracted from gradient_wrt_params_fn output shape.
-    """
-    kBT_sq = (k_b * T) ** 2
-
-    def hessian_fn(x, flattened_args):
-        if x.ndim == 1:
-            G = gradient_wrt_params_fn(x, flattened_args)
-            return (G.T @ G) / kBT_sq
-        else:
-            G_batch = vmap(lambda xi: gradient_wrt_params_fn(xi, flattened_args))(x)
-            H = jnp.mean(vmap(lambda Gi: Gi.T @ Gi)(G_batch), axis=0)
-            return H / kBT_sq
-
-    return hessian_fn
-
 
 ########################################################################################
 # Overdamped SDE
