@@ -218,11 +218,16 @@ def solve_quadratic_score_matching(
     constraint_indices=None,
     epsilon=0.01,
     hessian_reg=1e-6,
+    use_pinv=False,
+    pinv_rcond=1e-5,
+    step_scale=1.0,
+    n_steps=1,
 ):
     """
     One-step Newton solve for the score matching loss (quadratic in params).
 
-    Solves θ* = θ - (H + λI)⁻¹ ∇L in a single step. No learning rate or iteration needed.
+    Solves θ_new = θ + step_scale * Δθ where Δθ = -(H + λI)⁻¹ ∇L.
+    For step_scale=1 (exact quadratic), one step gives the optimum.
 
     Args:
         params_initial: Initial parameter vector, shape (P,).
@@ -237,6 +242,17 @@ def solve_quadratic_score_matching(
         epsilon: Minimum value for constrained params (default 0.01).
         hessian_reg: Ridge regularization added to Hessian (H + λI) for numerical
             stability when H is singular or ill-conditioned (default 1e-6).
+        use_pinv: If True, use pseudo-inverse instead of direct solve; more stable
+            for singular/ill-conditioned H but slower (default False).
+        pinv_rcond: When use_pinv=True, cutoff for small singular values; values
+            < rcond * max(s) are truncated. Increase (e.g. 1e-5) if params explode
+            (default 1e-5).
+        step_scale: Fraction of Newton step to take, in (0, 1]. step_scale=1 gives
+            full Newton (correct for exact quadratic). Use <1 for damped Newton when
+            H is ill-conditioned or when stepping across time points (default 1.0).
+        n_steps: Number of Newton steps per call. With step_scale=1, one step is
+            enough. With step_scale<1, use n_steps>1 to iterate toward the optimum
+            (default 1).
 
     Returns:
         params_history: List with single element [params] (for compatibility).
@@ -248,28 +264,32 @@ def solve_quadratic_score_matching(
     subkey_sampler, = jr.split(key, 1)
     batch = sampler(subkey_sampler)
 
+    # H is constant for quadratic loss; compute once
     H = hessian_fn(batch, params_initial)
-    g = gradient_fn_per_batch(params_initial, batch, subkey_gradient=None)
-
-    if maximize:
-        g = -g
-
     if mask is not None:
-        g = g * mask
-        # Zero out Hessian rows/cols for masked params; set H[i,i]=1 so Δθ[i]=0
         H = H * mask[:, None] * mask[None, :]
         H = H + (1.0 - mask) * jnp.eye(H.shape[0])
-
-    # Add ridge regularization for numerical stability (singular/ill-conditioned H)
     H = H + hessian_reg * jnp.eye(H.shape[0])
 
-    # Solve H @ Δθ = -g  =>  Δθ = -H⁻¹ @ g
-    delta_params = -jnp.linalg.solve(H, g)
+    def _one_step(params):
+        g = gradient_fn_per_batch(params, batch, subkey_gradient=None)
+        if maximize:
+            g = -g
+        if mask is not None:
+            g = g * mask
+        delta_params = (
+            -(jnp.linalg.pinv(H, rcond=pinv_rcond) @ g)
+            if use_pinv
+            else -jnp.linalg.solve(H, g)
+        )
+        if mask is not None:
+            delta_params = delta_params * mask
+        return params + step_scale * delta_params
 
-    if mask is not None:
-        delta_params = delta_params * mask
-
-    params = params_initial + delta_params
+    params = params_initial
+    for _ in range(n_steps - 1):
+        params = _one_step(params)
+    params = _one_step(params)
 
     if constraint_indices is not None:
         params = params.at[constraint_indices].set(

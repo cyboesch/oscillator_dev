@@ -451,8 +451,9 @@ def setup_score_matching_loss_hessian(gradient_wrt_params_fn, k_b=1.0, T=1.0):
         L(x, θ) = −Tr(∇²_x E)/(k_b T) + (1/2) ||∇_x E||²/(k_b T)²
 
     The first term is linear in θ (Hessian = 0). The second term is quadratic:
-    since ∇_x E is linear in θ, we have ||∇_x E||² = θᵀ G(x)ᵀ G(x) θ where
-    G(x) = ∂(∇_x E)/∂θ. Thus ∂²L/∂θ² = G(x)ᵀ G(x) / (k_b T)² per sample.
+    ∇_x E is a sum of terms θ_p f_p(x), i.e. ∇_x E = G(x) @ θ where
+    G(x) = ∂(∇_x E)/∂θ. Hence ||∇_x E||² = θᵀ G(x)ᵀ G(x) θ and
+    ∂²L/∂θ² = G(x)ᵀ G(x) / (k_b T)² per sample.
 
     Args:
         gradient_wrt_params_fn: Callable (x, flattened_args) -> array (D, P).
