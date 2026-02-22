@@ -303,6 +303,217 @@ def solve_quadratic_score_matching(
     return params_history, loss_history, params, loss, 0
 
 
+def conjugate_gradient_solve(A, b, x0=None, tol=1e-8, max_iter=None, mask=None):
+    """
+    Solve A·x = b using the conjugate gradient method.
+
+    CG only requires matrix-vector products A·v, so it is efficient for large
+    systems when A is sparse or when H·v can be computed without forming H.
+    For a P×P system, CG converges in at most P steps (exact arithmetic).
+
+    Args:
+        A: Callable (v) -> A·v, or a matrix of shape (P, P). If callable,
+            only matrix-vector products are used (memory efficient).
+        b: Right-hand side vector, shape (P,).
+        x0: Initial guess for x (default: zeros).
+        tol: Convergence tolerance: stop when ||r|| < tol * ||b|| (default 1e-8).
+        max_iter: Maximum CG iterations (default: len(b)).
+        mask: Optional mask of shape (P,). Zeros out updates for masked params;
+            effectively solves in the subspace where mask=1.
+
+    Returns:
+        x: Solution vector, shape (P,).
+        n_iter: Number of CG iterations performed.
+        converged: True if ||r|| < tol * ||b||.
+    """
+    P = b.shape[0]
+    if max_iter is None:
+        max_iter = P
+
+    # Allow A to be either a matrix or a callable (Hessian-vector product)
+    if callable(A):
+        def matvec(v):
+            return A(v)
+    else:
+        def matvec(v):
+            return A @ v
+
+    if x0 is None:
+        x = jnp.zeros_like(b)
+    else:
+        x = x0
+
+    if mask is not None:
+        b = b * mask
+        x = x * mask
+
+    r = b - matvec(x)
+    if mask is not None:
+        r = r * mask
+    p = r
+    rs_old = jnp.dot(r, r)
+    b_norm = jnp.linalg.norm(b)
+    tol_scaled = tol * jnp.maximum(b_norm, 1e-15)
+
+    def cg_body(carry):
+        x, r, p, rs_old, n_iter = carry
+        Ap = matvec(p)
+        if mask is not None:
+            Ap = Ap * mask
+        alpha = rs_old / (jnp.dot(p, Ap) + 1e-20)
+        x = x + alpha * p
+        r = r - alpha * Ap
+        if mask is not None:
+            r = r * mask
+        rs_new = jnp.dot(r, r)
+        beta = rs_new / (rs_old + 1e-20)
+        p = r + beta * p
+        if mask is not None:
+            p = p * mask
+        return (x, r, p, rs_new, n_iter + 1)
+
+    def cg_cond(carry):
+        x, r, p, rs_old, n_iter = carry
+        r_norm = jnp.sqrt(rs_old)
+        return (n_iter < max_iter) & (r_norm > tol_scaled)
+
+    init = (x, r, p, rs_old, 0)
+    x_final, r_final, _, rs_final, n_iter = jax.lax.while_loop(cg_cond, cg_body, init)
+    converged = jnp.sqrt(rs_final) <= tol_scaled
+    return x_final, n_iter, converged
+
+
+def solve_quadratic_score_matching_cg(
+    params_initial,
+    sampler,
+    hessian_fn,
+    gradient_fn_per_batch,
+    loss_fn_per_batch=None,
+    mask=None,
+    key=jr.PRNGKey(0),
+    maximize=False,
+    constraint_indices=None,
+    epsilon=0.01,
+    hessian_reg=1e-6,
+    step_scale=1.0,
+    n_steps=1,
+    cg_tol=1e-8,
+    cg_max_iter=None,
+    max_delta_ratio=0.5,
+    use_pinv_fallback=False,
+    pinv_rcond=1e-4,
+):
+    """
+    Solve the quadratic score matching loss using conjugate gradient.
+
+    Solves H·Δθ = -∇L for Δθ, then θ_new = θ + step_scale * Δθ.
+    Uses only Hessian-vector products (or the full H if provided), avoiding
+    explicit inversion. Suitable when P is large and H is expensive to factor.
+
+    Assumes the full batch is used for both Hessian and gradient (no SGD).
+
+    For ill-conditioned H, use step_scale < 1 and n_steps > 1 (damped iteration)
+    to avoid param explosion, analogous to damped Newton.
+
+    Args:
+        params_initial: Initial parameter vector, shape (P,).
+        sampler: Callable (key) -> batch of samples, shape (N, D).
+        hessian_fn: Callable (batch, flattened_args) -> Hessian matrix (P, P).
+        gradient_fn_per_batch: Callable (params, batch, subkey=None) -> gradient (P,).
+        loss_fn_per_batch: Optional, for computing loss at solution.
+        mask: Optional mask of shape (P,). Zeros out updates for masked params.
+        key: PRNG key for sampling.
+        maximize: If True, maximize instead of minimize (negate gradient).
+        constraint_indices: Optional indices to project to >= epsilon.
+        epsilon: Minimum value for constrained params (default 0.01).
+        hessian_reg: Ridge regularization (H + λI) for numerical stability.
+        step_scale: Fraction of Newton step per inner iteration (default 1.0).
+        n_steps: Number of damped CG steps; use n_steps>1 with step_scale<1 when
+            H is ill-conditioned (default 1).
+        cg_tol: CG convergence tolerance: stop when ||r|| < cg_tol * ||b||.
+        cg_max_iter: Max CG iterations per step (default: min(50, P)); early
+            stopping acts as regularization for ill-conditioned H.
+        max_delta_ratio: Cap ||delta_params|| <= max_delta_ratio * (||params|| + eps)
+            to prevent explosion; scale down delta if exceeded (default 0.5).
+        use_pinv_fallback: If True, use pseudo-inverse instead of CG (same as
+            Newton with use_pinv); more stable for ill-conditioned H (default False).
+        pinv_rcond: When use_pinv_fallback=True, rcond for pinv (default 1e-4).
+
+    Returns:
+        params_history: List of params after each step.
+        loss_history: List of loss values if loss_fn_per_batch provided.
+        params: Final parameters.
+        best_loss: Loss at solution (or None).
+        best_epoch: 0 (for compatibility).
+    """
+    subkey_sampler, = jr.split(key, 1)
+    batch = sampler(subkey_sampler)
+
+    H = hessian_fn(batch, params_initial)
+    if mask is not None:
+        H = H * mask[:, None] * mask[None, :]
+        H = H + (1.0 - mask) * jnp.eye(H.shape[0])
+    H = H + hessian_reg * jnp.eye(H.shape[0])
+    P = H.shape[0]
+    if cg_max_iter is None:
+        cg_max_iter = min(50, P)
+
+    def _one_step(params):
+        g = gradient_fn_per_batch(params, batch, subkey_gradient=None)
+        if maximize:
+            g = -g
+        if mask is not None:
+            g = g * mask
+        b = -g
+
+        if use_pinv_fallback:
+            delta_params = -(jnp.linalg.pinv(H, rcond=pinv_rcond) @ g)
+        else:
+            delta_params, _, _ = conjugate_gradient_solve(
+                H, b, x0=None, tol=cg_tol, max_iter=cg_max_iter, mask=mask
+            )
+
+        if mask is not None:
+            delta_params = delta_params * mask
+
+        # Clip delta to prevent explosion when H is ill-conditioned
+        delta_norm = jnp.linalg.norm(delta_params) + 1e-20
+        param_norm = jnp.linalg.norm(params) + 1e-20
+        scale = jnp.minimum(1.0, max_delta_ratio * param_norm / delta_norm)
+        delta_params = delta_params * scale
+
+        return params + step_scale * delta_params
+
+    params = params_initial
+    params_history = [params_initial]
+    loss_history = []
+
+    for _ in range(n_steps - 1):
+        params = _one_step(params)
+        params_history.append(params)
+        if loss_fn_per_batch is not None:
+            loss_history.append(loss_fn_per_batch(params, batch))
+    params = _one_step(params)
+    params_history.append(params)
+
+    if constraint_indices is not None:
+        params = params.at[constraint_indices].set(
+            jnp.maximum(params[constraint_indices], epsilon)
+        )
+
+    loss = loss_fn_per_batch(params, batch) if loss_fn_per_batch is not None else None
+    if loss is not None:
+        loss_history.append(loss)
+
+    # best_epoch = index into params_history with lowest loss (for plot_parameter_evolution)
+    if loss_history:
+        best_epoch = int(jnp.argmin(jnp.array(loss_history))) + 1  # +1: loss_history[i] ~ params_history[i+1]
+    else:
+        best_epoch = len(params_history) - 1
+
+    return params_history, loss_history, params, loss, best_epoch
+
+
 ########################################################################################
 # CD-1 gradient
 ########################################################################################
