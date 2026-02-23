@@ -278,7 +278,8 @@ def solve_quadratic_score_matching(
         if mask is not None:
             g = g * mask
         delta_params = (
-            -(jnp.linalg.pinv(H, rcond=pinv_rcond) @ g)
+            # -(jnp.linalg.pinv(H, rcond=pinv_rcond) @ g)
+            -(jnp.linalg.inv(H) @ g)      
             if use_pinv
             else -jnp.linalg.solve(H, g)
         )
@@ -381,6 +382,192 @@ def conjugate_gradient_solve(A, b, x0=None, tol=1e-8, max_iter=None, mask=None):
     x_final, r_final, _, rs_final, n_iter = jax.lax.while_loop(cg_cond, cg_body, init)
     converged = jnp.sqrt(rs_final) <= tol_scaled
     return x_final, n_iter, converged
+
+
+def conjugate_gradient_solve_with_history(A, b, max_iter, x0=None, tol=1e-8, mask=None):
+    """
+    Solve A·x = b using CG, returning the solution x at each iteration.
+
+    Same as conjugate_gradient_solve but collects x at every CG step for
+    inspection (params_history = params_initial + x_history).
+
+    Args:
+        A: Matrix (P, P) or callable (v) -> A·v.
+        b: Right-hand side, shape (P,).
+        max_iter: Number of CG iterations (fixed; used for lax.scan).
+        x0, tol, mask: Same as conjugate_gradient_solve.
+
+    Returns:
+        x_final: Final solution.
+        x_history: Array of shape (max_iter+1,) where x_history[0]=x0 (or zeros),
+            x_history[i] = approximate solution after i CG iterations.
+    """
+    P = b.shape[0]
+    if callable(A):
+        def matvec(v):
+            return A(v)
+    else:
+        def matvec(v):
+            return A @ v
+
+    if x0 is None:
+        x = jnp.zeros_like(b)
+    else:
+        x = x0
+
+    if mask is not None:
+        b = b * mask
+        x = x * mask
+
+    r = b - matvec(x)
+    if mask is not None:
+        r = r * mask
+    p = r
+    rs_old = jnp.dot(r, r)
+
+    def cg_step(carry, _):
+        x, r, p, rs_old = carry
+        Ap = matvec(p)
+        if mask is not None:
+            Ap = Ap * mask
+        alpha = rs_old / (jnp.dot(p, Ap) + 1e-20)
+        x_new = x + alpha * p
+        r_new = r - alpha * Ap
+        if mask is not None:
+            r_new = r_new * mask
+        rs_new = jnp.dot(r_new, r_new)
+        beta = rs_new / (rs_old + 1e-20)
+        p_new = r_new + beta * p
+        if mask is not None:
+            p_new = p_new * mask
+        return (x_new, r_new, p_new, rs_new), x_new
+
+    init_carry = (x, r, p, rs_old)
+    (x_final, _, _, _), x_history = jax.lax.scan(
+        cg_step, init_carry, None, length=max_iter
+    )
+    # x_history[i] = x after (i+1) CG steps; prepend initial x
+    x_history = jnp.concatenate([x[None, ...], x_history], axis=0)
+    return x_final, x_history
+
+
+def solve_quadratic_score_matching_cg_only(
+    params_initial,
+    sampler,
+    hessian_fn,
+    gradient_fn_per_batch,
+    loss_fn_per_batch=None,
+    mask=None,
+    key=jr.PRNGKey(0),
+    maximize=False,
+    constraint_indices=None,
+    epsilon=0.01,
+    hessian_reg=1e-6,
+    step_scale=1.0,
+    cg_tol=1e-8,
+    cg_max_iter=None,
+    max_delta_ratio=0.5,
+    use_pinv_fallback=False,
+    pinv_rcond=1e-4,
+):
+    """
+    One-shot Newton solve via CG: solve H·Δθ = -∇L, then θ_new = θ + step_scale·Δθ.
+    No outer loop. Saves params and loss at each CG iteration for inspection.
+
+    Args:
+        params_initial: Initial parameter vector, shape (P,).
+        sampler: Callable (key) -> batch of samples, shape (N, D).
+        hessian_fn: Callable (batch, flattened_args) -> Hessian (P, P).
+        gradient_fn_per_batch: Callable (params, batch, subkey=None) -> gradient (P,).
+        loss_fn_per_batch: Optional, for loss at each CG iterate.
+        mask: Optional mask of shape (P,).
+        key: PRNG key.
+        maximize: If True, maximize.
+        constraint_indices: Optional indices to project to >= epsilon.
+        epsilon: Min value for constrained params.
+        hessian_reg: Ridge regularization for H.
+        step_scale: Fraction of Newton step (default 1.0).
+        cg_tol: CG tolerance (used only to check convergence; history is full).
+        cg_max_iter: CG iterations (default: P).
+        max_delta_ratio: Cap ||delta|| <= max_delta_ratio * ||params_initial|| to prevent
+            explosion; applied to each CG iterate in history (default 0.5).
+        use_pinv_fallback: If True, use pinv instead of CG; more stable for ill-conditioned H.
+        pinv_rcond: When use_pinv_fallback=True, rcond for pinv (default 1e-4).
+
+    Returns:
+        params_history: List of length cg_max_iter+1; params at each CG iterate.
+        loss_history: List of loss at each iterate (or [nan]*len if no loss_fn).
+        params: Final parameters.
+        best_loss: Loss at best iterate.
+        best_epoch: Index of best loss.
+    """
+    subkey_sampler, = jr.split(key, 1)
+    batch = sampler(subkey_sampler)
+
+    H = hessian_fn(batch, params_initial)
+    if mask is not None:
+        H = H * mask[:, None] * mask[None, :]
+        H = H + (1.0 - mask) * jnp.eye(H.shape[0])
+    H = H + hessian_reg * jnp.eye(H.shape[0])
+    P = H.shape[0]
+    if cg_max_iter is None:
+        cg_max_iter = P
+
+    g = gradient_fn_per_batch(params_initial, batch, subkey_gradient=None)
+    if maximize:
+        g = -g
+    if mask is not None:
+        g = g * mask
+    b = -g
+
+    if use_pinv_fallback:
+        delta_final = -(jnp.linalg.pinv(H, rcond=pinv_rcond) @ g)
+        if mask is not None:
+            delta_final = delta_final * mask
+        # For pinv: single "step", history is [initial, final]
+        x_history = jnp.concatenate([jnp.zeros_like(b)[None, ...], delta_final[None, ...]], axis=0)
+    else:
+        _, x_history = conjugate_gradient_solve_with_history(
+            H, b, max_iter=cg_max_iter, tol=cg_tol, mask=mask
+        )
+
+    # x_history: (n_steps+1, P)
+    delta_history = step_scale * x_history
+    if mask is not None:
+        delta_history = delta_history * mask
+
+    # Clip each delta to prevent explosion
+    param_norm = jnp.linalg.norm(params_initial) + 1e-20
+    n_steps = delta_history.shape[0]
+
+    def clip_and_params(i):
+        delta = delta_history[i]
+        delta_norm = jnp.linalg.norm(delta) + 1e-20
+        scale = jnp.minimum(1.0, max_delta_ratio * param_norm / delta_norm)
+        return params_initial + scale * delta
+
+    params_history = [clip_and_params(i) for i in range(n_steps)]
+
+    if constraint_indices is not None:
+        params_history = [
+            p.at[constraint_indices].set(jnp.maximum(p[constraint_indices], epsilon))
+            for p in params_history
+        ]
+
+    if loss_fn_per_batch is not None:
+        loss_history = [loss_fn_per_batch(p, batch) for p in params_history]
+        best_epoch = int(jnp.argmin(jnp.array(loss_history)))
+        best_loss = loss_history[best_epoch]
+        loss = loss_history[-1]
+    else:
+        loss_history = [jnp.nan] * n_steps
+        best_epoch = n_steps - 1
+        best_loss = None
+        loss = None
+
+    params = params_history[-1]
+
+    return params_history, loss_history, params, loss, best_epoch
 
 
 def solve_quadratic_score_matching_cg(
