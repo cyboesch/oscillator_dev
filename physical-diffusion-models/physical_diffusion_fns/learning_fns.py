@@ -486,7 +486,8 @@ def solve_quadratic_score_matching_cg(
 
     params = params_initial
     params_history = [params_initial]
-    loss_history = []
+    # loss_history[i] must align with params_history[i] for plot_parameter_evolution
+    loss_history = [loss_fn_per_batch(params_initial, batch)] if loss_fn_per_batch is not None else []
 
     for _ in range(n_steps - 1):
         params = _one_step(params)
@@ -501,13 +502,17 @@ def solve_quadratic_score_matching_cg(
             jnp.maximum(params[constraint_indices], epsilon)
         )
 
-    loss = loss_fn_per_batch(params, batch) if loss_fn_per_batch is not None else None
-    if loss is not None:
+    if loss_fn_per_batch is not None:
+        loss = loss_fn_per_batch(params, batch)
         loss_history.append(loss)
+    else:
+        loss = None
+        # Pad loss_history to match params_history length (required by plot_parameter_evolution)
+        loss_history = [jnp.nan] * len(params_history)
 
     # best_epoch = index into params_history with lowest loss (for plot_parameter_evolution)
-    if loss_history:
-        best_epoch = int(jnp.argmin(jnp.array(loss_history))) + 1  # +1: loss_history[i] ~ params_history[i+1]
+    if loss_fn_per_batch is not None:
+        best_epoch = int(jnp.argmin(jnp.array(loss_history)))
     else:
         best_epoch = len(params_history) - 1
 
