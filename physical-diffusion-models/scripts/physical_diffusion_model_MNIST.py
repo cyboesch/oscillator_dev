@@ -822,7 +822,7 @@ plt.close()
 print_memory_usage("final")
 
 #####################################
-# Clipped version: true vs generated (clipped to [0,1])
+# Fix pixel range same for true and generated images
 #####################################
 clip_value_min = pixel_min_normalized
 clip_value_max = pixel_max_normalized
