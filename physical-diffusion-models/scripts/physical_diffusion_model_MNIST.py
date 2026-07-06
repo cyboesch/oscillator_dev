@@ -30,9 +30,14 @@ import os
 import matplotlib.pyplot as plt
 from datetime import datetime
 from physical_diffusion_fns.helper_fns import sample_gaussian_mixture, normalize_samples, sample_forward_process, get_best_params, smooth_parameters, interpolate_parameters
-from physical_diffusion_fns.learning_fns import  CD1_gradient, run_optimization, setup_score_matching_kbT_loss_per_batch, setup_score_matching_kbT_local_gradient_per_batch
+# NOTE: `setup_score_matching_LOSS_per_batch` is the renamed (library refactor) SM-loss factory;
+# aliased to the name used below (line ~338). `setup_score_matching_kbT_local_gradient_per_batch`
+# was removed and is unused in this script, so it is dropped from the import.
+from physical_diffusion_fns.learning_fns import CD1_gradient, run_optimization, setup_score_matching_LOSS_per_batch as setup_score_matching_kbT_loss_per_batch
 from physical_diffusion_fns.plotting_fns import plot_energy_and_distributions, plot_parameter_evolution, plot_forward_marginals, visualize_connectivity, plot_parameter_as_fn_of_time, visualize_connectivity_with_non_local_couplings
-from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
+# NOTE: the energy-fn factory was renamed to `setup_energy_fn` in the library refactor;
+# aliased to the long name used below (line ~282).
+from physical_diffusion_fns.network_fns import setup_overdamped_SDE, solve_SDE, create_2d_square_lattice_connectivity, setup_energy_fn as setup_duffing_network_with_external_force_and_nonlinear_duffing_coupling_and_6th_order_energy_fn
 
 # Import memory-efficient versions
 from physical_diffusion_fns.learning_fns_memory_efficient import (
