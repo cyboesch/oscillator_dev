@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(nohup python3 *)",
+      "Bash(echo \"started pid=$!\")"
+    ]
+  }
+}
