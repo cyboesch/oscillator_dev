@@ -23,10 +23,9 @@ from physical_diffusion_fns.helper_fns import (
     smooth_parameters,
     interpolate_parameters,
 )
-from physical_diffusion_fns.learning_fns import run_optimization
+from physical_diffusion_fns.learning_fns import solve_score_matching_cg
 from physical_diffusion_fns.plotting_fns import (
     plot_forward_marginals,
-    plot_parameter_evolution,
     plot_parameter_as_fn_of_time,
     visualize_connectivity_with_non_local_couplings,
 )
@@ -89,21 +88,16 @@ n_time_steps = 100
 forward_time_pts = jnp.linspace(0.0, t_forward, n_time_steps)[::-1]
 print("forward_time_pts", forward_time_pts)
 
-# --- Optimization (one fit per forward-time slice) ---
-learning_rate_start = 2e-5
-learning_rate_end = 0.002
-learning_rate_schedule = jnp.linspace(learning_rate_start, learning_rate_end, n_time_steps)[::-1]
-lr_decay_rate = 0.95
-lr_decay_steps = 6000
-n_epochs = 100000
-batch_size = 512
-window_size = 1000
-tolerance_start = 1e-3
-tolerance_end = 1e-3
-tolerance_schedule = jnp.linspace(tolerance_start, tolerance_end, n_time_steps)[::-1]
-patience_start = 300
-patience_end = 100
-patience_schedule = jnp.linspace(patience_start, patience_end, n_time_steps)[::-1]
+# --- Convex solver: matrix-free ridge-regularized CG (one exact solve per forward-time slice) ---
+# The per-slice implicit-score-matching loss is an exact convex quadratic in theta (the energy is
+# linear in theta and all units are visible), so instead of SGD we solve the ridge-regularized
+# normal equations (H + lambda I) theta = c directly and matrix-free (H is never formed; P ~ 5e5).
+# See physical_diffusion_fns/learning_fns.py:solve_score_matching_cg.
+cg_sample_size = 4096    # one large fixed sample of the noised marginal p_t per slice (>~ P/N_osc for full rank)
+cg_ridge_rel = 1e-4      # Tikhonov ridge: lambda = cg_ridge_rel * (mean eigenvalue of H); well-posedness + conditioning
+cg_tol = 1e-5            # conjugate-gradient relative-residual tolerance
+cg_maxiter = 500         # conjugate-gradient iteration cap
+cg_active_set_iters = 8  # max active-set passes for the k_6 >= epsilon box constraint
 
 # --- Network: 2D lattice of coupled 6th-order Duffing oscillators, one oscillator per pixel ---
 n_neighbour_couplings = 14
@@ -114,15 +108,12 @@ rtol_sde = 1e-4
 atol_sde = 1e-6
 brownian_tolerance = 1e-12
 
-# --- Checkpointing / memory management ---
+# --- Checkpointing ---
 start_from_scratch = False
-clear_cache_every_n_steps = 5
-force_gc_every_n_steps = 10
 
 # Fixed labels used only for output-directory naming.
-training_method = "SM_at_kbT_minimal_memory"
+training_method = "SM_at_kbT_convex_cg"   # note: still starts with "SM_at_kbT" -> reverse-SDE scaling unchanged
 energy_fn_type = "6th_order_duffing_coupling"
-maximize = False
 
 #####################################
 # Output directories
@@ -137,12 +128,10 @@ optimization_folder = (
     f"t_forward_{t_forward}_"
     f"n_timesteps_{n_time_steps}_"
     f"sigma_forward_{sigma_forward}_"
-    f"lr_{learning_rate_start}_to_{learning_rate_end}_"
-    f"epochs_{n_epochs}_"
-    f"batch_{batch_size}_"
-    f"window_{window_size}_"
-    f"tol_{tolerance_start}_to_{tolerance_end}_"
-    f"patience_{patience_start}_to_{patience_end}_"
+    f"cg_sample_{cg_sample_size}_"
+    f"ridge_rel_{cg_ridge_rel}_"
+    f"cg_tol_{cg_tol}_"
+    f"cg_maxiter_{cg_maxiter}_"
 )
 
 here = os.path.dirname(os.path.abspath(__file__))
@@ -245,87 +234,47 @@ else:
     params_history_all_t = []
     current_params = params_flattened_initial
 
-plot_per_step = True  # save per-time-slice optimization diagnostics
-
 if start_t_idx < len(forward_time_pts):
     for t_idx in range(start_t_idx, len(forward_time_pts)):
         t_curr = forward_time_pts[t_idx]
-        print(f"t_idx: {t_idx}, t_curr: {t_curr}")
-
-        optimization_key, optimization_subkey = jr.split(optimization_key)
+        optimization_key, subkey_sample, subkey_solve = jr.split(optimization_key, 3)
 
         # On the first slice, sanity-check that the forward process reaches the target Gaussian.
         if t_idx == 0:
             samples_0 = sample_forward_process(t_forward, n_samples, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=optimization_key)
             plot_forward_marginals(samples_0, t_forward, sigma_forward, Temp=Temp, beta=1.0, path=plot_folder, save_fig=True, fontsize=16, plot_show=True)
 
-        # Draw fresh noised mini-batches from the forward marginal p_{t_curr}.
-        sampler = lambda key: sample_forward_process(
-            t_curr, n_samples=batch_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=key, beta=1,
+        # One large fixed sample of the noised marginal p_{t_curr}, held constant across the CG solve.
+        batch = sample_forward_process(
+            t_curr, n_samples=cg_sample_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey_sample, beta=1,
         )
 
-        params_history, loss_history, current_params, best_loss, best_epoch = run_optimization(
-            loss_fn_per_batch=loss_fn_per_batch,
-            params_initial=current_params,
-            sampler=sampler,
-            gradient_fn_per_batch=gradient_fn_per_batch,
-            key=optimization_subkey,
-            learning_rate=learning_rate_schedule[t_idx],
-            n_epochs=n_epochs,
-            maximize=maximize,
-            window_size=window_size,
-            tolerance=tolerance_schedule[t_idx],
-            patience=patience_schedule[t_idx],
+        # Exact convex solve for this slice, warm-started from the previous slice's parameters.
+        current_params, info = solve_score_matching_cg(
+            gradient_fn_per_batch,
+            current_params,
+            batch,
+            ridge_rel=cg_ridge_rel,
             constraint_indices=constraint_indices,
-            lr_decay_rate=lr_decay_rate,
-            lr_decay_steps=lr_decay_steps,
+            epsilon=0.01,
+            cg_tol=cg_tol,
+            cg_maxiter=cg_maxiter,
+            active_set_iters=cg_active_set_iters,
+            loss_fn_per_batch=loss_fn_per_batch,
+            key=subkey_solve,
         )
-
-        # Downsample the (epoch, loss/params) history to <=100 points for the diagnostic plot.
-        if plot_per_step:
-            length = len(loss_history)
-            idxs = jnp.unique(jnp.concatenate([
-                jnp.array([0], dtype=int),
-                jnp.linspace(0, length - 1, min(100, length)).astype(int),
-                jnp.array([length - 1], dtype=int),
-            ]))
-            params_ds = [params_history[i] for i in idxs.tolist()]
-            loss_ds = jnp.array(loss_history)[idxs]
+        print(
+            f"t_idx {t_idx:3d}  t={float(t_curr):.3f}  loss {info['loss_before']:.2f} -> {info['loss_after']:.2f}  "
+            f"ridge={info['ridge']:.2e}  k6_at_floor={info['n_active']}/{N_osc}  free_residual={info['residual']:.2e}"
+        )
 
         params_history_all_t.append(current_params)
-
-        # Free the large per-slice history and reclaim memory.
-        del params_history, loss_history
         optimize_memory()
-        if t_idx % clear_cache_every_n_steps == 0:
-            jax.clear_caches()
-        if t_idx % force_gc_every_n_steps == 0:
-            gc.collect()
 
         # Checkpoint after each slice so the run is resumable.
         jnp.save(params_history_path, jnp.array(params_history_all_t))
         with open(time_index_path, "w") as f:
             f.write(str(t_idx + 1))  # next time index to resume from
-
-        if plot_per_step:
-            plot_parameter_evolution(
-                params_history=params_ds,
-                loss_history=loss_ds,
-                best_loss=best_loss,
-                best_idx=best_epoch,
-                best_params=current_params,
-                time=t_curr,
-                time_index=t_idx,
-                unflatten=unflatten,
-                N_osc=N_osc,
-                title=f"{training_method} (t = {t_curr:.3f})",
-                maximize=maximize,
-                labels_on=True,
-                save_fig=True,
-                path=output_dir,
-                param_names=params_names,
-            )
-        print(f"--- done t_idx {t_idx} ({len(params_history_all_t)} slices total)")
 
     print("Optimization complete; saved parameters to", output_dir)
 

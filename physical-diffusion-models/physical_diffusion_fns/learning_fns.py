@@ -2,6 +2,7 @@ import jax
 from jax import grad, vmap, hessian, jacfwd
 import jax.numpy as jnp
 import jax.random as jr
+from jax.scipy.sparse.linalg import cg
 from functools import partial
 import optax
 from collections import deque
@@ -425,3 +426,143 @@ def run_optimization(loss_fn_per_batch,
 
     return params_history, loss_history, best_params, best_loss, best_epoch
 
+
+# #######################################################################################
+# Convex solve: matrix-free ridge-regularized conjugate gradient
+# #######################################################################################
+
+def solve_score_matching_cg(
+    gradient_fn_per_batch,
+    params_initial,
+    batch,
+    ridge_rel=1e-4,
+    ridge_abs=0.0,
+    constraint_indices=None,
+    epsilon=0.01,
+    cg_tol=1e-6,
+    cg_maxiter=500,
+    active_set_iters=5,
+    n_probes=3,
+    loss_fn_per_batch=None,
+    key=jr.PRNGKey(0),
+):
+    """
+    Solve one forward-time slice of score matching by directly solving the (convex,
+    quadratic) normal equations, matrix-free — replacing the per-slice SGD loop.
+
+    For an energy that is LINEAR in the parameters theta and a Boltzmann model with
+    only visible units, the implicit score-matching loss is an exact convex quadratic
+
+        L(theta) = 1/2 theta^T H theta - c^T theta,          H = grad^2_theta L >= 0,
+
+    so its gradient is AFFINE:  g(theta) = grad_theta L = H theta - c.  Therefore
+
+        c    = -g(0)                              (one gradient evaluation at theta=0)
+        H v  = jvp(g, v)                          (one gradient-sized pass; H never formed)
+
+    We solve the ridge-regularized system  (H + lambda I) theta = c  by conjugate
+    gradient using only these two matrix-free products.  H is only PSD (and, on a finite
+    batch, can be rank-deficient / ill-conditioned), so a Tikhonov ridge
+
+        lambda = ridge_abs + ridge_rel * scale,   scale ~ mean eigenvalue of H
+
+    (estimated with a few Hutchinson probes v^T H v / v^T v) makes the problem
+    well-posed (H + lambda I > 0) and caps the condition number.  lambda*||theta||^2/2
+    is equivalently a Gaussian prior (MAP score matching).
+
+    If ``constraint_indices`` is given, the box constraint theta[idx] >= epsilon (a
+    convex set) is enforced by active-set refinement: coordinates whose unconstrained
+    solution violates the floor are pinned at epsilon and the reduced system is
+    re-solved, repeated until the active set stabilises, with a final clamp as a
+    feasibility safety net.
+
+    Args:
+        gradient_fn_per_batch: callable (theta, batch[, subkey]) -> grad_theta L, i.e.
+            the affine gradient g(theta) = H theta - c (e.g. the one returned by
+            ``setup_score_matching_kbT_loss_minimal_memory``).
+        params_initial: flat parameter vector (P,); also used to warm-start CG.
+        batch: one fixed sample of the noised marginal p_t, shape (S, D). Use S large
+            enough (>~ P / n_oscillators) for H to be well-conditioned.
+        ridge_rel, ridge_abs: Tikhonov ridge lambda = ridge_abs + ridge_rel*scale.
+        constraint_indices, epsilon: box constraint theta[constraint_indices] >= epsilon.
+        cg_tol, cg_maxiter: conjugate-gradient tolerance and iteration cap.
+        active_set_iters: max active-set refinement passes.
+        n_probes: Hutchinson probes used to estimate the eigenvalue scale for ridge_rel.
+        loss_fn_per_batch: optional (theta, batch) -> scalar, for before/after diagnostics.
+        key: PRNG key for the Hutchinson probes.
+
+    Returns:
+        (theta_star, info) where info is a dict of diagnostics (ridge, scale, n_active,
+        active_set_iters_used, residual, and loss_before/loss_after if a loss is given).
+    """
+    g = lambda theta: gradient_fn_per_batch(theta, batch)
+    zeros = jnp.zeros_like(params_initial)
+
+    # Affine gradient => c = -g(0) and H v = jvp(g, v) (base point irrelevant).
+    c = -g(zeros)
+
+    def Hv(v):
+        return jax.jvp(g, (zeros,), (v,))[1]
+
+    # Estimate the eigenvalue scale of H for the relative ridge.
+    scale = 1.0
+    if ridge_rel > 0 and n_probes > 0:
+        probes = []
+        for _ in range(n_probes):
+            key, sub = jr.split(key)
+            v = jr.normal(sub, params_initial.shape)
+            probes.append(jnp.vdot(v, Hv(v)) / jnp.vdot(v, v))
+        scale = max(float(jnp.mean(jnp.stack(probes))), 0.0)
+    lam = ridge_abs + ridge_rel * scale
+
+    A = lambda v: Hv(v) + lam * v
+
+    # Unconstrained ridge solve, warm-started from params_initial.
+    theta, _ = cg(A, c, x0=params_initial, tol=cg_tol, maxiter=cg_maxiter)
+
+    info = {"ridge": lam, "scale": scale, "n_active": 0, "active_set_iters_used": 0}
+
+    # Active-set refinement for the box constraint theta[constraint_indices] >= epsilon.
+    if constraint_indices is not None:
+        active_prev = None
+        for it in range(active_set_iters):
+            active = theta[constraint_indices] < epsilon
+            info["active_set_iters_used"] = it + 1
+            if not bool(jnp.any(active)):
+                break
+            fixed_mask = jnp.zeros_like(theta, dtype=bool).at[constraint_indices].set(active)
+            free_mask = ~fixed_mask
+            fixed_vals = jnp.where(fixed_mask, epsilon, 0.0)
+
+            # Reduced operator: A on the free block, identity on the pinned block (keeps it SPD).
+            def A_free(v):
+                out = A(jnp.where(free_mask, v, 0.0))
+                return jnp.where(free_mask, out, v)
+
+            rhs = jnp.where(free_mask, c - A(fixed_vals), 0.0)
+            theta_free, _ = cg(A_free, rhs, x0=jnp.where(free_mask, theta, 0.0),
+                               tol=cg_tol, maxiter=cg_maxiter)
+            theta = jnp.where(free_mask, theta_free, fixed_vals)
+
+            cur = tuple(int(i) for i in jnp.nonzero(active)[0])
+            if cur == active_prev:
+                break
+            active_prev = cur
+
+        # Feasibility safety net.
+        theta = theta.at[constraint_indices].set(jnp.maximum(theta[constraint_indices], epsilon))
+
+    # Diagnostics. For a constrained solution the stationarity residual is measured on the
+    # FREE coordinates only (the pinned coords carry a nonzero KKT multiplier by design), and
+    # n_active counts coordinates sitting at the floor in the final solution.
+    resid_vec = A(theta) - c
+    if constraint_indices is not None:
+        at_floor = theta[constraint_indices] <= epsilon + 1e-9
+        info["n_active"] = int(jnp.sum(at_floor))
+        pinned_mask = jnp.zeros_like(theta, dtype=bool).at[constraint_indices].set(at_floor)
+        resid_vec = jnp.where(pinned_mask, 0.0, resid_vec)
+    info["residual"] = float(jnp.linalg.norm(resid_vec))
+    if loss_fn_per_batch is not None:
+        info["loss_before"] = float(loss_fn_per_batch(params_initial, batch))
+        info["loss_after"] = float(loss_fn_per_batch(theta, batch))
+    return theta, info
