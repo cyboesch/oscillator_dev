@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 import matplotlib.pyplot as plt
-from physical_diffusion_fns.helper_fns import get_best_params, reformat_optimization_results
+from physical_diffusion_fns.helper_fns import reformat_optimization_results
 
 
 import math

@@ -2,7 +2,6 @@ import jax
 from jax import lax
 import jax.numpy as jnp
 import jax.random as jr
-import jax.scipy as jsp
 from scipy.signal import savgol_filter
 
 
@@ -125,127 +124,6 @@ def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0
     x_t_samples = mean_factor * x0_samples + jnp.sqrt(var_factor) * noise
     return x_t_samples
 
-########################################################################################
-# Forward diffusion process - scaled noise
-########################################################################################
-
-
-def sample_forward_noise_scaled(t,
-                                n_samples,
-                                D,
-                                sigma_final,
-                                samples0,
-                                key,
-                                beta: float = 1.0):
-    """
-    Draws n_samples of eps/sigma_t for the forward SDE
-      dx = -beta/sigma_final^2 * x dt + sqrt(2*D*beta) dw,
-    whose marginal is
-      x_t = exp(-beta t / sigma_final^2) x0
-            + sigma_t * eps,  eps ~ N(0,I).
-    We return eps/sigma_t so that
-      eps_over_sigma = (x_t - mean_factor * x0) / var_factor_sqrt**2
-                     = eps / sigma_t.
-    
-    Parameters:
-      t           : time (scalar)
-      n_samples   : how many eps/sigma_t to draw
-      D           : temperature / noise strength
-      sigma_final : target final-variance parameter
-      beta        : diffusion rate
-      samples0    : array of shape (M, N) of x0’s
-      key         : JAX PRNGKey
-      
-    Returns:
-      eps_over_sigma: array (n_samples, N) of iid samples of eps/sigma_t
-    """
-    # split key for sampling indices vs. noise
-    key_idx, key_noise = jax.random.split(key, 2)
-    
-    # pick x0’s at random
-    M = samples0.shape[0]
-    idxs = jax.random.choice(key_idx, M, shape=(n_samples,), replace=True)
-    x0 = samples0[idxs]
-    
-    # compute instantaneous sigma_t
-    # var_factor = D * sigma_final**2 * (1 - exp(-2 beta t / sigma_final^2))
-    var_factor = D * (sigma_final**2) * (
-        1.0 - jnp.exp(-2.0 * beta * t / (sigma_final**2))
-    )
-    sigma_t = jnp.sqrt(var_factor)
-    
-    # sample eps ~ N(0,I)
-    eps = jax.random.normal(key_noise, shape=x0.shape)
-    
-    # return eps / sigma_t
-    # jnp.expand_dims to broadcast if needed
-    return eps #/ sigma_t
-
-def denoising_sampler_for_x_t_and_eps_over_sigma(t, n_samples, D, sigma_final, samples0, key, beta=1.0):
-    _, subkey_x_t, subkey_eps_over_sigma = jax.random.split(key, 3)
-    x_t_samples = sample_forward_process(t, n_samples, D, sigma_final, samples0, subkey_x_t, beta)
-    eps_over_sigma = sample_forward_noise_scaled(t, n_samples, D, sigma_final, samples0, subkey_eps_over_sigma, beta)
-    
-    return x_t_samples, eps_over_sigma
-            
-
-########################################################################################
-# Sampling from total distribution
-########################################################################################
-
-
-def sample_total_distribution(
-    t, n_samples, D, sigma_final, samples0, key, k, beta=1.0,
-    *, exact=False, oversample_factor=200, batch_size=64
-):
-    key_prop, key_centres, key_resample = jax.random.split(key, 3)
-    M, dim = samples0.shape
-
-    # 1) OU marginal parameters
-    a_t   = jnp.exp(-beta * t / sigma_final**2)
-    var_t = D * sigma_final**2 * (1 - jnp.exp(-2*beta*t/sigma_final**2))
-
-    if k * var_t >= 2.0:
-        raise ValueError(f"k*var_t = {k*var_t:.3f} ≥ 2 → not normalisable")
-
-    # 2) draw proposals from p_t
-    prop_N = oversample_factor * n_samples
-    prop   = sample_forward_process(
-        t, prop_N, D, sigma_final, samples0, key_prop, beta
-    )  # shape (prop_N, dim)
-
-    # 3) pick a random SUB-BATCH of centres of size B << M
-    B = min(batch_size, M)
-    idx = jax.random.choice(key_centres, M, (B,), replace=False)
-    means = a_t * samples0[idx]    # shape (B, dim)
-
-    # 4) define log-Gaussian for one x against that B-subset
-    def log_gauss(x, mu):
-        # x: (dim,), mu: (B,dim) → returns (B,)
-        # all in float64 if jax_enable_x64=True
-        return -0.5 * (
-            dim * jnp.log(2*jnp.pi*var_t)
-            + jnp.sum((x - mu)**2, axis=-1) / var_t
-        )
-
-    # 5) Monte-Carlo estimate of log p_t(x) using only B centres
-    def log_p_hat(x):
-        # logsumexp over those B centres, then -log(B)
-        return jsp.special.logsumexp(log_gauss(x, means)) - jnp.log(B)
-
-    # 6) vectorise over all prop_N proposals
-    log_p = jax.vmap(log_p_hat)(prop)   # → shape (prop_N,)
-
-    # 7) build importance weights for the target q_t ∝ p_t^2 e^(+k x²)
-    log_w = 2*log_p + 0.5*k*jnp.sum(prop**2, axis=-1)
-    log_w = log_w - jsp.special.logsumexp(log_w) # normalize
-    w     = jnp.exp(log_w)
-
-    # 8) resample n_samples out of the prop_N proposals
-    choose = jax.random.choice(key_resample, prop_N, (n_samples,), p=w)
-    return prop[choose]   # → shape (n_samples, dim)
-
-
 
 ########################################################################################
 # Reformatting optimization results
@@ -267,18 +145,6 @@ def reformat_optimization_results(params_history, loss_history, unflatten, slici
     loss_history = jnp.array(loss_history[::slicing])
 
     return (*param_histories, loss_history)
-
-########################################################################################
-# Getting best parameters
-########################################################################################
-def get_best_params(params_history, loss_history, maximize=False):
-    loss_history = jnp.array(loss_history)
-    # Find index of lowest loss
-    if maximize:
-        best_idx = jnp.argmax(loss_history)
-    else:
-        best_idx = jnp.argmin(loss_history)
-    return loss_history[best_idx], params_history[best_idx], best_idx
 ########################################################################################
 # Smoothing parameters
 ########################################################################################
