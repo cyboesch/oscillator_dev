@@ -93,8 +93,13 @@ print("forward_time_pts", forward_time_pts)
 # linear in theta and all units are visible), so instead of SGD we solve the ridge-regularized
 # normal equations (H + lambda I) theta = c directly and matrix-free (H is never formed; P ~ 5e5).
 # See physical_diffusion_fns/learning_fns.py:solve_score_matching_cg.
-cg_sample_size = 4096    # one large fixed sample of the noised marginal p_t per slice (>~ P/N_osc for full rank)
-cg_ridge_rel = 1e-4      # Tikhonov ridge: lambda = cg_ridge_rel * (mean eigenvalue of H); well-posedness + conditioning
+# cg_ridge_rel and cg_sample_size are the two regularization dials the exact convex solve needs
+# (SGD used to set them implicitly). They are env-overridable so a sweep is just a shell loop --
+# each (ridge, sample) combo lands in its own output directory:
+#   CG_RIDGE_REL=1e-2 CG_SAMPLE_SIZE=16384 python3 physical_diffusion_model_MNIST.py
+cg_sample_size = int(os.environ.get("CG_SAMPLE_SIZE", 4096))          # fixed sample of p_t per slice used to FIT (>~ P/N_osc for full rank)
+cg_heldout_size = int(os.environ.get("CG_HELDOUT_SIZE", cg_sample_size))  # independent sample for the held-out-loss diagnostic
+cg_ridge_rel = float(os.environ.get("CG_RIDGE_REL", 1e-4))           # Tikhonov ridge: lambda = cg_ridge_rel * (mean eigenvalue of H)
 cg_tol = 1e-5            # conjugate-gradient relative-residual tolerance
 cg_maxiter = 500         # conjugate-gradient iteration cap
 cg_active_set_iters = 8  # max active-set passes for the k_6 >= epsilon box constraint
@@ -107,6 +112,10 @@ n_trajectories = 40
 rtol_sde = 1e-4
 atol_sde = 1e-6
 brownian_tolerance = 1e-12
+# Use Savitzky-Golay-smoothed theta(t) for generation. The per-slice convex solves are independent,
+# so theta(t) can be jaggier than the old warm-started-SGD trajectory; smoothing steadies the
+# reverse dynamics. Env-overridable (USE_SMOOTHED_REVERSE=0 to disable).
+use_smoothed_params_for_reverse = bool(int(os.environ.get("USE_SMOOTHED_REVERSE", 1)))
 
 # --- Checkpointing ---
 start_from_scratch = False
@@ -234,10 +243,13 @@ else:
     params_history_all_t = []
     current_params = params_flattened_initial
 
+# Per-slice diagnostics accumulated this session (fit-vs-held-out loss detects overfitting).
+cg_diag_t, cg_diag_fit, cg_diag_heldout, cg_diag_resid = [], [], [], []
+
 if start_t_idx < len(forward_time_pts):
     for t_idx in range(start_t_idx, len(forward_time_pts)):
         t_curr = forward_time_pts[t_idx]
-        optimization_key, subkey_sample, subkey_solve = jr.split(optimization_key, 3)
+        optimization_key, subkey_sample, subkey_solve, subkey_heldout = jr.split(optimization_key, 4)
 
         # On the first slice, sanity-check that the forward process reaches the target Gaussian.
         if t_idx == 0:
@@ -263,10 +275,20 @@ if start_t_idx < len(forward_time_pts):
             loss_fn_per_batch=loss_fn_per_batch,
             key=subkey_solve,
         )
+
+        # Held-out diagnostic: SM loss on an INDEPENDENT fresh sample of p_{t_curr}. info['loss_after']
+        # is in-sample (biased low); if loss_heldout >> loss_fit the solve is overfitting -> raise
+        # cg_ridge_rel and/or cg_sample_size.
+        heldout_batch = sample_forward_process(
+            t_curr, n_samples=cg_heldout_size, D=Temp, sigma_final=sigma_forward, samples0=samples_target, key=subkey_heldout, beta=1,
+        )
+        heldout_loss = float(loss_fn_per_batch(current_params, heldout_batch))
         print(
-            f"t_idx {t_idx:3d}  t={float(t_curr):.3f}  loss {info['loss_before']:.2f} -> {info['loss_after']:.2f}  "
+            f"t_idx {t_idx:3d}  t={float(t_curr):.3f}  loss_fit {info['loss_after']:.2f}  loss_heldout {heldout_loss:.2f}  "
             f"ridge={info['ridge']:.2e}  k6_at_floor={info['n_active']}/{N_osc}  free_residual={info['residual']:.2e}"
         )
+        cg_diag_t.append(float(t_curr)); cg_diag_fit.append(info["loss_after"])
+        cg_diag_heldout.append(heldout_loss); cg_diag_resid.append(info["residual"])
 
         params_history_all_t.append(current_params)
         optimize_memory()
@@ -277,6 +299,25 @@ if start_t_idx < len(forward_time_pts):
             f.write(str(t_idx + 1))  # next time index to resume from
 
     print("Optimization complete; saved parameters to", output_dir)
+
+# Save + plot the fit-vs-held-out loss diagnostic for slices run this session.
+if cg_diag_t:
+    np.savez(
+        f"{output_dir}/cg_loss_diagnostics.npz",
+        t=np.array(cg_diag_t), loss_fit=np.array(cg_diag_fit),
+        loss_heldout=np.array(cg_diag_heldout), free_residual=np.array(cg_diag_resid),
+    )
+    fig, ax = plt.subplots(figsize=(8, 5))
+    order = np.argsort(cg_diag_t)
+    ax.plot(np.array(cg_diag_t)[order], np.array(cg_diag_fit)[order], "-o", ms=3, label="fit (in-sample)")
+    ax.plot(np.array(cg_diag_t)[order], np.array(cg_diag_heldout)[order], "-o", ms=3, label="held-out")
+    ax.set_xlabel("forward time t"); ax.set_ylabel("score-matching loss")
+    ax.set_title(f"Fit vs held-out SM loss (ridge_rel={cg_ridge_rel}, sample={cg_sample_size})")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(f"{plot_folder}/cg_fit_vs_heldout_loss.png", dpi=150)
+    plt.close(fig)
+    print(f"Saved CG loss diagnostics to {output_dir}/cg_loss_diagnostics.npz and plot to {plot_folder}/cg_fit_vs_heldout_loss.png")
 
 params_history_all_t = jnp.array(params_history_all_t)
 
@@ -346,31 +387,36 @@ def run_reverse_process_SDE(params_interpolator, suffix, key):
 
 
 print(f"Running reverse SDE with final time: {t_forward}")
+reverse_interpolator = params_interpolator_smoothed if use_smoothed_params_for_reverse else params_interpolator_non_smoothed
+params_tag = "smoothed" if use_smoothed_params_for_reverse else "non_smoothed"
 reverse_sde_suffix = (
-    f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}"
+    f"{params_tag}_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}"
     f"_init_method_asymptotic_gaussian"
     f"_use_same_initial_condition_for_all_trajectories_False"
     + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
 )
-images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, reverse_sde_suffix, reverse_sde_key)
+images_generated_sde = run_reverse_process_SDE(reverse_interpolator, reverse_sde_suffix, reverse_sde_key)
 print_memory_usage("after reverse SDE")
 
 #####################################
 # Plotting: true vs. generated digit grids
 #####################################
 def plot_true_vs_generated_grid(true_imgs, generated_imgs, generated_title, save_path):
-    """Top rows: true images; bottom rows: generated images (10 columns per row)."""
+    """Top block: true images; bottom block: generated images (<=10 columns per row).
+    Robust to any n_trajectories (not only multiples of 10)."""
     n_show = n_trajectories
-    n_rows = n_show // 10
-    fig, axes = plt.subplots(2 * n_rows, 10, figsize=(15, 3 * n_rows))
+    ncol = min(10, n_show)
+    n_rows = max(1, -(-n_show // ncol))  # ceil(n_show / ncol)
+    fig, axes = plt.subplots(2 * n_rows, ncol, figsize=(1.5 * ncol, 3 * n_rows), squeeze=False)
+    for ax in axes.flat:
+        ax.axis("off")  # blank any unused cells (partial last row)
     for idx in range(n_show):
         for row_block, imgs in ((0, true_imgs), (n_rows, generated_imgs)):
-            ax = axes[idx // 10 + row_block, idx % 10]
+            ax = axes[idx // ncol + row_block, idx % ncol]
             img = imgs[idx]
             if img.shape[-1] == 1:  # drop singleton channel if present
                 img = img.squeeze(-1)
             ax.imshow(np.array(img), cmap="gray")
-            ax.axis("off")
     axes[0, 0].set_title("True images", loc="left", fontsize=16)
     axes[n_rows, 0].set_title(generated_title, loc="left", fontsize=16)
     plt.subplots_adjust(wspace=0.01, hspace=0.5)
@@ -381,7 +427,7 @@ def plot_true_vs_generated_grid(true_imgs, generated_imgs, generated_title, save
 images_true = images_flat_true.reshape(-1, resolution[0], resolution[1])
 plot_true_vs_generated_grid(
     images_true,
-    images_generated_non_smoothed_sde,
+    images_generated_sde,
     f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}",
     f"{plot_folder}/samples_{reverse_sde_suffix}.png",
 )
@@ -389,7 +435,7 @@ plot_true_vs_generated_grid(
 # Same comparison, but with true and generated images clipped to the normalized pixel range.
 clip_min, clip_max = pixel_min_normalized, pixel_max_normalized
 images_true_clipped = np.clip(np.array(samples_target_unscaled.reshape(-1, resolution[0], resolution[1])), clip_min, clip_max)
-images_generated_clipped = np.clip(np.array(images_generated_non_smoothed_sde), clip_min, clip_max)
+images_generated_clipped = np.clip(np.array(images_generated_sde), clip_min, clip_max)
 plot_true_vs_generated_grid(
     images_true_clipped,
     images_generated_clipped,
