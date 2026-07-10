@@ -97,9 +97,9 @@ print("forward_time_pts", forward_time_pts)
 # (SGD used to set them implicitly). They are env-overridable so a sweep is just a shell loop --
 # each (ridge, sample) combo lands in its own output directory:
 #   CG_RIDGE_REL=1e-2 CG_SAMPLE_SIZE=16384 python3 physical_diffusion_model_MNIST.py
-cg_sample_size = int(os.environ.get("CG_SAMPLE_SIZE", 4096))          # fixed sample of p_t per slice used to FIT (>~ P/N_osc for full rank)
+cg_sample_size = int(os.environ.get("CG_SAMPLE_SIZE", 8192))          # fixed sample of p_t per slice used to FIT (>~ P/N_osc for full rank)
 cg_heldout_size = int(os.environ.get("CG_HELDOUT_SIZE", cg_sample_size))  # independent sample for the held-out-loss diagnostic
-cg_ridge_rel = float(os.environ.get("CG_RIDGE_REL", 1e-4))           # Tikhonov ridge: lambda = cg_ridge_rel * (mean eigenvalue of H)
+cg_ridge_rel = float(os.environ.get("CG_RIDGE_REL", 1e-2))           # Tikhonov ridge: lambda = cg_ridge_rel * (mean eigenvalue of H)
 cg_tol = 1e-5            # conjugate-gradient relative-residual tolerance
 cg_maxiter = 500         # conjugate-gradient iteration cap
 cg_active_set_iters = 8  # max active-set passes for the k_6 >= epsilon box constraint
