@@ -111,7 +111,7 @@ def balance_classes(images, labels_array, seed=42):
 
 
 # %%
-labels = [0,1]
+labels = [0,1,2,3]
 resolution = (28,28)
 step = 1
 balanced = True  # Set to True to balance classes, False to keep original distribution
