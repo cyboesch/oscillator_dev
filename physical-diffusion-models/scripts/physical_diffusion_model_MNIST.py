@@ -373,6 +373,10 @@ def run_reverse_process_SDE(params_interpolator, suffix, key):
     dt0 = 1e-8
 
     # Initial states ~ N(0, Temp * sigma_forward^2 I), and one Brownian key per trajectory.
+    # The original sampler (used in the paper) performed two extra jr.split(key) calls before drawing; advance
+    # past them so we land on the same subkeys and reproduce the historical samples exactly.
+    for _ in range(2):
+        key, _ = jr.split(key)
     key, subkey_init = jr.split(key)
     initial_states = jnp.sqrt(Temp) * sigma_forward * jr.normal(subkey_init, shape=(n_trajectories, N_osc))
     key, subkey_brownian = jr.split(key)
