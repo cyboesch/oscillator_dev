@@ -437,10 +437,13 @@ def solve_score_matching_cg(
     batch,
     ridge_rel=1e-4,
     ridge_abs=0.0,
+    prox_rel=0.0,
+    prox_center=None,
+    precondition=True,
     constraint_indices=None,
     epsilon=0.01,
     cg_tol=1e-6,
-    cg_maxiter=500,
+    cg_maxiter=1000,
     active_set_iters=5,
     n_probes=3,
     loss_fn_per_batch=None,
@@ -460,15 +463,27 @@ def solve_score_matching_cg(
         c    = -g(0)                              (one gradient evaluation at theta=0)
         H v  = jvp(g, v)                          (one gradient-sized pass; H never formed)
 
-    We solve the ridge-regularized system  (H + lambda I) theta = c  by conjugate
-    gradient using only these two matrix-free products.  H is only PSD (and, on a finite
-    batch, can be rank-deficient / ill-conditioned), so a Tikhonov ridge
+    We minimise the regularised objective
 
-        lambda = ridge_abs + ridge_rel * scale,   scale ~ mean eigenvalue of H
+        L(theta) + (lambda/2)||theta||^2 + (mu/2)||theta - theta_prev||^2
 
-    (estimated with a few Hutchinson probes v^T H v / v^T v) makes the problem
-    well-posed (H + lambda I > 0) and caps the condition number.  lambda*||theta||^2/2
-    is equivalently a Gaussian prior (MAP score matching).
+    i.e. solve  (H + (lambda + mu) I) theta = c + mu theta_prev  by conjugate gradient,
+    using only the two matrix-free products above (H is never formed).
+
+    - RIDGE   lambda = ridge_abs + ridge_rel * scale  (scale ~ mean eigenvalue of H)
+      is a Gaussian prior shrinking theta toward 0 — makes H+..I positive definite / caps
+      the condition number.
+    - PROXIMAL / trust-region  mu = prox_rel * scale  with ``prox_center`` = theta_prev (the
+      previous forward-time slice) shrinks theta toward the previous slice. Because mu scales
+      with the *mean* curvature, it dominates only in weakly-identified directions (where the
+      data curvature is << mean, e.g. the coupling parameters near the isotropic-Gaussian end),
+      so it enforces smoothness of theta(t) there while leaving well-identified directions to
+      the data. This is the convex analogue of what warm-started, early-stopped SGD did
+      implicitly (small steps away from the previous slice), and it is what keeps theta(t)
+      temporally coherent enough for the reverse SDE.
+    - PRECONDITION: a Jacobi (diagonal) preconditioner M = diag(H) + lambda + mu (diag(H)
+      estimated by the same Rademacher/Hutchinson probes) equalises the x^2/x^4/x^6 scale
+      spread that otherwise makes CG converge slowly on the low-t (sharp) slices.
 
     If ``constraint_indices`` is given, the box constraint theta[idx] >= epsilon (a
     convex set) is enforced by active-set refinement: coordinates whose unconstrained
@@ -484,15 +499,19 @@ def solve_score_matching_cg(
         batch: one fixed sample of the noised marginal p_t, shape (S, D). Use S large
             enough (>~ P / n_oscillators) for H to be well-conditioned.
         ridge_rel, ridge_abs: Tikhonov ridge lambda = ridge_abs + ridge_rel*scale.
+        prox_rel: proximal weight mu = prox_rel * scale (temporal-coherence / trust region).
+        prox_center: vector theta is shrunk toward (typically the previous slice's params);
+            defaults to 0 (then the proximal term coincides with the ridge).
+        precondition: use a Jacobi (diagonal) preconditioner in CG.
         constraint_indices, epsilon: box constraint theta[constraint_indices] >= epsilon.
         cg_tol, cg_maxiter: conjugate-gradient tolerance and iteration cap.
         active_set_iters: max active-set refinement passes.
-        n_probes: Hutchinson probes used to estimate the eigenvalue scale for ridge_rel.
+        n_probes: Hutchinson probes used to estimate scale and diag(H).
         loss_fn_per_batch: optional (theta, batch) -> scalar, for before/after diagnostics.
         key: PRNG key for the Hutchinson probes.
 
     Returns:
-        (theta_star, info) where info is a dict of diagnostics (ridge, scale, n_active,
+        (theta_star, info) where info is a dict of diagnostics (ridge, prox, scale, n_active,
         active_set_iters_used, residual, and loss_before/loss_after if a loss is given).
     """
     g = lambda theta: gradient_fn_per_batch(theta, batch)
@@ -504,23 +523,38 @@ def solve_score_matching_cg(
     def Hv(v):
         return jax.jvp(g, (zeros,), (v,))[1]
 
-    # Estimate the eigenvalue scale of H for the relative ridge.
+    # Rademacher/Hutchinson probes -> mean eigenvalue (scale) AND diag(H) (for Jacobi precond).
+    # For v with +-1 entries, E[v_i (H v)_i] = H_ii and E[v^T H v]/P = trace(H)/P.
     scale = 1.0
-    if ridge_rel > 0 and n_probes > 0:
-        probes = []
+    diag_H = jnp.zeros_like(params_initial)
+    if n_probes > 0:
+        s_acc = 0.0
         for _ in range(n_probes):
             key, sub = jr.split(key)
-            v = jr.normal(sub, params_initial.shape)
-            probes.append(jnp.vdot(v, Hv(v)) / jnp.vdot(v, v))
-        scale = max(float(jnp.mean(jnp.stack(probes))), 0.0)
+            v = jnp.sign(jr.normal(sub, params_initial.shape))
+            hv = Hv(v)
+            diag_H = diag_H + v * hv
+            s_acc += float(jnp.vdot(v, hv) / v.shape[0])
+        diag_H = diag_H / n_probes
+        scale = max(s_acc / n_probes, 0.0)
+
     lam = ridge_abs + ridge_rel * scale
+    mu = prox_rel * scale
+    if prox_center is None:
+        prox_center = zeros
+    diag_reg = lam + mu
 
-    A = lambda v: Hv(v) + lam * v
+    A = lambda v: Hv(v) + diag_reg * v
+    rhs = c + mu * prox_center
 
-    # Unconstrained ridge solve, warm-started from params_initial.
-    theta, _ = cg(A, c, x0=params_initial, tol=cg_tol, maxiter=cg_maxiter)
+    # Jacobi preconditioner M^{-1} r = r / (max(diag(H), 0) + diag_reg).
+    precond_diag = jnp.maximum(jnp.maximum(diag_H, 0.0) + diag_reg, 1e-12)
+    M = (lambda r: r / precond_diag) if precondition else None
 
-    info = {"ridge": lam, "scale": scale, "n_active": 0, "active_set_iters_used": 0}
+    # Regularised solve, warm-started from params_initial.
+    theta, _ = cg(A, rhs, x0=params_initial, tol=cg_tol, maxiter=cg_maxiter, M=M)
+
+    info = {"ridge": lam, "prox": mu, "scale": scale, "n_active": 0, "active_set_iters_used": 0}
 
     # Active-set refinement for the box constraint theta[constraint_indices] >= epsilon.
     if constraint_indices is not None:
@@ -539,9 +573,10 @@ def solve_score_matching_cg(
                 out = A(jnp.where(free_mask, v, 0.0))
                 return jnp.where(free_mask, out, v)
 
-            rhs = jnp.where(free_mask, c - A(fixed_vals), 0.0)
-            theta_free, _ = cg(A_free, rhs, x0=jnp.where(free_mask, theta, 0.0),
-                               tol=cg_tol, maxiter=cg_maxiter)
+            M_free = (lambda r: jnp.where(free_mask, r / precond_diag, r)) if precondition else None
+            rhs_free = jnp.where(free_mask, rhs - A(fixed_vals), 0.0)
+            theta_free, _ = cg(A_free, rhs_free, x0=jnp.where(free_mask, theta, 0.0),
+                               tol=cg_tol, maxiter=cg_maxiter, M=M_free)
             theta = jnp.where(free_mask, theta_free, fixed_vals)
 
             cur = tuple(int(i) for i in jnp.nonzero(active)[0])
@@ -552,10 +587,10 @@ def solve_score_matching_cg(
         # Feasibility safety net.
         theta = theta.at[constraint_indices].set(jnp.maximum(theta[constraint_indices], epsilon))
 
-    # Diagnostics. For a constrained solution the stationarity residual is measured on the
-    # FREE coordinates only (the pinned coords carry a nonzero KKT multiplier by design), and
-    # n_active counts coordinates sitting at the floor in the final solution.
-    resid_vec = A(theta) - c
+    # Diagnostics. Residual of the solved (regularised) system A theta = rhs, measured on the
+    # FREE coordinates only (pinned coords carry a nonzero KKT multiplier by design); n_active
+    # counts coordinates sitting at the floor in the final solution.
+    resid_vec = A(theta) - rhs
     if constraint_indices is not None:
         at_floor = theta[constraint_indices] <= epsilon + 1e-9
         info["n_active"] = int(jnp.sum(at_floor))
