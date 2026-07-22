@@ -9,7 +9,8 @@
   "workspaceFolder": "/docker_thermo_ai",
   "runArgs": ["--gpus", "all"],
   "mounts": [
-    "source=${localWorkspaceFolder},target=/docker_thermo_ai,type=bind"
+    "source=${localWorkspaceFolder},target=/docker_thermo_ai,type=bind",
+    "source=${localWorkspaceFolder}/.devcontainer/claude-data,target=/root/.claude,type=bind"
   ],
   "settings": {
     "terminal.integrated.defaultProfile.linux": "bash"

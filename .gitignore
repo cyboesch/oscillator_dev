@@ -179,3 +179,7 @@ cython_debug/
 *.sif
 *.out
 *.err
+
+# Claude Code data (chats, memory) — persisted per-project, not committed
+.devcontainer/claude-data/*
+!.devcontainer/claude-data/.gitkeep
