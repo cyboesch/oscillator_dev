@@ -63,3 +63,43 @@ def setup_score_matching_kbT_loss_minimal_memory(
         return final_grad / n_samples
 
     return loss_fn_per_batch, loss_gradient_fn_per_batch_minimal_memory
+
+
+def setup_score_matching_kbT_loss_chunked(gradient_fn, trace_hessian_fn, k_b=1.0, T=1.0, chunk=1024):
+    """
+    Same loss/gradient as ``setup_score_matching_kbT_loss_minimal_memory`` but the
+    gradient vmaps per-sample grads over chunks of the batch (scan over chunks) instead
+    of scanning sample-by-sample. On GPU this is ~2x faster per gradient and per
+    jvp-through-gradient (the CG matvec in solve_score_matching_cg), at the price of
+    materializing a (chunk, P) intermediate: chunk=1024 with P~5.5e5 peaks at ~8.4 GB
+    in float64 through the jvp; use chunk=512 if anything else is resident on the GPU.
+    The loss itself stays sample-by-sample (it is called only a few times per slice).
+    """
+    loss_fn_per_batch, _ = setup_score_matching_kbT_loss_minimal_memory(
+        gradient_fn, trace_hessian_fn, k_b=k_b, T=T
+    )
+
+    @jax.checkpoint
+    def single_sample_loss(params, x):
+        score = -gradient_fn(x, params) / (k_b * T)
+        trace_hess_log_p = -trace_hessian_fn(x, params) / (k_b * T)
+        return trace_hess_log_p + 0.5 * jnp.sum(score**2)
+
+    grad_fn = jax.grad(single_sample_loss, argnums=0)
+    vgrad = jax.vmap(grad_fn, in_axes=(None, 0))
+
+    def gradient_fn_per_batch_chunked(flattened_args, batch, subkey_gradient=None):
+        n = batch.shape[0]
+        # batch shapes are static under jit, so this runs at trace time
+        c = min(chunk, n)
+        while n % c:
+            c //= 2
+        batch_r = batch.reshape(n // c, c, batch.shape[-1])
+
+        def body(acc, xs):
+            return acc + jnp.sum(vgrad(flattened_args, xs), axis=0), None
+
+        total, _ = jax.lax.scan(body, jnp.zeros_like(flattened_args), batch_r)
+        return total / n
+
+    return loss_fn_per_batch, gradient_fn_per_batch_chunked

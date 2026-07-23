@@ -1,6 +1,7 @@
 import jax
 from jax import grad, vmap, hessian, jacfwd
 import jax.numpy as jnp
+import numpy as np
 import jax.random as jr
 from jax.scipy.sparse.linalg import cg
 from functools import partial
@@ -431,14 +432,58 @@ def run_optimization(loss_fn_per_batch,
 # Convex solve: matrix-free ridge-regularized conjugate gradient
 # #######################################################################################
 
+def exact_score_matching_diag(batch, connectivity, n_osc, k_b=1.0, T=1.0, edge_chunk=16384):
+    """
+    Exact diagonal of the score-matching Hessian H = (1/kT^2) E_batch[J^T J],
+    J = d(grad_x E)/d(theta), for the Duffing-network energy — closed form, no probes.
+
+    Because each parameter enters grad_x E through one or two monomial entries, the
+    diagonal is a batch moment per parameter:
+        k_lin_i: E[x_i^2]      k_duff_i: E[x_i^6]      k_6_i: E[x_i^10]     bias_i: 1
+        c_lin_e: 8 E[(x_i-x_j)^2]   c_optomech_e: E[4 x_i^2 x_j^2 + x_i^4]
+        c_duff_e: 2 E[(x_i-x_j)^6]
+    all divided by (k_b T)^2. Layout matches ravel_pytree of
+    (k_lin, k_duff, k_6, c_lin, c_optomech, c_duff, biases) — biases LAST.
+
+    Computed on the host in numpy, chunked over edges (a full (batch, n_edges) slab
+    would not fit on the GPU). Returns a jnp array of shape (P,).
+    """
+    x = np.asarray(batch)
+    conn = np.asarray(connectivity)
+    kT2 = (k_b * T) ** 2
+    n_edges = conn.shape[0]
+
+    d_klin = np.mean(x**2, axis=0)
+    d_kduff = np.mean(x**6, axis=0)
+    d_k6 = np.mean(x**10, axis=0)
+    d_bias = np.ones(n_osc)
+
+    d_clin = np.empty(n_edges)
+    d_copt = np.empty(n_edges)
+    d_cduff = np.empty(n_edges)
+    for a in range(0, n_edges, edge_chunk):
+        b = min(a + edge_chunk, n_edges)
+        xi = x[:, conn[a:b, 0]]
+        xj = x[:, conn[a:b, 1]]
+        diff2 = (xi - xj) ** 2
+        d_clin[a:b] = 8.0 * np.mean(diff2, axis=0)
+        d_copt[a:b] = np.mean(4.0 * xi**2 * xj**2 + xi**4, axis=0)
+        d_cduff[a:b] = 2.0 * np.mean(diff2**3, axis=0)
+
+    return jnp.asarray(np.concatenate([d_klin, d_kduff, d_k6, d_clin, d_copt, d_cduff, d_bias]) / kT2)
+
+
 def solve_score_matching_cg(
     gradient_fn_per_batch,
     params_initial,
     batch,
     ridge_rel=1e-4,
     ridge_abs=0.0,
+    ridge_vec=None,
     prox_rel=0.0,
+    prox_abs=0.0,
     prox_center=None,
+    diag_exact=None,
     precondition=True,
     constraint_indices=None,
     epsilon=0.01,
@@ -465,31 +510,41 @@ def solve_score_matching_cg(
 
     We minimise the regularised objective
 
-        L(theta) + (lambda/2)||theta||^2 + (mu/2)||theta - theta_prev||^2
+        L(theta) + (lambda/2)||theta||^2 + (1/2) sum_i r_i theta_i^2
+                 + (mu/2)||theta - theta_prev||^2
 
-    i.e. solve  (H + (lambda + mu) I) theta = c + mu theta_prev  by conjugate gradient,
-    using only the two matrix-free products above (H is never formed).
+    i.e. solve  (H + lambda I + diag(r) + mu I) theta = c + mu theta_prev  by conjugate
+    gradient, using only the two matrix-free products above (H is never formed).
 
-    - RIDGE   lambda = ridge_abs + ridge_rel * scale  (scale ~ mean eigenvalue of H)
-      is a Gaussian prior shrinking theta toward 0 — makes H+..I positive definite / caps
-      the condition number.
-    - PROXIMAL / trust-region  mu = prox_rel * scale  with ``prox_center`` = theta_prev (the
-      previous forward-time slice) shrinks theta toward the previous slice. Because mu scales
-      with the *mean* curvature, it dominates only in weakly-identified directions (where the
-      data curvature is << mean, e.g. the coupling parameters near the isotropic-Gaussian end),
-      so it enforces smoothness of theta(t) there while leaving well-identified directions to
-      the data. This is the convex analogue of what warm-started, early-stopped SGD did
-      implicitly (small steps away from the previous slice), and it is what keeps theta(t)
-      temporally coherent enough for the reverse SDE.
-    - PRECONDITION: a Jacobi (diagonal) preconditioner M = diag(H) + lambda + mu (diag(H)
-      estimated by the same Rademacher/Hutchinson probes) equalises the x^2/x^4/x^6 scale
-      spread that otherwise makes CG converge slowly on the low-t (sharp) slices.
+    - RIDGE (zero-centered)  lambda = ridge_abs + ridge_rel * scale, plus an optional
+      PER-COORDINATE ridge ``ridge_vec`` (r_i above). WARNING: a zero-centered ridge on ALL
+      coordinates resolves near-degenerate parameter directions toward the minimum-norm
+      representative regardless of physics (this is what collapsed on-site k_lin stiffness
+      into the edge couplings and made the reverse drift unstable). Use ``ridge_vec`` to
+      shrink only the groups whose true value is ~0 (e.g. the couplings), leaving the
+      physical carrier (k_lin) unshrunk — that tilts each degenerate valley toward the
+      representation that extrapolates correctly off the data.
+    - PROXIMAL / trust-region  mu = prox_abs + prox_rel * scale  with ``prox_center`` =
+      theta_prev (the previous forward-time slice) shrinks theta toward the previous slice.
+      Prefer the ABSOLUTE weight ``prox_abs``: scale ~ mean eigenvalue of H grows by orders
+      of magnitude as t -> 0, so a scale-tracking mu would freeze the small-t slices. A fixed
+      mu (>> the near-degenerate valley curvatures, << the well-identified curvatures) pins
+      weakly identified directions to the previous slice while data curvature, which grows
+      as t -> 0, self-anneals the prox to irrelevance exactly where the data speaks. This is
+      the convex analogue of what warm-started, early-stopped SGD did implicitly, and it is
+      what keeps theta(t) temporally coherent enough for the reverse SDE.
+    - PRECONDITION: a Jacobi (diagonal) preconditioner M = diag(H) + reg. Pass the exact
+      diagonal via ``diag_exact`` (see ``exact_score_matching_diag``) — the Hutchinson
+      fallback with few probes has per-coordinate errors comparable to the diagonal itself,
+      which is one reason the small-t solves used to stall before cg_maxiter.
 
-    If ``constraint_indices`` is given, the box constraint theta[idx] >= epsilon (a
-    convex set) is enforced by active-set refinement: coordinates whose unconstrained
-    solution violates the floor are pinned at epsilon and the reduced system is
-    re-solved, repeated until the active set stabilises, with a final clamp as a
-    feasibility safety net.
+    If ``constraint_indices`` is given, the box constraint theta[idx] >= epsilon (a convex
+    set) is enforced by primal active-set refinement with a KKT release test: violating
+    free coordinates are pinned at epsilon, and pinned coordinates are released only when
+    their multiplier estimate (A theta - rhs)_i is negative. The active set accumulates
+    across passes (never rebuilt from scratch) and previously visited sets terminate the
+    loop, so the blind-release/period-2-oscillation failure of naive refinement cannot
+    occur. A final clamp remains as a feasibility safety net.
 
     Args:
         gradient_fn_per_batch: callable (theta, batch[, subkey]) -> grad_theta L, i.e.
@@ -499,20 +554,25 @@ def solve_score_matching_cg(
         batch: one fixed sample of the noised marginal p_t, shape (S, D). Use S large
             enough (>~ P / n_oscillators) for H to be well-conditioned.
         ridge_rel, ridge_abs: Tikhonov ridge lambda = ridge_abs + ridge_rel*scale.
-        prox_rel: proximal weight mu = prox_rel * scale (temporal-coherence / trust region).
+        ridge_vec: optional (P,) per-coordinate zero-centered ridge weights.
+        prox_rel, prox_abs: proximal weight mu = prox_abs + prox_rel * scale.
         prox_center: vector theta is shrunk toward (typically the previous slice's params);
             defaults to 0 (then the proximal term coincides with the ridge).
+        diag_exact: optional (P,) exact diag(H); replaces the Hutchinson probes for both
+            the Jacobi preconditioner and scale = mean(diag).
         precondition: use a Jacobi (diagonal) preconditioner in CG.
         constraint_indices, epsilon: box constraint theta[constraint_indices] >= epsilon.
         cg_tol, cg_maxiter: conjugate-gradient tolerance and iteration cap.
         active_set_iters: max active-set refinement passes.
-        n_probes: Hutchinson probes used to estimate scale and diag(H).
+        n_probes: Hutchinson probes (only used when diag_exact is None).
         loss_fn_per_batch: optional (theta, batch) -> scalar, for before/after diagnostics.
         key: PRNG key for the Hutchinson probes.
 
     Returns:
         (theta_star, info) where info is a dict of diagnostics (ridge, prox, scale, n_active,
-        active_set_iters_used, residual, and loss_before/loss_after if a loss is given).
+        active_set_iters_used, residual, rhs_norm, and loss_before/loss_after if a loss is
+        given). Gate acceptance on residual <= gate * rhs_norm (e.g. gate = 0.01) before
+        chaining theta_star into the next slice's prox_center.
     """
     g = lambda theta: gradient_fn_per_batch(theta, batch)
     zeros = jnp.zeros_like(params_initial)
@@ -523,47 +583,62 @@ def solve_score_matching_cg(
     def Hv(v):
         return jax.jvp(g, (zeros,), (v,))[1]
 
-    # Rademacher/Hutchinson probes -> mean eigenvalue (scale) AND diag(H) (for Jacobi precond).
+    # diag(H): exact if provided, else Rademacher/Hutchinson probes.
     # For v with +-1 entries, E[v_i (H v)_i] = H_ii and E[v^T H v]/P = trace(H)/P.
-    scale = 1.0
-    diag_H = jnp.zeros_like(params_initial)
-    if n_probes > 0:
-        s_acc = 0.0
-        for _ in range(n_probes):
-            key, sub = jr.split(key)
-            v = jnp.sign(jr.normal(sub, params_initial.shape))
-            hv = Hv(v)
-            diag_H = diag_H + v * hv
-            s_acc += float(jnp.vdot(v, hv) / v.shape[0])
-        diag_H = diag_H / n_probes
-        scale = max(s_acc / n_probes, 0.0)
+    if diag_exact is not None:
+        diag_H = jnp.asarray(diag_exact)
+        scale = float(jnp.mean(diag_H))
+    else:
+        scale = 1.0
+        diag_H = jnp.zeros_like(params_initial)
+        if n_probes > 0:
+            s_acc = 0.0
+            for _ in range(n_probes):
+                key, sub = jr.split(key)
+                v = jnp.sign(jr.normal(sub, params_initial.shape))
+                hv = Hv(v)
+                diag_H = diag_H + v * hv
+                s_acc += float(jnp.vdot(v, hv) / v.shape[0])
+            diag_H = diag_H / n_probes
+            scale = max(s_acc / n_probes, 0.0)
 
     lam = ridge_abs + ridge_rel * scale
-    mu = prox_rel * scale
+    mu = prox_abs + prox_rel * scale
     if prox_center is None:
         prox_center = zeros
-    diag_reg = lam + mu
+    rvec = jnp.zeros_like(params_initial) if ridge_vec is None else jnp.asarray(ridge_vec)
+    diag_reg = lam + mu + rvec  # (P,) vector; broadcasts in A and the preconditioner
 
     A = lambda v: Hv(v) + diag_reg * v
-    rhs = c + mu * prox_center
+    rhs = c + mu * prox_center  # zero-centered ridges add nothing to the rhs
 
     # Jacobi preconditioner M^{-1} r = r / (max(diag(H), 0) + diag_reg).
     precond_diag = jnp.maximum(jnp.maximum(diag_H, 0.0) + diag_reg, 1e-12)
     M = (lambda r: r / precond_diag) if precondition else None
 
-    # Regularised solve, warm-started from params_initial.
-    theta, _ = cg(A, rhs, x0=params_initial, tol=cg_tol, maxiter=cg_maxiter, M=M)
+    info = {
+        "ridge": lam, "prox": mu, "scale": scale,
+        "ridge_vec_max": float(jnp.max(rvec)),
+        "n_active": 0, "active_set_iters_used": 0,
+        "rhs_norm": float(jnp.linalg.norm(rhs)),
+    }
 
-    info = {"ridge": lam, "prox": mu, "scale": scale, "n_active": 0, "active_set_iters_used": 0}
-
-    # Active-set refinement for the box constraint theta[constraint_indices] >= epsilon.
-    if constraint_indices is not None:
-        active_prev = None
+    if constraint_indices is None:
+        theta, _ = cg(A, rhs, x0=params_initial, tol=cg_tol, maxiter=cg_maxiter, M=M)
+    else:
+        # Primal active set with KKT release. `active` accumulates over passes; a pinned
+        # coordinate is released only if its multiplier estimate (A theta - rhs)_i < 0.
+        # Pass 0 has an empty active set, i.e. it is the plain unconstrained solve.
+        n_con = constraint_indices.shape[0]
+        active = jnp.zeros(n_con, dtype=bool)
+        # KKT noise floor: CG leaves residual ~cg_tol*||rhs|| spread over P coordinates.
+        kkt_tol = 10.0 * cg_tol * info["rhs_norm"] / np.sqrt(params_initial.shape[0])
+        seen = set()
+        theta = params_initial
         for it in range(active_set_iters):
-            active = theta[constraint_indices] < epsilon
             info["active_set_iters_used"] = it + 1
-            if not bool(jnp.any(active)):
-                break
+            seen.add(tuple(np.nonzero(np.asarray(active))[0].tolist()))
+
             fixed_mask = jnp.zeros_like(theta, dtype=bool).at[constraint_indices].set(active)
             free_mask = ~fixed_mask
             fixed_vals = jnp.where(fixed_mask, epsilon, 0.0)
@@ -579,10 +654,16 @@ def solve_score_matching_cg(
                                tol=cg_tol, maxiter=cg_maxiter, M=M_free)
             theta = jnp.where(free_mask, theta_free, fixed_vals)
 
-            cur = tuple(int(i) for i in jnp.nonzero(active)[0])
-            if cur == active_prev:
-                break
-            active_prev = cur
+            kkt = (A(theta) - rhs)[constraint_indices]
+            violated = (~active) & (theta[constraint_indices] < epsilon - 1e-12)
+            released = active & (kkt < -kkt_tol)
+            new_active = (active | violated) & (~released)
+
+            if (not bool(jnp.any(violated))) and (not bool(jnp.any(new_active != active))):
+                break  # feasible and KKT-consistent: optimal
+            if tuple(np.nonzero(np.asarray(new_active))[0].tolist()) in seen:
+                break  # cycle guard; final clamp below keeps feasibility
+            active = new_active
 
         # Feasibility safety net.
         theta = theta.at[constraint_indices].set(jnp.maximum(theta[constraint_indices], epsilon))

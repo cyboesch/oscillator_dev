@@ -139,14 +139,14 @@ def setup_duffing_network_analytical_derivatives_memory_efficient(connectivity, 
         result = result.at[n_osc:2*n_osc].set(k_duff_contributions)
         
         # k_6 contributions (if present): score[i] * x[i]^5 for each oscillator i
+        # NOTE: the ravel_pytree layout puts biases LAST: [k_lin, k_duff, (k_6,) c_lin,
+        # c_optomech, c_duff, biases] — so c_lin starts right after the k blocks.
         if has_k6:
             k_6_contributions = score * (x**5)
             result = result.at[2*n_osc:3*n_osc].set(k_6_contributions)
-            bias_start = 3*n_osc
-            c_lin_start = 4*n_osc
-        else:
-            bias_start = 2*n_osc
             c_lin_start = 3*n_osc
+        else:
+            c_lin_start = 2*n_osc
         
         # bias contributions: score[i] * 1 for each oscillator i
         result = result.at[n_params-n_osc:].set(score)  # bias is always last
@@ -237,11 +237,13 @@ def setup_duffing_network_analytical_derivatives_memory_efficient(connectivity, 
         result = result.at[n_osc:2*n_osc].set(3 * x**2)
         
         # ∂(Tr(∇²E_self))/∂k_6 = 5*x⁴ for each oscillator (if present)
+        # NOTE: biases are LAST in the ravel_pytree layout, so c_lin starts right after
+        # the k blocks (bias contributes nothing to the Hessian trace anyway).
         if has_k6:
             result = result.at[2*n_osc:3*n_osc].set(5 * x**4)
-            c_lin_start = 3*n_osc + n_osc  # After k_lin, k_duff, k_6, bias
+            c_lin_start = 3*n_osc  # After k_lin, k_duff, k_6
         else:
-            c_lin_start = 2*n_osc + n_osc  # After k_lin, k_duff, bias
+            c_lin_start = 2*n_osc  # After k_lin, k_duff
         
         # bias contributions to trace Hessian: 0 (bias doesn't affect second derivatives)
         # (already initialized to zero)
