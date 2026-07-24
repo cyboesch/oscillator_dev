@@ -125,6 +125,36 @@ def sample_forward_process(t, n_samples, D, sigma_final, samples0, key, beta=1.0
     return x_t_samples
 
 
+def sample_forward_pairs(t, n_samples, D, sigma_final, samples0, key, beta=1.0, var_floor=1e-8):
+    """Forward-process sampler for DENOISING score matching.
+
+    Draws x_t exactly as ``sample_forward_process`` but also returns the DSM regression target
+    (the analytic score of the forward transition kernel q(x_t | x_0)):
+
+        target = grad_{x_t} log q(x_t | x_0) = -(x_t - mean_factor * x_0) / var_factor
+
+    where q(x_t|x_0) = N(mean_factor * x_0, var_factor I). var_factor is floored at ``var_floor``
+    to keep the target finite as t -> 0 (where the forward noise vanishes); train on a grid capped
+    at a small t_min rather than relying on this floor.
+
+    Returns:
+        (x_t_samples, target) each of shape (n_samples, N).
+    """
+    key_idx, key_noise = jax.random.split(key)
+    M = samples0.shape[0]
+    indices = jax.random.choice(key_idx, M, shape=(n_samples,), replace=True)
+    x0_samples = samples0[indices]
+
+    mean_factor = jnp.exp(-beta * t / (sigma_final**2))
+    var_factor = D * (sigma_final**2) * (1 - jnp.exp(-2 * beta * t / (sigma_final**2)))
+    var_factor = jnp.maximum(var_factor, var_floor)
+
+    noise = jax.random.normal(key_noise, shape=x0_samples.shape)
+    x_t_samples = mean_factor * x0_samples + jnp.sqrt(var_factor) * noise
+    target = -(x_t_samples - mean_factor * x0_samples) / var_factor
+    return x_t_samples, target
+
+
 ########################################################################################
 # Reformatting optimization results
 ########################################################################################

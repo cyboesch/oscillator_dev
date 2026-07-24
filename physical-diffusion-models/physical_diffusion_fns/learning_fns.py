@@ -473,6 +473,47 @@ def exact_score_matching_diag(batch, connectivity, n_osc, k_b=1.0, T=1.0, edge_c
     return jnp.asarray(np.concatenate([d_klin, d_kduff, d_k6, d_clin, d_copt, d_cduff, d_bias]) / kT2)
 
 
+def make_ggn_hvp(gradient_fn, x_batch, k_b=1.0, T=1.0, chunk=512):
+    """Memory-light Hessian-vector product for the score-matching quadratic term.
+
+    Both implicit and denoising score matching share the same Hessian in theta,
+
+        H = (1 / (N (k_b T)^2)) sum_i J_i^T J_i,   J_i = d(grad_x E)/d theta  at  x_i,
+
+    because the energy is linear in theta (see setup_denoising_score_matching_loss_chunked). This
+    computes H v per sample as a forward JVP J_i v (a D-vector) followed by a reverse VJP
+    J_i^T (J_i v) (a P-vector) of the score numerator f(theta) = grad_x E(x_i; theta). These are
+    first-order passes, avoiding the forward-over-reverse jvp-through-gradient that the CG solver
+    uses by default and that OOMs at large chunk. Chunked with lax.scan over the fixed batch.
+
+    Pass the returned callable as ``hvp_fn`` to ``solve_score_matching_cg`` (still give it
+    gradient_fn_per_batch so it can form the DSM/ISM linear term c = -g(0)).
+    """
+    kT2 = (k_b * T) ** 2
+    n = x_batch.shape[0]
+    c = min(chunk, n)
+    while n % c:
+        c //= 2
+    x_r = x_batch.reshape(n // c, c, x_batch.shape[-1])
+
+    def per_sample(x, v):
+        f = lambda th: gradient_fn(x, th)
+        z = jnp.zeros_like(v)
+        Jv = jax.jvp(f, (z,), (v,))[1]        # J v : D-vector (base point irrelevant; f linear)
+        _, vjp_f = jax.vjp(f, z)
+        return vjp_f(Jv)[0]                    # J^T (J v) : P-vector
+
+    vps = jax.vmap(per_sample, in_axes=(0, None))
+
+    def hvp(v):
+        def body(acc, xc):
+            return acc + jnp.sum(vps(xc, v), axis=0), None
+        total, _ = jax.lax.scan(body, jnp.zeros_like(v), x_r)
+        return total / (n * kT2)
+
+    return hvp
+
+
 def solve_score_matching_cg(
     gradient_fn_per_batch,
     params_initial,
@@ -484,6 +525,7 @@ def solve_score_matching_cg(
     prox_abs=0.0,
     prox_center=None,
     diag_exact=None,
+    hvp_fn=None,
     precondition=True,
     constraint_indices=None,
     epsilon=0.01,
@@ -580,8 +622,16 @@ def solve_score_matching_cg(
     # Affine gradient => c = -g(0) and H v = jvp(g, v) (base point irrelevant).
     c = -g(zeros)
 
-    def Hv(v):
-        return jax.jvp(g, (zeros,), (v,))[1]
+    # H-vector product. The default forms it as jvp(g, v) (forward-over-reverse through the loss
+    # gradient), which is memory-heavy for large batch-chunks. Pass ``hvp_fn`` (e.g. the
+    # Gauss-Newton product from ``make_ggn_hvp``) to supply a memory-light first-order matvec;
+    # c above is still taken from gradient_fn_per_batch, so the linear term (ISM vs DSM) is
+    # whatever that gradient encodes.
+    if hvp_fn is not None:
+        Hv = hvp_fn
+    else:
+        def Hv(v):
+            return jax.jvp(g, (zeros,), (v,))[1]
 
     # diag(H): exact if provided, else Rademacher/Hutchinson probes.
     # For v with +-1 entries, E[v_i (H v)_i] = H_ii and E[v^T H v]/P = trace(H)/P.

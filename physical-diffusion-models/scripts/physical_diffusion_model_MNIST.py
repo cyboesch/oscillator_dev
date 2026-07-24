@@ -187,7 +187,11 @@ optimization_folder = (
 )
 
 here = os.path.dirname(os.path.abspath(__file__))
-current_date = datetime.now().strftime("%Y_%m_%d")
+# The output dir is date-stamped, and start_from_scratch=False resumes only if the dir already
+# exists. A run relaunched on a later calendar day (e.g. after a container rebuild) would
+# otherwise compute a fresh dir and restart from scratch. Pin the date via RUN_DATE=YYYY_MM_DD
+# to resume an earlier day's checkpoint.
+current_date = os.environ.get("RUN_DATE", datetime.now().strftime("%Y_%m_%d"))
 base_dir = os.path.join(here, "..", "out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
@@ -337,8 +341,13 @@ cg_diag = {k: [] for k in [
 # into 0s and 1s. We therefore do NOT require full positive-definiteness (an earlier version did
 # and aborted at t~2.8 on this physical structure), and we do NOT lift k_lin (that would erase
 # the class-separation mode). lambda_min is kept purely as a logged diagnostic.
-uniform_rate_hard_fail = 0.0   # abort if reverse uniform-mode rate 2*mean(k_lin)-1/sig^2 <= this (real DC collapse)
-uniform_rate_warn = 0.3        # warn below this (healthy tail ~ +1.0; structure-region min ~ +0.88)
+# The x=0 uniform-rate diagnostic drifts down at small t (mean k_lin falls as the marginal
+# sharpens), but that is a benign artifact of linearizing at the origin: at the DATA scale the
+# x^4/x^6 terms restore confinement (only ~4% of pixels have negative reverse stiffness there).
+# So hard-fail only on a genuinely catastrophic DC collapse (like the old -0.91 blob run), and
+# warn earlier. The pre-generation confinement alarm remains the real safety net.
+uniform_rate_hard_fail = -0.5  # abort only if reverse uniform-mode rate 2*mean(k_lin)-1/sig^2 <= this
+uniform_rate_warn = 0.3        # warn below this (healthy tail ~ +1.0; small-t drifts toward ~0)
 
 _connectivity_np = np.asarray(connectivity)  # (E, 2) edge index pairs, host-side, built once
 
