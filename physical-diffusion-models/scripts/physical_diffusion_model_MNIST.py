@@ -72,7 +72,7 @@ optimization_key, _default_reverse_sde_key, image_noise_added_key = jr.split(mas
 reverse_sde_key = jax.random.PRNGKey(key_seed_reverse) if key_seed_reverse is not None else _default_reverse_sde_key
 
 # --- Data ---
-labels = [0, 1, 2, 3]
+labels = [0, 1]
 resolution = (28, 28)
 balanced = True
 std_of_added_noise = 0.01     # Gaussian noise added to the data for regularization
