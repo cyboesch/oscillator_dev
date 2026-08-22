@@ -510,3 +510,26 @@ def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_sav
         stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),  # Enable adaptive stepping
     )
     return solution
+
+
+def solve_ODE(drift_fn, initial_state, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6):
+    """Integrate a deterministic ODE with adaptive error control.
+
+    This mirrors the ``solve_SDE`` time grid and tolerances, but contains only an
+    ``ODETerm`` and therefore introduces no Brownian path or other randomness.
+    """
+    ts = jnp.linspace(t0, t1, N_save)
+    solution = diffrax.diffeqsolve(
+        ODETerm(drift_fn),
+        solver=diffrax.Tsit5(),
+        t0=t0,
+        t1=t1,
+        dt0=dt0,
+        y0=initial_state,
+        args=(),
+        saveat=diffrax.SaveAt(ts=ts),
+        progress_meter=diffrax.TqdmProgressMeter(),
+        max_steps=1000000000,
+        stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),
+    )
+    return solution

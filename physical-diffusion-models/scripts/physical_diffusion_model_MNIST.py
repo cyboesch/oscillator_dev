@@ -33,6 +33,7 @@ from physical_diffusion_fns.plotting_fns import (
 from physical_diffusion_fns.network_fns import (
     setup_energy_fn,
     setup_overdamped_SDE,
+    solve_ODE,
     solve_SDE,
     create_2d_square_lattice_connectivity,
 )
@@ -108,14 +109,20 @@ patience_schedule = jnp.linspace(patience_start, patience_end, n_time_steps)[::-
 # --- Network: 2D lattice of coupled 6th-order Duffing oscillators, one oscillator per pixel ---
 n_neighbour_couplings = 14
 
-# --- Reverse (generation) SDE ---
+# --- Reverse generation ---
 n_trajectories = 40
+use_probability_flow_ODE = True
+run_reverse_sde_sanity_check = True
 rtol_sde = 1e-4
 atol_sde = 1e-6
 brownian_tolerance = 1e-12
+rtol_ode = 1e-4
+atol_ode = 1e-6
 
 # --- Checkpointing / memory management ---
 start_from_scratch = False
+sampling_only = True
+checkpoint_date = "2026_07_08"  # paper checkpoint used for the ODE/SDE comparison
 clear_cache_every_n_steps = 5
 force_gc_every_n_steps = 10
 
@@ -146,7 +153,7 @@ optimization_folder = (
 )
 
 here = os.path.dirname(os.path.abspath(__file__))
-current_date = datetime.now().strftime("%Y_%m_%d")
+current_date = checkpoint_date if checkpoint_date is not None else datetime.now().strftime("%Y_%m_%d")
 base_dir = os.path.join(here, "..", "out", current_date, "problems")
 output_dir_root = os.path.join(base_dir, problem_type_folder, MNIST_specifics, system_specifics, data_folder, optimization_folder)
 output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
@@ -180,10 +187,11 @@ samples_target = samples_target_unscaled * additional_rescaling
 N_osc = resolution[0] ** 2
 connectivity = create_2d_square_lattice_connectivity(grid_size=resolution[0], n_neighbour_couplings=n_neighbour_couplings)
 num_connections = connectivity.shape[0]
-visualize_connectivity_with_non_local_couplings(
-    connectivity, grid_size_x=resolution[0], grid_size_y=resolution[1],
-    n_neighbour_couplings=n_neighbour_couplings, save_fig=True, path=output_dir,
-)
+if not sampling_only:
+    visualize_connectivity_with_non_local_couplings(
+        connectivity, grid_size_x=resolution[0], grid_size_y=resolution[1],
+        n_neighbour_couplings=n_neighbour_couplings, save_fig=True, path=output_dir,
+    )
 print(f"Network size: {N_osc} oscillators, {num_connections} connections")
 
 # Initial energy parameters. Layout (flattened by ravel_pytree in this order):
@@ -222,6 +230,9 @@ print(f"Score matching (minimal-memory autodiff) at k_bT = {Temp}")
 params_history_path = f"{output_dir}/params_history.npy"
 time_index_path = f"{output_dir}/current_time_index.txt"
 
+if sampling_only and start_from_scratch:
+    raise ValueError("sampling_only=True is incompatible with start_from_scratch=True")
+
 if start_from_scratch:
     print("Starting from scratch")
     if os.path.exists(output_dir):
@@ -239,6 +250,21 @@ elif os.path.exists(params_history_path) and os.path.exists(time_index_path):
     with open(time_index_path, "r") as f:
         start_t_idx = int(f.read())
     print(f"Resuming from time index {start_t_idx} ({len(params_history_all_t)} parameter sets loaded)")
+    if sampling_only and (
+        start_t_idx != len(forward_time_pts)
+        or full_params_history.shape
+        != (len(forward_time_pts), len(params_flattened_initial))
+    ):
+        raise RuntimeError(
+            "Sampling-only mode requires a complete checkpoint with exactly "
+            f"{len(forward_time_pts)} time slices; found index {start_t_idx} and "
+            f"shape {full_params_history.shape}."
+        )
+elif sampling_only:
+    raise FileNotFoundError(
+        "Sampling-only mode cannot proceed because the paper checkpoint is missing: "
+        f"{params_history_path} and/or {time_index_path}"
+    )
 else:
     print("No existing parameters found, starting from beginning")
     start_t_idx = 0
@@ -247,7 +273,7 @@ else:
 
 plot_per_step = True  # save per-time-slice optimization diagnostics
 
-if start_t_idx < len(forward_time_pts):
+if not sampling_only and start_t_idx < len(forward_time_pts):
     for t_idx in range(start_t_idx, len(forward_time_pts)):
         t_curr = forward_time_pts[t_idx]
         print(f"t_idx: {t_idx}, t_curr: {t_curr}")
@@ -336,21 +362,22 @@ params_history_all_t = jnp.array(params_history_all_t)
 #####################################
 print(f"params_history_all_t shape: {params_history_all_t.shape}, forward_time_pts shape: {forward_time_pts.shape}")
 
-smoothed_params = smooth_parameters(
-    params_history_all_t,
-    window_lengths=[10] * params_history_all_t.shape[1],
-    poly_orders=[3] * params_history_all_t.shape[1],
-)
-params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts)
 params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts)
 
-plot_parameter_as_fn_of_time(
-    params_names, forward_time_pts, forward_time_pts, params_history_all_t,
-    params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False,
-)
+if not sampling_only:
+    smoothed_params = smooth_parameters(
+        params_history_all_t,
+        window_lengths=[10] * params_history_all_t.shape[1],
+        poly_orders=[3] * params_history_all_t.shape[1],
+    )
+    params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts)
+    plot_parameter_as_fn_of_time(
+        params_names, forward_time_pts, forward_time_pts, params_history_all_t,
+        params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False,
+    )
 
 #####################################
-# Reverse (generation) SDE
+# Reverse generation: probability-flow ODE and reference SDE
 #####################################
 def run_reverse_process_SDE(params_interpolator, suffix, key):
     """Integrate the reverse-time Langevin SDE to generate samples.
@@ -400,15 +427,81 @@ def run_reverse_process_SDE(params_interpolator, suffix, key):
     return final_samples.reshape(-1, resolution[0], resolution[1])
 
 
-print(f"Running reverse SDE with final time: {t_forward}")
+def run_reverse_process_ODE(params_interpolator, suffix, key):
+    """Integrate the deterministic probability-flow ODE.
+
+    The learned-score contribution is half of the reverse-SDE contribution:
+    theta_probability_flow(t) = theta(tau(t)) - theta_linear. The harmonic
+    reference is not halved, so the drift is x/sigma^2 - grad_x E_theta.
+    The initial Gaussian draw deliberately consumes the same historical JAX
+    subkeys as ``run_reverse_process_SDE``; there is no Brownian key or noise.
+    """
+    tau = lambda t: t_forward - t
+    forward_params = jnp.zeros_like(params_flattened_initial).at[0:N_osc].set(1.0)
+    params_probability_flow = lambda t: params_interpolator(tau(t)) - forward_params / sigma_forward**2
+
+    drift_fn, _ = setup_overdamped_SDE(
+        energy_fn, params_probability_flow, N_osc, time_dependent_parms=True, Temp=Temp,
+    )
+
+    t0, t1 = 0.0, t_forward
+    n_time_steps_ode = 100          # number of saved output points (does not affect solver accuracy)
+    ts = jnp.linspace(t0, t1, n_time_steps_ode)
+    dt0 = 1e-8
+
+    # Reuse the exact historical initial-condition subkey used by the SDE.
+    for _ in range(2):
+        key, _ = jr.split(key)
+    key, subkey_init = jr.split(key)
+    initial_states = jnp.sqrt(Temp) * sigma_forward * jr.normal(
+        subkey_init, shape=(n_trajectories, N_osc)
+    )
+
+    print(f"Running probability-flow ODE for {n_trajectories} trajectories...")
+    solve_one = lambda init_state: solve_ODE(
+        drift_fn, init_state, t0, t1, ts.shape[0], dt0, rtol=rtol_ode, atol=atol_ode,
+    )
+    solutions = vmap(solve_one)(initial_states)
+    final_samples_scaled = solutions.ys[:, -1, :]  # (n_trajectories, N_osc), final states only
+
+    final_states_path = f"{output_dir}/final_states_{suffix}.npy"
+    jnp.save(final_states_path, final_samples_scaled)
+    print(f"Final probability-flow ODE states saved to {final_states_path}")
+
+    del solutions
+    optimize_memory()
+    final_samples = final_samples_scaled / additional_rescaling
+    return final_samples.reshape(-1, resolution[0], resolution[1])
+
+
 reverse_sde_suffix = (
     f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}"
     f"_init_method_asymptotic_gaussian"
     f"_use_same_initial_condition_for_all_trajectories_False"
     + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
 )
-images_generated_non_smoothed_sde = run_reverse_process_SDE(params_interpolator_non_smoothed, reverse_sde_suffix, reverse_sde_key)
-print_memory_usage("after reverse SDE")
+images_generated_non_smoothed_sde = None
+if run_reverse_sde_sanity_check or not use_probability_flow_ODE:
+    sde_output_suffix = reverse_sde_suffix + ("_reproduction_check" if use_probability_flow_ODE else "")
+    print(f"Running reverse SDE with final time: {t_forward}")
+    images_generated_non_smoothed_sde = run_reverse_process_SDE(
+        params_interpolator_non_smoothed, sde_output_suffix, reverse_sde_key,
+    )
+    print_memory_usage("after reverse SDE")
+
+reverse_ode_suffix = (
+    f"non_smoothed_probability_flow_ode_memory_efficient_atol_{atol_ode}_rtol_{rtol_ode}"
+    f"_init_method_asymptotic_gaussian"
+    f"_use_same_initial_condition_for_all_trajectories_False"
+    + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
+)
+images_generated_non_smoothed_ode = None
+if use_probability_flow_ODE:
+    print(f"Running probability-flow ODE with final time: {t_forward}")
+    images_generated_non_smoothed_ode = run_reverse_process_ODE(
+        params_interpolator_non_smoothed, reverse_ode_suffix, reverse_sde_key,
+    )
+    print_memory_usage("after probability-flow ODE")
 
 #####################################
 # Plotting: true vs. generated digit grids
@@ -434,22 +527,41 @@ def plot_true_vs_generated_grid(true_imgs, generated_imgs, generated_title, save
 
 
 images_true = images_flat_true.reshape(-1, resolution[0], resolution[1])
-plot_true_vs_generated_grid(
-    images_true,
-    images_generated_non_smoothed_sde,
-    f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}",
-    f"{plot_folder}/samples_{reverse_sde_suffix}.png",
-)
-
-# Same comparison, but with true and generated images clipped to the normalized pixel range.
 clip_min, clip_max = pixel_min_normalized, pixel_max_normalized
 images_true_clipped = np.clip(np.array(samples_target_unscaled.reshape(-1, resolution[0], resolution[1])), clip_min, clip_max)
-images_generated_clipped = np.clip(np.array(images_generated_non_smoothed_sde), clip_min, clip_max)
-plot_true_vs_generated_grid(
-    images_true_clipped,
-    images_generated_clipped,
-    f"SDE sampled images (range:[{clip_min:.4f},{clip_max:.4f}]), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}",
-    f"{plot_folder}/samples_{reverse_sde_suffix}_clipped_{clip_min:.4f}_to_{clip_max:.4f}.png",
-)
+
+
+def save_sample_grids(generated_images, suffix, title, clipped_title):
+    """Save unclipped and normalized-range-clipped comparisons to the true images."""
+    plot_true_vs_generated_grid(
+        images_true,
+        generated_images,
+        title,
+        f"{plot_folder}/samples_{suffix}.png",
+    )
+    generated_images_clipped = np.clip(np.array(generated_images), clip_min, clip_max)
+    plot_true_vs_generated_grid(
+        images_true_clipped,
+        generated_images_clipped,
+        clipped_title,
+        f"{plot_folder}/samples_{suffix}_clipped_{clip_min:.4f}_to_{clip_max:.4f}.png",
+    )
+
+
+if images_generated_non_smoothed_sde is not None:
+    save_sample_grids(
+        images_generated_non_smoothed_sde,
+        sde_output_suffix,
+        f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}",
+        f"SDE sampled images (range:[{clip_min:.4f},{clip_max:.4f}]), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}",
+    )
+
+if images_generated_non_smoothed_ode is not None:
+    save_sample_grids(
+        images_generated_non_smoothed_ode,
+        reverse_ode_suffix,
+        f"Probability-flow ODE sampled images, rtol={rtol_ode}, atol={atol_ode}",
+        f"Probability-flow ODE sampled images (range:[{clip_min:.4f},{clip_max:.4f}]), rtol={rtol_ode}, atol={atol_ode}",
+    )
 
 print("Script completed successfully!")
