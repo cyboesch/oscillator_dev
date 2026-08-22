@@ -2,6 +2,7 @@ import jax
 from jax import lax
 import jax.numpy as jnp
 import jax.random as jr
+import numpy as np
 from scipy.signal import savgol_filter
 
 
@@ -160,18 +161,34 @@ def smooth_parameters(params, window_lengths, poly_orders):
     Returns:
         Array of shape (n_timesteps, n_params) containing smoothed parameter trajectories
     """
-    n_params = params.shape[1]
-    smoothed = []
-    
-    for i in range(n_params):
-        # Ensure window length is odd and valid
-        window_length = min(window_lengths[i], len(params) - (1 - len(params) % 2))
-        if window_length % 2 == 0:
-            window_length -= 1
-            
-        # Smooth using Savitzky-Golay filter
-        smoothed.append(savgol_filter(params[:, i], window_length, poly_orders[i]))
-    
+    params_np = np.asarray(params)
+    n_times, n_params = params_np.shape
+    window_lengths = np.broadcast_to(np.asarray(window_lengths), (n_params,))
+    poly_orders = np.broadcast_to(np.asarray(poly_orders), (n_params,))
+
+    max_window_length = n_times - (1 - n_times % 2)
+    effective_windows = np.minimum(window_lengths, max_window_length)
+    effective_windows = effective_windows - (effective_windows % 2 == 0)
+    if np.any(effective_windows <= poly_orders):
+        raise ValueError("Every Savitzky-Golay window must be larger than its polynomial order")
+
+    # The MNIST workflow uses one common window/order for all 545,566 parameters.
+    # SciPy can process that case along the time axis in one vectorized operation;
+    # the former per-column loop was equivalent but substantially slower.
+    if np.all(effective_windows == effective_windows[0]) and np.all(poly_orders == poly_orders[0]):
+        return jnp.asarray(
+            savgol_filter(
+                params_np,
+                int(effective_windows[0]),
+                int(poly_orders[0]),
+                axis=0,
+            )
+        )
+
+    smoothed = [
+        savgol_filter(params_np[:, i], int(effective_windows[i]), int(poly_orders[i]))
+        for i in range(n_params)
+    ]
     return jnp.column_stack(smoothed)
 
 ########################################################################################
@@ -210,5 +227,90 @@ def interpolate_parameters(params, time_points):
         if jnp.ndim(t) > 0:
             return interpolated.T
         return interpolated
+
+    return _interpolator
+
+
+def interpolate_parameters_pchip(params, time_points):
+    """Shape-preserving cubic interpolation of parameter trajectories.
+
+    This is a JAX-compatible implementation of the Fritsch-Carlson/PCHIP
+    construction. It sorts descending checkpoint times just like
+    :func:`interpolate_parameters`, reproduces every knot exactly, clamps queries
+    outside the checkpoint interval to the endpoint values, and cannot overshoot
+    the range of two adjacent parameter checkpoints on a monotone interval.
+    """
+    params = jnp.asarray(params)
+    time_points = jnp.asarray(time_points)
+    if params.ndim != 2 or time_points.ndim != 1:
+        raise ValueError("params must be 2D and time_points must be 1D")
+    if params.shape[0] != time_points.shape[0]:
+        raise ValueError("params and time_points must have matching time dimensions")
+    if time_points.shape[0] < 2:
+        raise ValueError("PCHIP interpolation requires at least two time points")
+
+    sort_idx = jnp.argsort(time_points)
+    x = time_points[sort_idx]
+    y = params[sort_idx]
+    h = jnp.diff(x)
+    if bool(jnp.any(h <= 0)):
+        raise ValueError("PCHIP interpolation requires distinct time points")
+
+    secants = jnp.diff(y, axis=0) / h[:, None]
+
+    if time_points.shape[0] == 2:
+        derivatives = jnp.stack([secants[0], secants[0]])
+    else:
+        secants_left = secants[:-1]
+        secants_right = secants[1:]
+        same_direction = (
+            (secants_left != 0)
+            & (secants_right != 0)
+            & (jnp.sign(secants_left) == jnp.sign(secants_right))
+        )
+        safe_left = jnp.where(same_direction, secants_left, 1.0)
+        safe_right = jnp.where(same_direction, secants_right, 1.0)
+        w1 = (2 * h[1:] + h[:-1])[:, None]
+        w2 = (h[1:] + 2 * h[:-1])[:, None]
+        interior = jnp.where(
+            same_direction,
+            (w1 + w2) / (w1 / safe_left + w2 / safe_right),
+            0.0,
+        )
+
+        def _endpoint_derivative(h0, h1, slope0, slope1):
+            derivative = ((2 * h0 + h1) * slope0 - h0 * slope1) / (h0 + h1)
+            derivative = jnp.where(jnp.sign(derivative) != jnp.sign(slope0), 0.0, derivative)
+            limit = (jnp.sign(slope0) != jnp.sign(slope1)) & (
+                jnp.abs(derivative) > 3 * jnp.abs(slope0)
+            )
+            return jnp.where(limit, 3 * slope0, derivative)
+
+        derivative_start = _endpoint_derivative(h[0], h[1], secants[0], secants[1])
+        derivative_end = _endpoint_derivative(h[-1], h[-2], secants[-1], secants[-2])
+        derivatives = jnp.concatenate(
+            [derivative_start[None, :], interior, derivative_end[None, :]], axis=0
+        )
+
+    def _evaluate_scalar(t):
+        t = jnp.clip(t, x[0], x[-1])
+        interval = jnp.clip(jnp.searchsorted(x, t, side="right") - 1, 0, x.shape[0] - 2)
+        interval_width = h[interval]
+        u = (t - x[interval]) / interval_width
+        u2 = u * u
+        u3 = u2 * u
+        return (
+            (2 * u3 - 3 * u2 + 1) * y[interval]
+            + (u3 - 2 * u2 + u) * interval_width * derivatives[interval]
+            + (-2 * u3 + 3 * u2) * y[interval + 1]
+            + (u3 - u2) * interval_width * derivatives[interval + 1]
+        )
+
+    def _interpolator(t):
+        t = jnp.asarray(t)
+        if t.ndim == 0:
+            return _evaluate_scalar(t)
+        values = jax.vmap(_evaluate_scalar)(t.reshape(-1))
+        return values.reshape((*t.shape, params.shape[1]))
 
     return _interpolator

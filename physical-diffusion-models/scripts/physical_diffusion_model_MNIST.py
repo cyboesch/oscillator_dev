@@ -2,6 +2,8 @@ print("Script started.")
 import os
 import sys
 import gc
+import json
+import hashlib
 import shutil
 from datetime import datetime
 
@@ -22,6 +24,7 @@ from physical_diffusion_fns.helper_fns import (
     sample_forward_process,
     smooth_parameters,
     interpolate_parameters,
+    interpolate_parameters_pchip,
 )
 from physical_diffusion_fns.learning_fns import run_optimization
 from physical_diffusion_fns.plotting_fns import (
@@ -57,6 +60,15 @@ def optimize_memory():
     """Force garbage collection and clear JAX caches."""
     gc.collect()
     jax.clear_caches()
+
+
+def sha256_file(path):
+    """Return a streaming SHA-256 digest without loading the file twice into memory."""
+    digest = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 print_memory_usage("at start")
@@ -113,11 +125,20 @@ n_neighbour_couplings = 14
 n_trajectories = 40
 use_probability_flow_ODE = True
 run_reverse_sde_sanity_check = True
+run_interpolation_ablation = True
+ablation_run_reverse_sde = True
+ablation_run_probability_flow_ode = True
 rtol_sde = 1e-4
 atol_sde = 1e-6
 brownian_tolerance = 1e-12
-rtol_ode = 1e-4
-atol_ode = 1e-6
+rtol_ode = 1e-7
+atol_ode = 1e-9
+ablation_savgol_window = 9
+ablation_savgol_polyorder = 3
+ablation_k6_floor = 0.01
+ablation_step_at_parameter_knots = True
+ablation_name = "interpolation_ablation_v1"
+expected_paper_checkpoint_sha256 = "37cfe46ef805a39129c265a0c17aaf6cf2b4e3b2ec7d8f55725e1cd66c227249"
 
 # --- Checkpointing / memory management ---
 start_from_scratch = False
@@ -125,6 +146,16 @@ sampling_only = True
 checkpoint_date = "2026_07_08"  # paper checkpoint used for the ODE/SDE comparison
 clear_cache_every_n_steps = 5
 force_gc_every_n_steps = 10
+
+if run_interpolation_ablation and (not sampling_only or start_from_scratch):
+    raise ValueError(
+        "The interpolation ablation must be sampling-only and load the verified paper checkpoint"
+    )
+
+smoothed_parameter_label = (
+    f"savgol_w{ablation_savgol_window}_p{ablation_savgol_polyorder}"
+    f"_k6_log_floor_{ablation_k6_floor:g}"
+)
 
 # Fixed labels used only for output-directory naming.
 training_method = "SM_at_kbT_minimal_memory"
@@ -160,8 +191,15 @@ output_dir = os.path.join(output_dir_root, "opt_per_time_plots")
 plot_folder = os.path.join(output_dir_root, "final_plots")
 os.makedirs(output_dir, exist_ok=True)
 os.makedirs(plot_folder, exist_ok=True)
+sampling_output_dir = os.path.join(output_dir, ablation_name) if run_interpolation_ablation else output_dir
+sampling_plot_folder = os.path.join(plot_folder, ablation_name) if run_interpolation_ablation else plot_folder
+os.makedirs(sampling_output_dir, exist_ok=True)
+os.makedirs(sampling_plot_folder, exist_ok=True)
 print(f"Output directory: {output_dir}")
 print(f"Plot directory: {plot_folder}")
+if run_interpolation_ablation:
+    print(f"Ablation state directory: {sampling_output_dir}")
+    print(f"Ablation plot directory: {sampling_plot_folder}")
 
 #####################################
 # Load MNIST data
@@ -229,6 +267,7 @@ print(f"Score matching (minimal-memory autodiff) at k_bT = {Temp}")
 #####################################
 params_history_path = f"{output_dir}/params_history.npy"
 time_index_path = f"{output_dir}/current_time_index.txt"
+checkpoint_sha256 = None
 
 if sampling_only and start_from_scratch:
     raise ValueError("sampling_only=True is incompatible with start_from_scratch=True")
@@ -246,7 +285,9 @@ elif os.path.exists(params_history_path) and os.path.exists(time_index_path):
     print("Loading existing parameters from", params_history_path)
     full_params_history = jnp.load(params_history_path)
     current_params = full_params_history[-1]
-    params_history_all_t = full_params_history.tolist()
+    # Sampling does not need a mutable Python list. Keeping the checkpoint as one
+    # array avoids materializing 54.5 million Python float objects.
+    params_history_all_t = full_params_history if sampling_only else full_params_history.tolist()
     with open(time_index_path, "r") as f:
         start_t_idx = int(f.read())
     print(f"Resuming from time index {start_t_idx} ({len(params_history_all_t)} parameter sets loaded)")
@@ -260,6 +301,14 @@ elif os.path.exists(params_history_path) and os.path.exists(time_index_path):
             f"{len(forward_time_pts)} time slices; found index {start_t_idx} and "
             f"shape {full_params_history.shape}."
         )
+    if run_interpolation_ablation:
+        checkpoint_sha256 = sha256_file(params_history_path)
+        if checkpoint_sha256 != expected_paper_checkpoint_sha256:
+            raise RuntimeError(
+                "The interpolation ablation requires the exact paper checkpoint; "
+                f"expected SHA-256 {expected_paper_checkpoint_sha256}, found {checkpoint_sha256}."
+            )
+        print(f"Verified paper checkpoint SHA-256: {checkpoint_sha256}")
 elif sampling_only:
     raise FileNotFoundError(
         "Sampling-only mode cannot proceed because the paper checkpoint is missing: "
@@ -362,24 +411,103 @@ params_history_all_t = jnp.array(params_history_all_t)
 #####################################
 print(f"params_history_all_t shape: {params_history_all_t.shape}, forward_time_pts shape: {forward_time_pts.shape}")
 
-params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts)
+params_interpolator_non_smoothed = None
+if not run_interpolation_ablation:
+    params_interpolator_non_smoothed = interpolate_parameters(params_history_all_t, forward_time_pts)
+
+smoothed_params_ablation = None
+if run_interpolation_ablation:
+    print(
+        "Building constrained Savitzky-Golay parameter history "
+        f"(window={ablation_savgol_window}, polyorder={ablation_savgol_polyorder})..."
+    )
+    smoothed_params_ablation = smooth_parameters(
+        params_history_all_t,
+        window_lengths=ablation_savgol_window,
+        poly_orders=ablation_savgol_polyorder,
+    )
+
+    # Direct polynomial smoothing can make constrained sextic coefficients
+    # negative. Smooth this positive group in log-space, transform back, and
+    # restore the same floor used by training.
+    raw_k6 = params_history_all_t[:, constraint_indices]
+    smoothed_log_k6 = smooth_parameters(
+        jnp.log(raw_k6),
+        window_lengths=ablation_savgol_window,
+        poly_orders=ablation_savgol_polyorder,
+    )
+    smoothed_k6_before_floor = jnp.exp(smoothed_log_k6)
+    n_k6_projected = int(jnp.sum(smoothed_k6_before_floor < ablation_k6_floor))
+    smoothed_k6 = jnp.maximum(smoothed_k6_before_floor, ablation_k6_floor)
+    smoothed_params_ablation = smoothed_params_ablation.at[:, constraint_indices].set(smoothed_k6)
+    if not bool(jnp.all(jnp.isfinite(smoothed_params_ablation))):
+        raise RuntimeError("Non-finite values were produced while smoothing the parameters")
+    if float(jnp.min(smoothed_params_ablation[:, constraint_indices])) < ablation_k6_floor:
+        raise RuntimeError("The smoothed parameter history violates the k6 confinement floor")
+    print(
+        f"Constrained smoothed k6 minimum: {float(jnp.min(smoothed_k6)):.6g}; "
+        f"projected {n_k6_projected} knot values to {ablation_k6_floor}."
+    )
+
+    # Validate shape preservation on a dense time grid without materializing all
+    # 545,566 interpolated parameters at once.
+    dense_validation_times = jnp.linspace(0.0, t_forward, 10 * (n_time_steps - 1) + 1)
+    ablation_k6_minima = {}
+    for parameter_label, parameter_values in (
+        ("raw", params_history_all_t),
+        (smoothed_parameter_label, smoothed_params_ablation),
+    ):
+        k6_values = parameter_values[:, constraint_indices]
+        for interpolation_label, interpolation_factory in (
+            ("linear", interpolate_parameters),
+            ("pchip", interpolate_parameters_pchip),
+        ):
+            k6_interpolator = interpolation_factory(k6_values, forward_time_pts)
+            minimum = float(jnp.min(k6_interpolator(dense_validation_times)))
+            ablation_k6_minima[f"{parameter_label}_{interpolation_label}"] = minimum
+            if minimum < ablation_k6_floor - 1e-12:
+                raise RuntimeError(
+                    f"{parameter_label}/{interpolation_label} interpolation violates "
+                    f"the k6 floor: {minimum}"
+                )
+            print(f"Dense-grid k6 minimum ({parameter_label}, {interpolation_label}): {minimum:.6g}")
 
 if not sampling_only:
-    smoothed_params = smooth_parameters(
+    smoothed_params_for_plot = smooth_parameters(
         params_history_all_t,
         window_lengths=[10] * params_history_all_t.shape[1],
         poly_orders=[3] * params_history_all_t.shape[1],
     )
-    params_interpolator_smoothed = interpolate_parameters(smoothed_params, forward_time_pts)
+    params_interpolator_smoothed = interpolate_parameters(smoothed_params_for_plot, forward_time_pts)
     plot_parameter_as_fn_of_time(
         params_names, forward_time_pts, forward_time_pts, params_history_all_t,
         params_interpolator_smoothed, unflatten, N_osc, save_fig=True, path=plot_folder, log_scale=False,
     )
 
 #####################################
-# Reverse generation: probability-flow ODE and reference SDE
+# Reverse generation: probability-flow ODE, reference SDE, and interpolation ablation
 #####################################
-def run_reverse_process_SDE(params_interpolator, suffix, key):
+def save_solver_stats(solutions, suffix):
+    """Save per-trajectory Diffrax step statistics for reproducibility."""
+    stats = {name: np.asarray(value) for name, value in solutions.stats.items()}
+    stats_path = os.path.join(sampling_output_dir, f"solver_stats_{suffix}.npz")
+    np.savez(stats_path, **stats)
+    if "num_steps" in stats:
+        num_steps = stats["num_steps"]
+        print(
+            f"Solver steps for {suffix}: min={np.min(num_steps)}, "
+            f"median={np.median(num_steps):.1f}, max={np.max(num_steps)}"
+        )
+    return stats_path
+
+
+def run_reverse_process_SDE(
+    params_interpolator,
+    suffix,
+    initial_states,
+    keys_brownian,
+    parameter_knot_times=None,
+):
     """Integrate the reverse-time Langevin SDE to generate samples.
 
     For the OU forward process the reverse drift is (1/sigma^2) x - 2 grad_x E_theta(tau(t)).
@@ -399,42 +527,39 @@ def run_reverse_process_SDE(params_interpolator, suffix, key):
     ts = jnp.linspace(t0, t1, n_time_steps_sde)
     dt0 = 1e-8
 
-    # Initial states ~ N(0, Temp * sigma_forward^2 I), and one Brownian key per trajectory.
-    # The original sampler (used in the paper) performed two extra jr.split(key) calls before drawing; advance
-    # past them so we land on the same subkeys and reproduce the historical samples exactly.
-    for _ in range(2):
-        key, _ = jr.split(key)
-    key, subkey_init = jr.split(key)
-    initial_states = jnp.sqrt(Temp) * sigma_forward * jr.normal(subkey_init, shape=(n_trajectories, N_osc))
-    key, subkey_brownian = jr.split(key)
-    keys_brownian = jr.split(subkey_brownian, n_trajectories)
-
     print(f"Running reverse SDE for {n_trajectories} trajectories...")
     solve_one = lambda init_state, key_b: solve_SDE(
         drift_fn, diffusion_fn, init_state, key_b, t0, t1, ts.shape[0], dt0,
         brownian_tolerance=brownian_tolerance, rtol=rtol_sde, atol=atol_sde,
+        step_ts=parameter_knot_times,
     )
     solutions = vmap(solve_one, in_axes=(0, 0))(initial_states, keys_brownian)
     final_samples_scaled = solutions.ys[:, -1, :]  # (n_trajectories, N_osc), final states only
 
-    final_states_path = f"{output_dir}/final_states_{suffix}.npy"
+    final_states_path = os.path.join(sampling_output_dir, f"final_states_{suffix}.npy")
     jnp.save(final_states_path, final_samples_scaled)
     print(f"Final states saved to {final_states_path}")
+    stats_path = save_solver_stats(solutions, suffix)
 
+    final_samples = np.asarray(final_samples_scaled / additional_rescaling)
     del solutions
     optimize_memory()
-    final_samples = final_samples_scaled / additional_rescaling
-    return final_samples.reshape(-1, resolution[0], resolution[1])
+    return final_samples.reshape(-1, resolution[0], resolution[1]), final_states_path, stats_path
 
 
-def run_reverse_process_ODE(params_interpolator, suffix, key):
+def run_reverse_process_ODE(
+    params_interpolator,
+    suffix,
+    initial_states,
+    parameter_knot_times=None,
+):
     """Integrate the deterministic probability-flow ODE.
 
     The learned-score contribution is half of the reverse-SDE contribution:
     theta_probability_flow(t) = theta(tau(t)) - theta_linear. The harmonic
     reference is not halved, so the drift is x/sigma^2 - grad_x E_theta.
-    The initial Gaussian draw deliberately consumes the same historical JAX
-    subkeys as ``run_reverse_process_SDE``; there is no Brownian key or noise.
+    The caller supplies the Gaussian initial states shared by every ablation
+    variant; there is no Brownian key or noise.
     """
     tau = lambda t: t_forward - t
     forward_params = jnp.zeros_like(params_flattened_initial).at[0:N_osc].set(1.0)
@@ -449,59 +574,212 @@ def run_reverse_process_ODE(params_interpolator, suffix, key):
     ts = jnp.linspace(t0, t1, n_time_steps_ode)
     dt0 = 1e-8
 
-    # Reuse the exact historical initial-condition subkey used by the SDE.
-    for _ in range(2):
-        key, _ = jr.split(key)
-    key, subkey_init = jr.split(key)
-    initial_states = jnp.sqrt(Temp) * sigma_forward * jr.normal(
-        subkey_init, shape=(n_trajectories, N_osc)
-    )
-
     print(f"Running probability-flow ODE for {n_trajectories} trajectories...")
     solve_one = lambda init_state: solve_ODE(
         drift_fn, init_state, t0, t1, ts.shape[0], dt0, rtol=rtol_ode, atol=atol_ode,
+        step_ts=parameter_knot_times,
     )
     solutions = vmap(solve_one)(initial_states)
     final_samples_scaled = solutions.ys[:, -1, :]  # (n_trajectories, N_osc), final states only
 
-    final_states_path = f"{output_dir}/final_states_{suffix}.npy"
+    final_states_path = os.path.join(sampling_output_dir, f"final_states_{suffix}.npy")
     jnp.save(final_states_path, final_samples_scaled)
     print(f"Final probability-flow ODE states saved to {final_states_path}")
+    stats_path = save_solver_stats(solutions, suffix)
 
+    final_samples = np.asarray(final_samples_scaled / additional_rescaling)
     del solutions
     optimize_memory()
-    final_samples = final_samples_scaled / additional_rescaling
-    return final_samples.reshape(-1, resolution[0], resolution[1])
+    return final_samples.reshape(-1, resolution[0], resolution[1]), final_states_path, stats_path
 
 
-reverse_sde_suffix = (
-    f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}"
-    f"_init_method_asymptotic_gaussian"
-    f"_use_same_initial_condition_for_all_trajectories_False"
-    + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
+# Draw the historical Gaussian initial states and Brownian keys once. Passing the
+# resulting arrays into every variant makes the factorial comparison explicitly
+# paired, rather than merely relying on repeated pure-key computations.
+shared_key = reverse_sde_key
+for _ in range(2):
+    shared_key, _ = jr.split(shared_key)
+shared_key, shared_init_subkey = jr.split(shared_key)
+shared_initial_states = jnp.sqrt(Temp) * sigma_forward * jr.normal(
+    shared_init_subkey, shape=(n_trajectories, N_osc)
 )
-images_generated_non_smoothed_sde = None
-if run_reverse_sde_sanity_check or not use_probability_flow_ODE:
-    sde_output_suffix = reverse_sde_suffix + ("_reproduction_check" if use_probability_flow_ODE else "")
-    print(f"Running reverse SDE with final time: {t_forward}")
-    images_generated_non_smoothed_sde = run_reverse_process_SDE(
-        params_interpolator_non_smoothed, sde_output_suffix, reverse_sde_key,
-    )
-    print_memory_usage("after reverse SDE")
+shared_key, shared_brownian_subkey = jr.split(shared_key)
+shared_brownian_keys = jr.split(shared_brownian_subkey, n_trajectories)
 
-reverse_ode_suffix = (
-    f"non_smoothed_probability_flow_ode_memory_efficient_atol_{atol_ode}_rtol_{rtol_ode}"
-    f"_init_method_asymptotic_gaussian"
-    f"_use_same_initial_condition_for_all_trajectories_False"
-    + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
-)
-images_generated_non_smoothed_ode = None
-if use_probability_flow_ODE:
-    print(f"Running probability-flow ODE with final time: {t_forward}")
-    images_generated_non_smoothed_ode = run_reverse_process_ODE(
-        params_interpolator_non_smoothed, reverse_ode_suffix, reverse_sde_key,
+sampling_results = []
+ablation_manifest = None
+if run_interpolation_ablation:
+    initial_states_path = os.path.join(sampling_output_dir, "shared_initial_states.npy")
+    brownian_keys_path = os.path.join(sampling_output_dir, "shared_brownian_keys.npy")
+    np.save(initial_states_path, np.asarray(shared_initial_states))
+    np.save(brownian_keys_path, np.asarray(shared_brownian_keys))
+
+    reverse_parameter_knot_times = None
+    if ablation_step_at_parameter_knots:
+        reverse_parameter_knot_times = jnp.sort(t_forward - forward_time_pts)[1:-1]
+
+    ablation_manifest = {
+        "ablation_name": ablation_name,
+        "checkpoint_path": os.path.abspath(params_history_path),
+        "checkpoint_sha256": checkpoint_sha256,
+        "checkpoint_shape": list(params_history_all_t.shape),
+        "source_files": {
+            "physical_diffusion_model_MNIST.py": {
+                "path": os.path.abspath(__file__),
+                "sha256": sha256_file(os.path.abspath(__file__)),
+            },
+            "helper_fns.py": {
+                "path": os.path.abspath(os.path.join(here, "..", "physical_diffusion_fns", "helper_fns.py")),
+                "sha256": sha256_file(os.path.join(here, "..", "physical_diffusion_fns", "helper_fns.py")),
+            },
+            "network_fns.py": {
+                "path": os.path.abspath(os.path.join(here, "..", "physical_diffusion_fns", "network_fns.py")),
+                "sha256": sha256_file(os.path.join(here, "..", "physical_diffusion_fns", "network_fns.py")),
+            },
+        },
+        "key_seed": key_seed,
+        "key_seed_reverse": key_seed_reverse,
+        "n_trajectories": n_trajectories,
+        "initial_states_file": os.path.basename(initial_states_path),
+        "initial_states_sha256": sha256_file(initial_states_path),
+        "brownian_keys_file": os.path.basename(brownian_keys_path),
+        "brownian_keys_sha256": sha256_file(brownian_keys_path),
+        "savgol_window": ablation_savgol_window,
+        "savgol_polyorder": ablation_savgol_polyorder,
+        "k6_smoothing": "log_savgol_then_floor",
+        "k6_floor": ablation_k6_floor,
+        "k6_values_projected": n_k6_projected,
+        "dense_grid_k6_minima": ablation_k6_minima,
+        "step_at_parameter_knots": ablation_step_at_parameter_knots,
+        "ode_solver": "Tsit5",
+        "ode_rtol": rtol_ode,
+        "ode_atol": atol_ode,
+        "sde_solver": "SRA1",
+        "sde_rtol": rtol_sde,
+        "sde_atol": atol_sde,
+        "brownian_tolerance": brownian_tolerance,
+        "variants": [],
+    }
+
+    parameter_variants = (
+        ("raw", params_history_all_t),
+        (smoothed_parameter_label, smoothed_params_ablation),
     )
-    print_memory_usage("after probability-flow ODE")
+    interpolation_variants = (
+        ("linear", interpolate_parameters),
+        ("pchip", interpolate_parameters_pchip),
+    )
+
+    for parameter_label, parameter_values in parameter_variants:
+        for interpolation_label, interpolation_factory in interpolation_variants:
+            print(f"Preparing ablation variant: params={parameter_label}, interpolation={interpolation_label}")
+            params_interpolator = interpolation_factory(parameter_values, forward_time_pts)
+            variant_tag = (
+                f"ablation_params_{parameter_label}_interp_{interpolation_label}"
+                f"_step_knots_{ablation_step_at_parameter_knots}_n{n_trajectories}_matched_rng"
+            )
+
+            if ablation_run_reverse_sde:
+                suffix = (
+                    f"{variant_tag}_sde_atol_{atol_sde}_rtol_{rtol_sde}"
+                    f"_btol_{brownian_tolerance}"
+                )
+                images, states_path, stats_path = run_reverse_process_SDE(
+                    params_interpolator,
+                    suffix,
+                    shared_initial_states,
+                    shared_brownian_keys,
+                    parameter_knot_times=reverse_parameter_knot_times,
+                )
+                sampling_results.append({
+                    "sampler": "sde",
+                    "parameter_variant": parameter_label,
+                    "interpolation": interpolation_label,
+                    "suffix": suffix,
+                    "images": images,
+                    "states_path": states_path,
+                    "stats_path": stats_path,
+                    "title": (
+                        f"SDE: {parameter_label}, {interpolation_label}; "
+                        f"rtol={rtol_sde}, atol={atol_sde}"
+                    ),
+                })
+                print_memory_usage(f"after SDE ({parameter_label}, {interpolation_label})")
+
+            if ablation_run_probability_flow_ode:
+                suffix = (
+                    f"{variant_tag}_probability_flow_ode_atol_{atol_ode}_rtol_{rtol_ode}"
+                )
+                images, states_path, stats_path = run_reverse_process_ODE(
+                    params_interpolator,
+                    suffix,
+                    shared_initial_states,
+                    parameter_knot_times=reverse_parameter_knot_times,
+                )
+                sampling_results.append({
+                    "sampler": "probability_flow_ode",
+                    "parameter_variant": parameter_label,
+                    "interpolation": interpolation_label,
+                    "suffix": suffix,
+                    "images": images,
+                    "states_path": states_path,
+                    "stats_path": stats_path,
+                    "title": (
+                        f"Probability-flow ODE: {parameter_label}, {interpolation_label}; "
+                        f"rtol={rtol_ode}, atol={atol_ode}"
+                    ),
+                })
+                print_memory_usage(f"after ODE ({parameter_label}, {interpolation_label})")
+
+            del params_interpolator
+            optimize_memory()
+else:
+    reverse_sde_suffix = (
+        f"non_smoothed_sde_memory_efficient_atol_{atol_sde}_rtol_{rtol_sde}_brownian_tolerance_{brownian_tolerance}"
+        f"_init_method_asymptotic_gaussian"
+        f"_use_same_initial_condition_for_all_trajectories_False"
+        + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
+    )
+    if run_reverse_sde_sanity_check or not use_probability_flow_ODE:
+        sde_output_suffix = reverse_sde_suffix + ("_reproduction_check" if use_probability_flow_ODE else "")
+        images, states_path, stats_path = run_reverse_process_SDE(
+            params_interpolator_non_smoothed,
+            sde_output_suffix,
+            shared_initial_states,
+            shared_brownian_keys,
+        )
+        sampling_results.append({
+            "sampler": "sde",
+            "suffix": sde_output_suffix,
+            "images": images,
+            "states_path": states_path,
+            "stats_path": stats_path,
+            "title": (
+                f"SDE sampled images; rtol={rtol_sde}, atol={atol_sde}, "
+                f"brownian_tolerance={brownian_tolerance}"
+            ),
+        })
+
+    if use_probability_flow_ODE:
+        reverse_ode_suffix = (
+            f"non_smoothed_probability_flow_ode_memory_efficient_atol_{atol_ode}_rtol_{rtol_ode}"
+            f"_init_method_asymptotic_gaussian"
+            f"_use_same_initial_condition_for_all_trajectories_False"
+            + (f"_reverse_rng_seed_{key_seed_reverse}" if key_seed_reverse is not None else "")
+        )
+        images, states_path, stats_path = run_reverse_process_ODE(
+            params_interpolator_non_smoothed,
+            reverse_ode_suffix,
+            shared_initial_states,
+        )
+        sampling_results.append({
+            "sampler": "probability_flow_ode",
+            "suffix": reverse_ode_suffix,
+            "images": images,
+            "states_path": states_path,
+            "stats_path": stats_path,
+            "title": f"Probability-flow ODE; rtol={rtol_ode}, atol={atol_ode}",
+        })
 
 #####################################
 # Plotting: true vs. generated digit grids
@@ -533,35 +811,61 @@ images_true_clipped = np.clip(np.array(samples_target_unscaled.reshape(-1, resol
 
 def save_sample_grids(generated_images, suffix, title, clipped_title):
     """Save unclipped and normalized-range-clipped comparisons to the true images."""
+    unclipped_path = os.path.join(sampling_plot_folder, f"samples_{suffix}.png")
+    clipped_path = os.path.join(
+        sampling_plot_folder,
+        f"samples_{suffix}_clipped_{clip_min:.4f}_to_{clip_max:.4f}.png",
+    )
     plot_true_vs_generated_grid(
         images_true,
         generated_images,
         title,
-        f"{plot_folder}/samples_{suffix}.png",
+        unclipped_path,
     )
     generated_images_clipped = np.clip(np.array(generated_images), clip_min, clip_max)
     plot_true_vs_generated_grid(
         images_true_clipped,
         generated_images_clipped,
         clipped_title,
-        f"{plot_folder}/samples_{suffix}_clipped_{clip_min:.4f}_to_{clip_max:.4f}.png",
+        clipped_path,
     )
+    return unclipped_path, clipped_path
 
 
-if images_generated_non_smoothed_sde is not None:
-    save_sample_grids(
-        images_generated_non_smoothed_sde,
-        sde_output_suffix,
-        f"SDE sampled images (Memory Efficient), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}",
-        f"SDE sampled images (range:[{clip_min:.4f},{clip_max:.4f}]), rtol={rtol_sde}, atol={atol_sde}, brownian_tolerance={brownian_tolerance}",
+for result in sampling_results:
+    generated_images = np.asarray(result["images"])
+    expected_shape = (n_trajectories, resolution[0], resolution[1])
+    if generated_images.shape != expected_shape or not np.all(np.isfinite(generated_images)):
+        raise RuntimeError(
+            f"Invalid {result['sampler']} output for {result['suffix']}: "
+            f"shape={generated_images.shape}, finite={np.all(np.isfinite(generated_images))}"
+        )
+    unclipped_path, clipped_path = save_sample_grids(
+        generated_images,
+        result["suffix"],
+        result["title"],
+        f"{result['title']} (range:[{clip_min:.4f},{clip_max:.4f}])",
     )
+    result["unclipped_plot_path"] = unclipped_path
+    result["clipped_plot_path"] = clipped_path
 
-if images_generated_non_smoothed_ode is not None:
-    save_sample_grids(
-        images_generated_non_smoothed_ode,
-        reverse_ode_suffix,
-        f"Probability-flow ODE sampled images, rtol={rtol_ode}, atol={atol_ode}",
-        f"Probability-flow ODE sampled images (range:[{clip_min:.4f},{clip_max:.4f}]), rtol={rtol_ode}, atol={atol_ode}",
-    )
+    if ablation_manifest is not None:
+        ablation_manifest["variants"].append({
+            "sampler": result["sampler"],
+            "parameter_variant": result["parameter_variant"],
+            "interpolation": result["interpolation"],
+            "suffix": result["suffix"],
+            "final_states_file": os.path.basename(result["states_path"]),
+            "final_states_sha256": sha256_file(result["states_path"]),
+            "solver_stats_file": os.path.basename(result["stats_path"]),
+            "unclipped_plot_file": os.path.relpath(unclipped_path, sampling_output_dir),
+            "clipped_plot_file": os.path.relpath(clipped_path, sampling_output_dir),
+        })
+
+if ablation_manifest is not None:
+    manifest_path = os.path.join(sampling_output_dir, "manifest.json")
+    with open(manifest_path, "w") as f:
+        json.dump(ablation_manifest, f, indent=2, sort_keys=True)
+    print(f"Ablation manifest saved to {manifest_path}")
 
 print("Script completed successfully!")

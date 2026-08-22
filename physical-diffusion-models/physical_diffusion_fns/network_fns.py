@@ -485,7 +485,20 @@ def setup_overdamped_SDE(energy_fn, flattened_args, N_osc, gamma=1.0, k_b=1.0, T
     
     return drift_fn, diffusion_fn
 
-def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6, brownian_tolerance=1e-12):
+def solve_SDE(
+    drift_fn,
+    diffusion_fn,
+    initial_state,
+    key_brownian,
+    t0,
+    t1,
+    N_save,
+    dt0,
+    rtol=1e-3,
+    atol=1e-6,
+    brownian_tolerance=1e-12,
+    step_ts=None,
+):
     N_osc = initial_state.shape[0]
     ts = jnp.linspace(t0, t1, N_save)
     w_shape = (N_osc,)  # state is just phases for each oscillator
@@ -507,12 +520,24 @@ def solve_SDE(drift_fn, diffusion_fn, initial_state, key_brownian, t0, t1, N_sav
         saveat=saveat,
         progress_meter=diffrax.TqdmProgressMeter(),
         max_steps=1000000000,
-        stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),  # Enable adaptive stepping
+        stepsize_controller=diffrax.PIDController(
+            rtol=rtol, atol=atol, step_ts=step_ts
+        ),  # Enable adaptive stepping
     )
     return solution
 
 
-def solve_ODE(drift_fn, initial_state, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6):
+def solve_ODE(
+    drift_fn,
+    initial_state,
+    t0,
+    t1,
+    N_save,
+    dt0,
+    rtol=1e-3,
+    atol=1e-6,
+    step_ts=None,
+):
     """Integrate a deterministic ODE with adaptive error control.
 
     This mirrors the ``solve_SDE`` time grid and tolerances, but contains only an
@@ -530,6 +555,8 @@ def solve_ODE(drift_fn, initial_state, t0, t1, N_save, dt0, rtol=1e-3, atol=1e-6
         saveat=diffrax.SaveAt(ts=ts),
         progress_meter=diffrax.TqdmProgressMeter(),
         max_steps=1000000000,
-        stepsize_controller=diffrax.PIDController(rtol=rtol, atol=atol),
+        stepsize_controller=diffrax.PIDController(
+            rtol=rtol, atol=atol, step_ts=step_ts
+        ),
     )
     return solution
