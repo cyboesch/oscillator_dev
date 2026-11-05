@@ -26,10 +26,9 @@ These notes come from a line-by-line read of every tracked source file on branch
   - `best_moving_avg` starts at `inf`, so the first relative improvement is `nan`, and patience grows at every check.
   - Each slice therefore trains for a fixed `window + 100·(⌈patience⌉−1)` epochs: 10,900–30,900 for MNIST. `tolerance` is never used.
   - In the 2D score-matching notebook all five slices "converge" at exactly epoch 1000. That includes t = 1.25, whose loss is still +107 against ≈ −10 for its neighbours.
-- **Near the data, training probably cannot keep up with its target** (§8.13) *(review)*. The step-budget arithmetic is ✔; its effect on the score is ◐.
-  - The learning rate falls 100× toward t = 0, and every slice runs a fixed number of steps. Adam moves a parameter by about lr per step at most, so over the t = 0 slice a parameter can move ≈ 0.5, and ≈ 1.1 over the slice before.
-  - For an always-blank pixel, the exact optimum of k_lin goes from 6.9 to 18.6 across that last interval, and its bias from 2.7 to 7.6.
-  - Near t = 0 the learned precision is therefore probably too low, unless the couplings make up for it collectively. A few seconds on the checkpoint would settle this.
+- **Near the data, training does keep up: the suspected lag was tested and is not there** (§8.13, measured by Slurm job 4181431 on 2026-11-05).
+  - Background pixels reach their optimal stiffness at every slice, within a few percent (1.03× at t = 0). The couplings supply 97% of it, so the per-parameter step budget never binds.
+  - The one shortfall is the stiffness of a uniform shift of the whole background: 0.57× optimal at t = 0. That shows up as a small background offset in both samplers.
 - **The CD-1 notebook picks per-slice parameters with the wrong-temperature loss** ✔ (§8.2).
   - The monitored loss is score matching at `T = 1`, while the CD-1 gradient targets `T = Temp = 0.01`. Since J₁(θ) = J₀.₀₁(0.01·θ), the monitor ranks iterates by their distance to 100× the CD-1 solution.
   - In 8 of 10 slices the "best" epoch is ≤ 398 of ~2,000, and in four of them it is ≤ 21. The stored θ(t) is therefore mostly the warm start.
@@ -540,7 +539,22 @@ Cheap additions that would close most of this:
   - Refuse to `rmtree` a folder whose `params_history.npy` has the pinned SHA.
   - Keep a read-only copy of the checkpoint outside `out/`.
 
-### 8.13 Near-data slices cannot reach their optimum ✔ budget, ◐ effect *(review)*
+### 8.13 Near-data slices: step budget vs optimum — hypothesis tested and REFUTED
+
+**Measured result** (job 4181431; `scripts/diagnose_near_data.py`; output in `out/diagnostics/near_data_check/4181431/`):
+
+| t | 0.20 | 0.10 | 0.05 | 0 |
+|---|---|---|---|---|
+| blank-pixel stiffness / optimum (median) | 1.01 | 1.00 | 1.01 | 1.03 |
+| share from self terms / couplings | 0.40 / 0.61 | 0.25 / 0.75 | 0.16 / 0.85 | 0.06 / 0.97 |
+| uniform-background-mode stiffness / optimum | 0.82 | 0.70 | 0.63 | 0.57 |
+| relative score error (blank pixels) | 0.027 | 0.030 | 0.036 | 0.050 |
+| global scale test R (1 = optimum) | 1.006 | 1.005 | 0.986 | 0.976 |
+
+- k_lin of blank pixels does stay near 0.86, as predicted. But Σ2c_lin over each pixel's ~460 pairs grows to 19.4 and supplies the stiffness.
+- No parameter group comes close to its budget: at t = 0 the largest movement is 0.71× the budget (c_lin), and the 90th percentiles are far lower.
+- The coupling route leaves the *uniform* background mode too soft, since (x_i − x_j)² terms cannot stiffen a common shift. That fits the background offset of ≈ 0.07 normalised units (≈ 0.02 in pixel units) seen in all samples (§8.15).
+- Conclusion: retraining the last slices for the learning rate's sake is not worth it. The analysis below is kept for the record.
 
 **The budget.**
 - The learning rate is `linspace(2e-5, 2e-3, 100)[::-1]` ([script:108](physical-diffusion-models/scripts/physical_diffusion_model_MNIST.py#L108)): 2e-3 at t = 5, 4e-5 at t = 0.05, 2e-5 at t = 0. It decays smoothly by 0.95 per 6,000 steps, and each slice runs the fixed length from §8.1.
