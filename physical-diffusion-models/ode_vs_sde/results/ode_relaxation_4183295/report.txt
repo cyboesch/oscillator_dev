@@ -1,0 +1,23 @@
+ODE relaxation test; jax 0.4.33; devices [CudaDevice(id=0)]; default float float64
+data (11846, 784); pixel range [-0.4096, 2.8727]; 170 always-blank pixels
+reference (200 held-out data images): NN distance median 3.37 [p90 5.12]; E/T median 2538.6
+
+ODE: relaxing 39 samples for S = 0.5 at theta(0), T = 0.02 (skipped diverged samples [30])
+  solved in 140 s; solver steps median 852, max 26298
+      S  bg within  bg offset   %out  max|x|  NN med  NN p90   E/T med
+   0.00     0.0514     0.0671   4.60    6.78    4.89    6.24      56.4
+   0.02     0.0502     0.0699   4.49    6.91    4.87    6.23    -203.7
+   0.10     0.0459     0.0812   4.16    7.25    4.75    6.30    -607.9
+   0.50     0.0379     0.1273  10.97   30.29    4.44    6.79   -1972.5
+  (data: bg within 0.0327, offset ~0, %out 0)
+
+SDE: relaxing 40 samples for S = 0.5 at theta(0), T = 0.02 (skipped diverged samples [])
+  solved in 213 s; solver steps median 782, max 46047
+      S  bg within  bg offset   %out  max|x|  NN med  NN p90   E/T med
+   0.00     0.0430     0.0713   2.18    7.50    3.91    5.63   -1791.9
+   0.02     0.0430     0.0723   2.17    7.56    3.91    5.61   -1807.7
+   0.10     0.0403     0.0822   4.63   29.17    3.91    5.58   -1951.8
+   0.50     0.0389     0.1072   7.68   30.93    3.92    6.59   -2490.3
+  (data: bg within 0.0327, offset ~0, %out 0)
+
+total time 369 s

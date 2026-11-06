@@ -1,0 +1,22 @@
+=== start 2026-11-05 22:48:39; jax 0.4.33; devices [CudaDevice(id=0)]; default float float64; N_TRAJ 500; CHUNK 125
+re-rendered the fine-grid curve -> noise_window_curve_4183779.png
+reference: held-out nearest-image distance p90 4.84
+initial states identical to those of the fine-grid run: checked via its ODE row below
+chunk 0-124 done in 419 s
+chunk 125-249 done in 353 s
+chunk 250-374 done in 401 s
+chunk 375-499 done in 381 s
+
+reproduction: unsplit SDE vs saved paper SDE, trajectories 0-39: median max|diff| 1.37e-05, max 8.31e-04; 40/40 below 1e-3
+
+far = nearest-image distance above the data's p90, or diverged (max|x| > 15)
+sample set                    n  NN med  % far   +-  %div   %out bg within
+SDE unsplit (this job)      500    4.17   35.6  2.1   6.2   7.94    0.0448
+SDE split (4183779)         500    4.11   34.6  2.1   5.2   7.07    0.0452
+ODE (4183779)               500    4.75   47.6  2.2   1.6   6.16    0.0485
+SDE unsplit, traj 0-39       40    3.91   22.5  6.6   0.0   2.18    0.0430
+SDE split, traj 0-39         40    4.29   40.0  7.7   7.5   9.09    0.0488
+SDE paper (saved, 40)        40    3.91   22.5  6.6   0.0   2.18    0.0430
+
+unsplit - split: +1.0 +- 3.0 points far (independent noise, so unpaired SE); z = +0.33
+total time 1573 s

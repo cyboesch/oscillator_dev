@@ -1,0 +1,34 @@
+noise-window test; jax 0.4.33; devices [CudaDevice(id=0)]; default float float64
+reference: held-out data nearest-image distance median 2.48, p90 4.84 (samples above the p90 are counted as 'far')
+40 trajectories; knots at the parameter grid; ODE tol 1e-07/1e-09, SDE tol 0.0001/1e-06
+  ODE            done in     37 s (max |diff| to the saved ODE samples: 3.90e-12)
+  burst@4.5      done in     85 s 
+  burst@3.5      done in     29 s 
+  burst@2.5      done in     44 s 
+  burst@1.5      done in     69 s 
+  burst@0.5      done in     76 s 
+  SDE>ODE@4      done in     46 s 
+  SDE>ODE@3      done in     40 s 
+  SDE>ODE@2      done in     43 s 
+  SDE>ODE@1      done in     49 s 
+  ODE>SDE@4      done in    176 s 
+  ODE>SDE@2      done in    121 s 
+  ODE>SDE@1      done in    150 s 
+
+far = nearest-image distance above the data's p90; bg within = median per-sample std of blank pixels (data 0.033); %out = pixels beyond the data range +- 0.2
+variant         NN med  NN p90  % far bg within   %out  max|x|
+ODE               4.90    6.41   55.0    0.0514   6.99   31.82
+SDE (saved)       3.91    5.63   22.5    0.0430   2.18    7.50
+burst@4.5         6.34   97.69   82.5    0.0547  25.20   32.24
+burst@3.5         5.00    6.10   55.0    0.0470   4.50    7.44
+burst@2.5         4.68    6.53   47.5    0.0500   9.38   30.27
+burst@1.5         4.75    6.19   47.5    0.0503   6.41   31.51
+burst@0.5         4.76    6.40   42.5    0.0559   8.26   31.28
+SDE>ODE@4         4.95    6.67   52.5    0.0509   6.31   30.60
+SDE>ODE@3         5.00    6.60   55.0    0.0470   5.68   29.53
+SDE>ODE@2         4.66    5.84   45.0    0.0455   3.33    7.37
+SDE>ODE@1         4.23    5.77   25.0    0.0429   2.69    7.06
+ODE>SDE@4         4.07    5.50   20.0    0.0421   6.91   30.83
+ODE>SDE@2         4.29    5.44   35.0    0.0511   7.61   30.44
+ODE>SDE@1         4.47   18.35   42.5    0.0527  12.61   31.30
+total time 974 s

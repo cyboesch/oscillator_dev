@@ -1,0 +1,70 @@
+=== start 2026-11-05 12:58:10; jax 0.4.33; devices [CudaDevice(id=0)]; default float float64; N_TRAJ 500; CHUNK 250
+reference: held-out data nearest-image distance median 2.48, p90 4.84 (samples above the p90 are counted as 'far')
+500 trajectories (40 paper + 460 new, seed 2026); init std 0.1413 (sqrt T = 0.1414); keys (500, 2) uint32
+24 variants over 10 intervals of 0.5:
+  ODE            OOOOOOOOOO
+  SDE            SSSSSSSSSS
+  SDE>ODE@4.5    SOOOOOOOOO
+  SDE>ODE@4      SSOOOOOOOO
+  SDE>ODE@3.5    SSSOOOOOOO
+  SDE>ODE@3      SSSSOOOOOO
+  SDE>ODE@2.5    SSSSSOOOOO
+  SDE>ODE@2      SSSSSSOOOO
+  SDE>ODE@1.5    SSSSSSSOOO
+  SDE>ODE@1      SSSSSSSSOO
+  SDE>ODE@0.5    SSSSSSSSSO
+  ODE>SDE@4.5    OSSSSSSSSS
+  ODE>SDE@4      OOSSSSSSSS
+  ODE>SDE@3.5    OOOSSSSSSS
+  ODE>SDE@3      OOOOSSSSSS
+  ODE>SDE@2.5    OOOOOSSSSS
+  ODE>SDE@2      OOOOOOSSSS
+  ODE>SDE@1.5    OOOOOOOSSS
+  ODE>SDE@1      OOOOOOOOSS
+  ODE>SDE@0.5    OOOOOOOOOS
+  SDE[4,1]       OOSSSSSSOO
+  SDE[4,2]       OOSSSSOOOO
+  SDE[3,1]       OOOOSSSSOO
+  SDE[3.5,1.5]   OOOSSSSOOO
+interval 0 (t 0.0-0.5, tau 5.0-4.5) done in 71 s; O: 1 prefixes, 0 frozen rows, 13 s; S: 1 prefixes, 0 frozen rows, 57 s
+interval 1 (t 0.5-1.0, tau 4.5-4.0) done in 98 s; O: 2 prefixes, 0 frozen rows, 16 s; S: 2 prefixes, 0 frozen rows, 82 s
+interval 2 (t 1.0-1.5, tau 4.0-3.5) done in 130 s; O: 3 prefixes, 0 frozen rows, 17 s; S: 3 prefixes, 0 frozen rows, 112 s
+interval 3 (t 1.5-2.0, tau 3.5-3.0) done in 163 s; O: 4 prefixes, 0 frozen rows, 19 s; S: 4 prefixes, 0 frozen rows, 144 s
+interval 4 (t 2.0-2.5, tau 3.0-2.5) done in 194 s; O: 5 prefixes, 0 frozen rows, 21 s; S: 5 prefixes, 0 frozen rows, 173 s
+interval 5 (t 2.5-3.0, tau 2.5-2.0) done in 227 s; O: 6 prefixes, 0 frozen rows, 26 s; S: 6 prefixes, 0 frozen rows, 200 s
+interval 6 (t 3.0-3.5, tau 2.0-1.5) done in 270 s; O: 8 prefixes, 0 frozen rows, 38 s; S: 7 prefixes, 0 frozen rows, 232 s
+interval 7 (t 3.5-4.0, tau 1.5-1.0) done in 405 s; O: 10 prefixes, 0 frozen rows, 60 s; S: 8 prefixes, 0 frozen rows, 344 s
+interval 8 (t 4.0-4.5, tau 1.0-0.5) done in 1698 s; O: 13 prefixes, 1 frozen rows, 266 s; S: 9 prefixes, 1 frozen rows, 1432 s
+interval 9 (t 4.5-5.0, tau 0.5-0.0) done in 19705 s; O: 14 prefixes, 10 frozen rows, 7513 s; S: 10 prefixes, 20 frozen rows, 12191 s
+
+sanity: ODE (split at the interval boundaries) vs saved paper ODE, trajectories 0-39: median max|diff| 2.52e-08, max 2.05e-05
+(the SDE here uses different noise from the paper's single [0, 5] Brownian tree, so it is not expected to match the saved SDE samples; the saved SDE row below is an independent reference)
+
+far = nearest-image distance above the data's p90, or diverged (max|x| > 15); +-: binomial SE; dfar: paired difference to the SDE row with its SE; %out = pixels beyond the data range +- 0.2
+variant                 mode  NN med  % far   +-   dfar   +- bg within   %out  %div
+ODE               OOOOOOOOOO    4.75   47.6  2.2   13.0  2.6    0.0485   6.16   1.6
+SDE               SSSSSSSSSS    4.11   34.6  2.1    0.0  0.0    0.0452   7.07   5.2
+SDE>ODE@4.5       SOOOOOOOOO    4.84   50.0  2.2   15.4  2.5    0.0503   7.27   2.8
+SDE>ODE@4         SSOOOOOOOO    4.91   52.4  2.2   17.8  2.2    0.0477   6.62   2.2
+SDE>ODE@3.5       SSSOOOOOOO    4.81   48.8  2.2   14.2  2.1    0.0483   6.31   2.0
+SDE>ODE@3         SSSSOOOOOO    4.82   49.2  2.2   14.6  1.8    0.0480   5.33   1.6
+SDE>ODE@2.5       SSSSSOOOOO    4.72   46.8  2.2   12.2  1.7    0.0471   4.84   1.4
+SDE>ODE@2         SSSSSSOOOO    4.63   44.8  2.2   10.2  1.6    0.0452   4.69   1.4
+SDE>ODE@1.5       SSSSSSSOOO    4.55   43.2  2.2    8.6  1.4    0.0444   4.75   1.8
+SDE>ODE@1         SSSSSSSSOO    4.42   40.4  2.2    5.8  1.2    0.0451   4.78   2.2
+SDE>ODE@0.5       SSSSSSSSSO    4.26   37.0  2.2    2.4  0.9    0.0481   5.36   3.2
+ODE>SDE@4.5       OSSSSSSSSS    4.10   34.6  2.1    0.0  1.9    0.0443   7.71   6.0
+ODE>SDE@4         OOSSSSSSSS    4.07   34.6  2.1    0.0  2.2    0.0454   7.50   5.8
+ODE>SDE@3.5       OOOSSSSSSS    4.09   33.0  2.1   -1.6  2.4    0.0452   7.40   5.6
+ODE>SDE@3         OOOOSSSSSS    4.07   33.2  2.1   -1.4  2.5    0.0458   6.13   4.2
+ODE>SDE@2.5       OOOOOSSSSS    4.14   34.4  2.1   -0.2  2.5    0.0454   6.86   4.6
+ODE>SDE@2         OOOOOOSSSS    4.25   35.6  2.1    1.0  2.6    0.0449   7.17   4.6
+ODE>SDE@1.5       OOOOOOOSSS    4.29   38.8  2.2    4.2  2.6    0.0469   8.93   6.2
+ODE>SDE@1         OOOOOOOOSS    4.41   40.6  2.2    6.0  2.6    0.0471   8.57   5.4
+ODE>SDE@0.5       OOOOOOOOOS    4.50   41.6  2.2    7.0  2.6    0.0452   8.71   5.4
+SDE[4,1]          OOSSSSSSOO    4.37   39.2  2.2    4.6  2.2    0.0445   5.28   2.6
+SDE[4,2]          OOSSSSOOOO    4.59   43.2  2.2    8.6  2.3    0.0448   5.60   2.4
+SDE[3,1]          OOOOSSSSOO    4.30   38.4  2.2    3.8  2.6    0.0448   5.32   2.2
+SDE[3.5,1.5]      OOOSSSSOOO    4.52   42.2  2.2    7.6  2.5    0.0430   4.72   1.6
+SDE (paper, 40)        paper    3.91   22.5  6.6                0.0430   2.18   0.0
+total time this run 22995 s

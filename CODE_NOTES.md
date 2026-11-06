@@ -779,6 +779,14 @@ Solver error is excluded: you tightened the tolerances, and the review found the
   - for a quick sampling-only test, interpolate ψ(t) = v_ref(t)·θ(t) and divide v_ref back out, which is exact for constant pixels;
   - a cheap retraining test: add 4–8 slices in (0, 0.05), warm-started from θ(0) with lr ≈ 1e-3. The CD-1 notebook already has an `exponential_time_pts` switch.
 
+### 10.4 ODE vs SDE experiments (branch `ode_vs_sde`)
+
+The follow-up experiments on candidate 1 of §10.1 have their own folder on this branch, with scripts, job files, copies of the result reports and a write-up: [physical-diffusion-models/ode_vs_sde/README.md](physical-diffusion-models/ode_vs_sde/README.md). Summary (2026-11-06):
+- With 500 trajectories the SDE beats the ODE by 12 points of "far" samples (35.6% vs 47.6%). The ODE costs nothing for τ ≳ 2.5; the noise matters for τ ≲ 2.5, down to the end.
+- Relaxing finished ODE samples at θ(0) does not un-blend them, and E_θ(0) has deep wells far from the data.
+- The 40-sample SDE draw used so far was lucky (22.5% far, against about 35% over 500 trajectories), and 5–6% of SDE trajectories diverge.
+- Closed: the effect is known from the diffusion literature and is not pursued as a result.
+
 ## 11. Running and reproducing
 
 - **Where to run.** All computation goes through Slurm; the login node is only for editing and submitting.
