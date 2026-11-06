@@ -3,7 +3,7 @@
 
 Runs the plain reverse SDE the paper's way (one solve and one VirtualBrownianTree on [0, 5] per
 trajectory, knots forced, same tolerances) on the same 500 trajectories and base keys as the
-fine-grid run (job 4183779).  Trajectories 0-39 use the paper's keys, so they should reproduce the
+fine-grid run (job FINE_JOB, default 4183779).  Trajectories 0-39 use the paper's keys, so they should reproduce the
 saved paper SDE samples up to solver tolerance.  Compares, distribution-wise, with the split SDE of
 the fine-grid run (same initial states, different noise).  Also re-renders the fine-grid curve.
 
@@ -48,7 +48,8 @@ from physical_diffusion_fns.network_fns import (  # noqa: E402
 
 N_TRAJ = 500
 CHUNK = int(os.environ.get("CHUNK", 125))
-FINE_DIR = os.path.join(PKG, "out", "diagnostics", "ode_noise_window_fine", os.environ.get("FINE_JOB", "4183779"))
+FINE_JOB = os.environ.get("FINE_JOB", "4183779")  # job id of the full fine-grid run to compare with
+FINE_DIR = os.path.join(PKG, "out", "diagnostics", "ode_noise_window_fine", FINE_JOB)
 OUT_DIR = os.path.join(PKG, "out", "diagnostics", "sde_split_control", os.environ.get("SLURM_JOB_ID", "manual"))
 
 
@@ -86,7 +87,7 @@ def replot_fine_curve():
         ax.spines[s].set_visible(False)
     ax.legend(frameon=False, fontsize=8, loc="upper center")
     fig.tight_layout()
-    fig.savefig(os.path.join(OUT_DIR, "noise_window_curve_4183779.png"), dpi=150)
+    fig.savefig(os.path.join(OUT_DIR, f"noise_window_curve_{FINE_JOB}.png"), dpi=150)
     plt.close(fig)
 
 
@@ -96,7 +97,7 @@ def main():
     report(f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; jax {jax.__version__}; devices {jax.devices()}; "
            f"default float {jnp.zeros(1).dtype}; N_TRAJ {N_TRAJ}; CHUNK {CHUNK}")
     replot_fine_curve()
-    report("re-rendered the fine-grid curve -> noise_window_curve_4183779.png")
+    report(f"re-rendered the fine-grid curve -> noise_window_curve_{FINE_JOB}.png")
 
     # Data (for metrics only), as in the fine-grid run
     raw = jnp.array(np.load(DATA_PATH))
@@ -173,8 +174,8 @@ def main():
         }
 
     rows, fars = {}, {}
-    for lab, x in [("SDE unsplit (this job)", x_sde), ("SDE split (4183779)", fine_states["SDE"]),
-                   ("ODE (4183779)", fine_states["ODE"]),
+    for lab, x in [("SDE unsplit (this job)", x_sde), (f"SDE split ({FINE_JOB})", fine_states["SDE"]),
+                   (f"ODE ({FINE_JOB})", fine_states["ODE"]),
                    ("SDE unsplit, traj 0-39", x_sde[:40]), ("SDE split, traj 0-39", fine_states["SDE"][:40]),
                    ("SDE paper (saved, 40)", saved_sde)]:
         fars[lab], _, rows[lab] = stats(x)
@@ -184,7 +185,7 @@ def main():
     for lab, r in rows.items():
         report(f"{lab:<26}{r['n']:>5}{r['nn_median']:>8.2f}{100 * r['frac_far']:>7.1f}{100 * r['se_far']:>5.1f}"
                f"{100 * r['frac_diverged']:>6.1f}{100 * r['frac_out']:>7.2f}{r['bg_within']:>10.4f}")
-    a, b = fars["SDE unsplit (this job)"], fars["SDE split (4183779)"]
+    a, b = fars["SDE unsplit (this job)"], fars[f"SDE split ({FINE_JOB})"]
     diff = a.mean() - b.mean()
     se = np.sqrt(a.mean() * (1 - a.mean()) / a.size + b.mean() * (1 - b.mean()) / b.size)
     report("")

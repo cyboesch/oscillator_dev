@@ -782,8 +782,9 @@ Solver error is excluded: you tightened the tolerances, and the review found the
 ### 10.4 ODE vs SDE experiments (branch `ode_vs_sde`)
 
 The follow-up experiments on candidate 1 of §10.1 have their own folder on this branch, with scripts, job files, copies of the result reports and a write-up: [physical-diffusion-models/ode_vs_sde/README.md](physical-diffusion-models/ode_vs_sde/README.md). Summary (2026-11-06):
-- With 500 trajectories the SDE beats the ODE by 12 points of "far" samples (35.6% vs 47.6%). The ODE costs nothing for τ ≳ 2.5; the noise matters for τ ≲ 2.5, down to the end.
-- Relaxing finished ODE samples at θ(0) does not un-blend them, and E_θ(0) has deep wells far from the data.
+- With 500 trajectories the SDE beats the ODE by 12 points of "far" samples (35.6% vs 47.6%).
+- The SDE's extra Langevin part (a pull toward p̂_τ plus thermal noise; switching to the ODE removes both) has a detectable effect only for τ ≲ 2.5, down to the end. Using the ODE for τ ≳ 2.5 has no detectable cost.
+- Relaxing finished ODE samples at θ(0) barely changes them at first and moves them only partway by S = 0.5, while E_θ(0)'s deep wells far from the data capture bright samples.
 - The 40-sample SDE draw used so far was lucky (22.5% far, against about 35% over 500 trajectories), and 5–6% of SDE trajectories diverge.
 - Closed: the effect is known from the diffusion literature and is not pursued as a result.
 
