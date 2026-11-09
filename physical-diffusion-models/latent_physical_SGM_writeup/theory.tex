@@ -1,0 +1,343 @@
+\documentclass[11pt,a4paper]{article}
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{amsmath,amssymb,bm}
+\usepackage{booktabs}
+\usepackage[colorlinks=true,linkcolor=blue,citecolor=blue,urlcolor=blue]{hyperref}
+
+\newcommand{\vx}{\bm{x}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\Ev}{E^{\mathrm{v}}}
+\newcommand{\grad}{\nabla}
+
+\title{Physical diffusion models with fast latent units:\\ model, local training and measured statistics}
+\author{Working note, branch \texttt{latent\_physical\_SGM}}
+\date{9 November 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+We extend the physical diffusion model --- a lattice of nonlinear (Duffing) oscillators, one per pixel, whose
+energy is trained per time slice by score matching --- with latent degrees of freedom: hidden units that couple to
+the pixels and equilibrate much faster than they do. Integrated out, the hidden units give the pixels a free
+energy with a global, many-body part, in particular a ``which prototype'' variable that a two-body pixel energy
+lacks. We derive the free energy for Ising, Potts and per-pixel hidden units, the score-matching objective and its
+gradient, and show that the gradient is a local three-factor rule. On a device the hidden statistics must be
+measured from a few samples; we derive the bias this causes, remove it with a first- and second-order jackknife,
+and describe an optimiser (the visit-count rule) that keeps rarely visited hidden states alive. We close with the
+reverse (generative) process, the physical conditions for the fast-hidden idealisation, the evaluation, and the
+main numerical results so far.
+\end{abstract}
+
+\tableofcontents
+
+%======================================================================================================================
+\section{Setting: the physical diffusion model}
+
+\paragraph{Forward process.} The data $\vx\in\mathbb R^N$ (pixels, $N=784$ at $28\times28$, $N=196$ at $14\times14$,
+normalised) are diffused by an Ornstein--Uhlenbeck process at temperature $T$,
+\begin{equation}
+  d\vx = -\vx\,dt + \sqrt{2T}\,d\bm W_t ,\qquad T=0.02,\qquad t\in[0,5],
+\end{equation}
+whose stationary density is $\propto e^{-\|\vx\|^2/2T}$. The marginal at time $t$ is $p_t$.
+
+\paragraph{Time slices.} The interval $t\in[0,5]$ is cut into 100 slices. Every parameter of the model has its own
+value in each slice; slice $k$ is trained on fresh samples of $p_{t_k}$ and warm-started from slice $k-1$. During
+generation the parameters are interpolated between the slice knots.
+
+\paragraph{Energy-based score.} At each slice the model density is $p_\theta(\vx)\propto e^{-F_\theta(\vx)/T}$, so
+its score is $\grad\log p_\theta=-\grad F_\theta/T$. Without hidden units $F_\theta=\Ev_\theta$, the visible energy.
+
+\paragraph{Visible energy.} One oscillator per pixel, with self terms and pair couplings,
+\begin{equation}
+  \Ev(\vx)=\sum_i\Big[\tfrac{k^{\rm lin}_i}{2}x_i^2+\tfrac{k^{\rm duff}_i}{4}x_i^4+\tfrac{k^{(6)}_i}{6}x_i^6+\beta_ix_i\Big]
+  +\sum_{(i,j)\in\mathcal P}\Big[c^{\rm lin}_{ij}(x_i-x_j)^2+c^{\rm om}_{ij}\,x_i^2x_j+\tfrac{c^{\rm duff}_{ij}}{4}(x_i-x_j)^4\Big].
+  \label{eq:Ev}
+\end{equation}
+It is linear in its parameters $\theta_v$. The paper's model (``power 6'') keeps $k^{(6)}_i\ge0.01$ for
+confinement; ``power 4'' sets $k^{(6)}=0$ and confines with $k^{\rm duff}_i\ge0.01$, $c^{\rm duff}\ge0$. A pixel's
+self energy is a double well wherever $k^{\rm lin}_i<0$. The pair set $\mathcal P$ contains all pairs within a
+Chebyshev distance (14 at $28\times28$: 180{,}810 pairs, 59\% of all pairs; 7 at $14\times14$). The three pair terms
+are the linear spring ($c^{\rm lin}$), an asymmetric ``optomechanical'' term ($c^{\rm om}$) and a quartic pair term
+($c^{\rm duff}$). Options \texttt{--radius}, \texttt{--neighbourhood von\_neumann} and \texttt{--pair-terms} restrict
+$\mathcal P$ and the pair terms (Section~\ref{sec:results}).
+
+%======================================================================================================================
+\section{Latent degrees of freedom}
+
+\subsection{Joint energy and marginal}
+Add hidden units $\bm y\in\mathbb R^K$ that couple bilinearly to the pixels and not to each other (a bipartite,
+RBM-like structure):
+\begin{equation}
+  E_\theta(\vx,\bm y)=\Ev(\vx)+\sum_{j=1}^K\big[U_j(y_j)-y_j\,a_j(\vx)\big],\qquad a_j(\vx)=b_j+\bm W_j\cdot\vx ,
+\end{equation}
+with $U_j$ the unit's own potential, e.g.\ a double well. The joint energy is linear in all parameters. Integrating
+out the hidden units gives the marginal $p_\theta(\vx)\propto\int d\bm y\,e^{-E_\theta/T}=e^{-F_\theta(\vx)/T}$ with
+the free energy
+\begin{equation}
+  F(\vx)=\Ev(\vx)-T\sum_j\log Z_j\big(a_j(\vx)\big),\qquad Z_j(a)=\int dy\,e^{-(U_j(y)-ya)/T}.
+\end{equation}
+$T\log Z_j$ is the cumulant generating function of $y_j$; writing $m_j$, $v_j$, $k_{3,j}$ for the conditional mean,
+variance and third cumulant of $y_j$ given $\vx$,
+\begin{equation}
+  T\partial_a\log Z_j=m_j,\qquad\partial_a m_j=v_j/T,\qquad\partial_a v_j=k_{3,j}/T .
+\end{equation}
+
+\paragraph{Idealisation.} We always integrate the hidden units out exactly. Physically this is the limit of
+hidden units that equilibrate infinitely fast compared with the pixels (Section~\ref{sec:physical}).
+
+\subsection{Ising units}
+For a deep double well with minima at $\pm y_0$, $y_j\to y_0h_j$ with $h_j=\pm1$ ($y_0$ absorbed into $\bm W,b$):
+\begin{equation}
+  Z_j=2\cosh(a_j/T),\qquad m_j=\tanh(a_j/T),\qquad v_j=1-m_j^2,\qquad k_{3,j}=-2m_jv_j .
+\end{equation}
+With $K$ Ising units the model is a mixture of $2^K$ exponentially tilted copies of the visible model,
+\begin{equation}
+  p_\theta(\vx)\propto\sum_{\bm h\in\{\pm1\}^K}\exp\Big(-\big[\Ev(\vx)-\textstyle\sum_jh_ja_j(\vx)\big]/T\Big).
+\end{equation}
+One unit with $\bm W_1$ along the Fisher (LDA) direction separates two classes; $P(h=+1|\vx)=\sigma(2a_1/T)$ is then the
+LDA posterior. So far only $K=1$ has been trained; several units need a symmetry-breaking initialisation, because
+$\bm W=0$ is a degenerate stationary point (Section~\ref{sec:training}).
+
+\subsection{Potts units}
+A Potts unit is \emph{one} hidden unit with $M$ mutually exclusive states $m=1\dots M$ (exactly one active). State
+$m$ has its own couplings to all pixels and its own field:
+\begin{equation}
+  F(\vx)=\Ev(\vx)-T\log\sum_{m=1}^Me^{a_m(\vx)/T},\qquad p_m(\vx)=\frac{e^{a_m/T}}{\sum_ke^{a_k/T}} .
+\end{equation}
+The model is a mixture of $M$ tilted copies of the visible model; each state acts as a prototype. ``Potts 128'' is
+one unit with 128 states, not 128 units. In hardware a Potts unit is an $M$-well oscillator, or $M$ bistable units
+with strong lateral inhibition (winner-take-all); the code idealises it as exactly one-hot.
+
+\subsection{Spring coupling and per-pixel units}
+\paragraph{Spring coupling (\texttt{--quad}).} The input field also contains the squared pixels,
+\begin{equation}
+  a_m(\vx)=b_m+\bm W_m\cdot\vx+\bm Q_m\cdot\vx^{2},\qquad \bm G_m\equiv\grad a_m=\bm W_m+2\bm Q_m\circ\vx .
+\end{equation}
+State $m$ then adds $-Q_{mi}x_i^2$ to pixel $i$'s energy: it changes the pixels' stiffness, so the mixture
+components can differ in width and shape, not only in position. A bilinear coupling alone only shifts the
+components (for a quadratic $\Ev$ exactly), so class-specific shape would otherwise have to come from the
+anharmonic part of $\Ev$.
+
+\paragraph{Per-pixel units (\texttt{--local}).} One Ising unit per pixel, coupled only to its own pixel,
+$a_i=c_i+w_ix_i$, adds $-T\log2\cosh\big((c_i+w_ix_i)/T\big)$: an asymmetric double well per pixel (ink or
+background). ``Potts $M$ + both'' denotes one Potts unit with spring coupling plus the per-pixel units:
+\begin{equation}
+  F=\Ev-T\log\sum_me^{a_m/T}-T\sum_i\log2\cosh\frac{c_i+w_ix_i}{T}.
+  \label{eq:Fboth}
+\end{equation}
+
+\subsection{What the latent units add}
+\paragraph{Mean force and softening.} With $\bm\psi\equiv\grad F$ (the force a clamp must supply to hold the
+pixels), for Ising units
+\begin{equation}
+  \bm\psi=\grad\Ev-\sum_jm_j\bm W_j,\qquad
+  \grad\grad F=\grad\grad\Ev-\frac1T\sum_jv_j\bm W_j\bm W_j^{\!\top},\qquad
+  \Delta F=\Delta\Ev-\frac1T\sum_jv_j\|\bm W_j\|^2 .
+\end{equation}
+The hidden units exert the mean force $\sum_jm_j\bm W_j$ and soften the landscape along $\bm W_j$; near $a_j=0$ a unit
+turns a single well into a double well along $\bm W_j$ where $\|\bm W_j\|^2/T$ exceeds the visible curvature.
+
+\paragraph{A many-body, global variable.} The mode-selection force $W_{1i}\tanh(a_1(\vx)/T)$ on pixel $i$ is a
+nonlinear function of a global projection of all pixels. A two-body energy cannot represent it exactly: its
+forces satisfy $\partial_k\partial_l f_i=0$ for distinct $k,l\neq i$, while the tanh force does not. Expanding,
+$-T\log\cosh(a/T)=-a^2/2T+a^4/12T^3-\dots$ contains products of four distinct pixels. The $a^2$ part is itself a pair
+term; the hidden units add the non-Gaussian many-body remainder. Empirically, adding more pair couplings to the
+paper's model (all pixel pairs) does not reduce 0/1 blends, while one hidden unit does.
+
+\paragraph{A linear hidden mode is not enough.} A harmonic hidden mode $U(y)=\tfrac{k}{2}y^2$ integrates out to
+$-a(\vx)^2/2k$: a rank-one softening, i.e.\ another pair term, never the $\pm\bm W$ mixture. The hidden unit must be
+nonlinear (bistable or multi-well).
+
+%======================================================================================================================
+\section{Training: score matching per slice}\label{sec:training}
+
+\subsection{Objective}
+For $p\propto e^{-F/T}$ the implicit score-matching (Hyv\"arinen) objective of slice $t$ is
+\begin{equation}
+  J_T(\theta)=\E_{\vx\sim p_t}\Big[-\frac{\Delta F}{T}+\frac{\|\grad F\|^2}{2T^2}\Big],\qquad
+  \partial_\theta J_T=\E\Big[-\frac{\partial_\theta\Delta F}{T}+\frac{(\partial_\theta\grad F)\cdot\bm\psi}{T^2}\Big].
+\end{equation}
+It is minimised per slice with Adam on minibatches of 512 fresh samples of $p_t$; the slice result is an
+exponential moving average of the iterates. Because $F$ is nonlinear in the hidden parameters, $J_T$ is no longer
+a convex quadratic; it has gauge symmetries (sign flips, permutations of identical units), and $\bm W=0$ is a
+degenerate stationary point (to second order in $\bm W$ the hidden free energy only adds terms that the visible
+bias and pair couplings absorb). Potts states are therefore initialised from $k$-means prototypes (or found from a
+random start, which also works), and the single Ising unit along the Fisher direction.
+
+\subsection{Visible parameters}
+For $\Ev=\sum_k\theta_k\phi_k$ the form is unchanged, with $\bm\psi$ now including the hidden mean force:
+\begin{equation}
+  \partial_{\theta_k}J_T=\E\Big[-\frac{\Delta\phi_k}{T}+\frac{\grad\phi_k\cdot\bm\psi}{T^2}\Big].
+\end{equation}
+
+\subsection{Ising couplings: a local three-factor rule}
+\begin{align}
+  \partial_{W_{ji}}J_T&=\frac1{T^2}\E\Big[-m_j\psi_i+2v_jW_{ji}+\frac{x_i}{T}\big(k_{3,j}\|\bm W_j\|^2-v_j\,\bm W_j\cdot\bm\psi\big)\Big],\\
+  \partial_{b_j}J_T&=\frac1{T^3}\E\Big[k_{3,j}\|\bm W_j\|^2-v_j\,\bm W_j\cdot\bm\psi\Big].
+\end{align}
+Each update needs, at pixel $i$, its position $x_i$ and clamp force $\psi_i$; at hidden unit $j$, the statistics of
+its own fluctuations ($m_j$; $v_j,k_{3,j}$ follow for Ising units), $\|\bm W_j\|^2$ and the projection
+$\bm W_j\cdot\bm\psi$; and the coupling itself. The projection is the change of $a_j$ when the clamped pixels are
+nudged along $\bm\psi$; because $a_j$ is linear (or quadratic, with $\bm Q$) in $\vx$, a symmetric pair of nudges
+$\pm\varepsilon\bm\psi$ gives it exactly. No free-running negative phase is needed.
+
+\subsection{Potts couplings with spring coupling}
+For the model \eqref{eq:Fboth}, per clamped sample define for state $m$: $p_m$, $\bm G_m$, $s_m=\sum_iQ_{mi}$; for
+the unit: $\bar{\bm G}=\sum_kp_k\bm G_k$, $V=\sum_kp_k\|\bm G_k-\bar{\bm G}\|^2$, $\bar s=\sum_kp_ks_k$; and the scalar
+\begin{equation}
+  c_m=\|\bm G_m-\bar{\bm G}\|^2-V+2T(s_m-\bar s)-(\bm G_m-\bar{\bm G})\cdot\bm\psi .
+\end{equation}
+Then
+\begin{align}
+  \partial_{b_m}J_T&=\frac{\langle p_mc_m\rangle}{T^3},\qquad
+  \partial_{W_{mi}}J_T=\Big\langle p_m\Big[\frac{x_ic_m}{T^3}+\frac{2(G_{mi}-\bar G_i)-\psi_i}{T^2}\Big]\Big\rangle,\\
+  \partial_{Q_{mi}}J_T&=\Big\langle p_m\Big[\frac{x_i^2c_m}{T^3}+\frac{2x_i\big(2(G_{mi}-\bar G_i)-\psi_i\big)}{T^2}+\frac2T\Big]\Big\rangle .
+\end{align}
+Coupler $(m,i)$ needs a state-level scalar ($p_m$, $c_m$) times a pixel signal ($x_i$, $\psi_i$, $\bar G_i$): a
+three-factor rule. The per-pixel units follow the Ising rule with a single coupling. This local rule equals the
+automatic gradient of the training loss to relative differences of $10^{-16}$--$4\cdot10^{-11}$ on trained models:
+every exactly trained model is trained by it, given exact hidden statistics.
+
+\subsection{Contrastive-divergence form}
+Hyv\"arinen's relation between one-step contrastive divergence (CD-1) with a short Langevin release and score
+matching gives $\langle\partial_\theta F(\vx)\rangle-\langle\partial_\theta F(\vx')\rangle=\tfrac{T^2dt}{2}\partial_\theta J_T$,
+i.e.\ a Hebbian term minus the same term after a short release. It trains as well as the exact gradient with exact
+hidden averages, but with sampled hidden states the difference of two independent readouts drowns the $O(dt)$
+signal; force matching is therefore the rule for a device.
+
+%======================================================================================================================
+\section{Training on a device: measured hidden statistics}
+
+\subsection{Plug-in bias}
+A device cannot compute $p_m$ or $m_j$; it reads the hidden units $S$ times while the pixels are clamped and
+averages. Replacing the exact statistics by these sample means $\hat p_m$ (``measured statistics'', $S$ samples or
+\emph{reads} per configuration) gives an unbiased estimate of everything linear in them, but the loss is quadratic
+and its parameter gradient at most cubic in the sample means of one configuration. Hence, over $n$ draws,
+\begin{equation}
+  \E\big[\hat L_n\big]=a+\frac bn+\frac c{n^2},\qquad\text{in particular}\quad \E\big[\hat J_S\big]=J_T-\frac{V}{2ST^2}
+\end{equation}
+for the loss, with $V$ the variance of the hidden force: the plug-in estimate is biased at order $1/S$.
+
+\subsection{Jackknife corrections}
+Split the $S$ draws into halves and quarters and combine the estimates from the same draws:
+\begin{align}
+  \text{first order (jk):}\quad&2\hat L_S-\tfrac12\big(\hat L_{S/2}^{(1)}+\hat L_{S/2}^{(2)}\big)
+     \ \Rightarrow\ \E=a-\frac{2c}{S^2},\\
+  \text{second order (jk2):}\quad&\tfrac83\hat L_S-2\,\overline{\hat L_{S/2}}+\tfrac13\,\overline{\hat L_{S/4}}
+     \ \Rightarrow\ \E=a .
+\end{align}
+(The coefficients of $b/n$ cancel as $\tfrac83-2\cdot2+\tfrac13\cdot4=0$, those of $c/n^2$ as
+$\tfrac83-2\cdot4+\tfrac13\cdot16=0$.) To first order in the fluctuations neither adds noise. On a device this means
+averaging the hidden readouts over one full, two half and four quarter windows. The gradient of the visible
+parameters is linear in the sample means and the same for every order.
+
+\subsection{Optimisers and the loss of hidden states}
+With few samples, a rarely occupied Potts state is rarely visited: its gradient is zero in most steps and a spike
+in the others (unbiased with the jackknife). The optimiser decides whether such a state survives:
+\begin{itemize}
+\item \textbf{Per-element Adam} divides each coupling's gradient by its own running root-mean-square, so a rarely
+  visited state moves at most about $\sqrt\lambda$ as fast as with exact statistics ($\lambda$ = visits per step).
+  States below about one visit per step fall behind and are lost.
+\item \textbf{Plain steps} (one step size per parameter group) lose most states even with exact statistics,
+  because the gradient of a state carries its occupation.
+\item \textbf{Gain per state} (one adaptive step size per hidden state) keeps them with exact statistics but not
+  with measured ones.
+\item \textbf{Visit-count rule} (\texttt{--hidden-norm occupancy}): each state keeps a leaky average of its gradient
+  and a leaky count of its visits; its step is the ratio, under one occupation-weighted step scale per parameter
+  group, clipped so that no parameter moves more than one learning rate per step. Schematically, per state $m$,
+  \begin{equation}
+    \bar g_m\leftarrow\beta\bar g_m+(1-\beta)g_m,\qquad \bar n_m\leftarrow\beta\bar n_m+(1-\beta)\hat p_m,\qquad
+    \Delta\theta_m\propto-\eta\,\mathrm{clip}\Big(\frac{\bar g_m}{\bar n_m\,s},\pm1\Big),
+  \end{equation}
+  with $\beta=0.999$ and $s$ the group scale. Dividing by the visit count removes the occupation factor that makes
+  rare states slow. It needs one counter per state and one leaky average per coupling. The visit counts can be
+  taken from the same $S$ draws as the statistics (\texttt{--occ-same-draws}), so it reads no more than per-element
+  Adam.
+\end{itemize}
+
+%======================================================================================================================
+\section{Generation: the reverse process}
+In reversed time $\tau=5-t$ the sampler integrates
+\begin{equation}
+  d\vx=\big(\vx-2\grad F_{\theta(\tau)}(\vx)\big)\,d\tau+\sqrt{2T}\,d\bm W_\tau ,
+\end{equation}
+i.e.\ the pixels move in the effective potential $2F-\tfrac12\|\vx\|^2$ at temperature $T$. Without hidden units
+this is the visible model with parameters $2\theta-\theta_{\rm lin}$. With hidden units, doubling $\bm W$ and $b$ is
+\emph{not} enough ($-T\log2\cosh(2a/T)\ne-2T\log2\cosh(a/T)$). An exact construction at one temperature is to
+duplicate every hidden unit (two replicas at $T$ with the trained couplings), which gives $-2T\sum_j\log Z_j$
+exactly; alternatives are the doubled energy at hidden temperature $2T$, or an amplified back-action force. In
+simulation the drift $\vx-2\grad F$ is used directly.
+
+%======================================================================================================================
+\section{When the idealisation holds}\label{sec:physical}
+The hidden units must follow their input field. Near $t=0$ the pixel relaxation time in generation is about $0.03$
+(stiffness $2k-1\approx36$), and pixel noise moves $a_j$ by about $T$ in a time $T/(2\|\bm W_j\|^2)$; the hidden
+correlation time must be short against both. At equal temperatures (clamped training, releases, replica
+generation) detailed balance keeps the pixel marginal exactly $e^{-F/T}$ for any hidden correlation time, which
+then only adds friction; with two temperatures it also heats the pixels. Bistability and speed pull against each
+other: a deep barrier gives Ising-like units, a shallow one fast switching (Kramers rate $\propto e^{-\Delta U/T}$);
+the way out is a much higher attempt frequency than the pixels, with barriers of a few $T$. A Potts unit built from
+$M$ bistable units with finite inhibition will sometimes have zero or two units on; whether the model tolerates
+that is untested.
+
+%======================================================================================================================
+\section{Evaluation}
+Each generated sample is scored by three flags, calibrated on real images (training images scored
+leave-one-out): \emph{diverged} (an amplitude above 15 normalised units), \emph{blend} (a 0 and a 1 overlaid: one
+template of each class fits clearly better than any single template; 5\% of real images are flagged) and
+\emph{far} (its nearest training image is farther than for 90\% of real images at $14\times14$; a fixed distance
+at $28\times28$). A sample is \emph{clean} if it is none of these. The \emph{clean yield (50/50)} averages the clean
+share over the two classes among non-diverged samples; real images score 85.7\% ($14\times14$) and 83\%
+($28\times28$). Variety is measured separately by $k$-nearest-neighbour precision and recall ($k=3$) per class.
+All models are sampled from the same 500 initial states and noise paths, so comparisons are paired (McNemar tests;
+paired bootstrap, 95\% intervals).
+
+%======================================================================================================================
+\section{Results so far}\label{sec:results}
+
+\begin{table}[h]\centering\small
+\begin{tabular}{llr}
+\toprule
+problem & model & clean yield \\
+\midrule
+$28\times28$, 0/1 & paper's model (no hidden units) & 31.9\% \\
+                  & one Ising unit with spring & 43.5\% \\
+                  & Potts 128 + both, exact training & 86.3\% \\
+                  & Potts 128 + both, local rule, $S=64$, jackknife & 87.6\% \\
+                  & Potts 128 + both, visit-count rule, $S=16$ & 87.1\% \\
+                  & Potts 512 + both, power 4, exact training & 92.3\% \\
+\midrule
+$14\times14$, 0/1 & Potts 128 + both, exact training & 84.3\% \\
+(8 reads)         & local rule, per-element Adam, $S=8$ & 68.4\% \\
+                  & local rule, visit-count rule, $S=8$, same-draw counts & 81.7\% \\
+\midrule
+$14\times14$, 0/1, power 4 & radius 7 / 3 / 2 & 84.7 / 83.9 / 83.8\% \\
+Potts 128 + both & 8 nearest neighbours, springs only & 81.4\% \\
+exact training   & 8 nearest neighbours, + optomechanical term & 81.1\% \\
+                 & 4 nearest neighbours, springs only & 74.2\% \\
+                 & no pair couplings & 60.0\% \\
+                 & 4 nearest neighbours, springs only, no hidden units & 0\% \\
+\midrule
+$14\times14$, 0/1/2/3 & Potts 512 + both, exact / local ($S=64$, visit-count) & 85.0 / 74.7\% \\
+\bottomrule
+\end{tabular}
+\caption{Main results (one training run per arm; seed-to-seed variation about one point where measured). Real
+images score 83\% ($28\times28$) and 85.7\% ($14\times14$).}
+\end{table}
+
+\begin{itemize}
+\item Hidden units fix the paper model's main failure (0/1 superpositions) and, with enough Potts states and the
+  spring coupling, bring the samples to the level of real images; power 4 matches power 6 from about 128 states.
+\item The score-matching gradient is a local three-factor rule. With measured hidden statistics it needs the
+  jackknife and an optimiser that keeps rare states alive: the visit-count rule beats per-element Adam by 13
+  points at equal reads (8 per configuration), replicated at a second training seed, and with 16 samples matches
+  exact training at $28\times28$.
+\item A much simpler visible model works: nearest-neighbour linear springs (8 neighbours) cost about 3 points; the
+  optomechanical term is not needed. Without hidden units such a model produces no clean digits.
+\item Open: local training on four digits ($-10$ points); quality as a function of the number of Potts states and
+  of Ising units with the simplest visible model (running); several Ising units instead of one Potts unit; finite
+  hidden speed and finite winner-take-all inhibition.
+\end{itemize}
+
+\end{document}
