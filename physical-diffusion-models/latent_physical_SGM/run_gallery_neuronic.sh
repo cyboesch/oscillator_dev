@@ -96,6 +96,25 @@ add S16jk_visit_count_same_draws mnist14_K128_ema_potts_quad_local_S16jk_occsame
 run --problem mnist14 --out ${G}/mnist14_digits01_optimisers --title "14x14, digits 0/1, hidden-unit optimisers" \
     "${SETS[@]}" --nearest S16jk_per_element_Adam,S16jk_visit_count || rc=1
 
+# simpler visible model (power 4, exact training): shorter pair-coupling range (Chebyshev radius r: 8 neighbours at
+# r = 1; vn1: the 4 nearest neighbours), fewer pair terms (lin: springs (x_i - x_j)^2 only; linom: + x_i^2 x_j;
+# none: no pair couplings), with Potts 128 + both or without hidden units (K0)
+SETS=()
+add K0_r7 mnist14_K0_ema_quartic
+add K0_r1 mnist14_K0_ema_quartic_r1
+add K0_vn1_lin mnist14_K0_ema_quartic_vn1_lin
+add Potts128_r7 mnist14_K128_ema_potts_quad_local_quartic
+add Potts128_r3 mnist14_K128_ema_potts_quad_local_quartic_r3
+add Potts128_r2 mnist14_K128_ema_potts_quad_local_quartic_r2
+add Potts128_r1 mnist14_K128_ema_potts_quad_local_quartic_r1
+add Potts128_r1_lin mnist14_K128_ema_potts_quad_local_quartic_r1_lin
+add Potts128_r1_linom mnist14_K128_ema_potts_quad_local_quartic_r1_linom
+add Potts128_vn1_lin mnist14_K128_ema_potts_quad_local_quartic_vn1_lin
+add Potts128_vn1_linom mnist14_K128_ema_potts_quad_local_quartic_vn1_linom
+add Potts128_r1_none mnist14_K128_ema_potts_quad_local_quartic_r1_none
+run --problem mnist14 --out ${G}/mnist14_digits01_simple_visible --title "14x14, digits 0/1, power 4, simpler visible couplings" \
+    "${SETS[@]}" --nearest Potts128_vn1_lin || rc=1
+
 SETS=()
 add K0_no_hidden mnist14_d012_K0_ema
 add Potts128_both mnist14_d012_K128_ema_potts_quad_local_pooled

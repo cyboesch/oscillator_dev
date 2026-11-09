@@ -4,25 +4,70 @@ Branch `latent_physical_SGM`, started 2026-11-06 from `paper_code_v2` (9d89dea).
 
 The idea: give the physical diffusion model K hidden bistable oscillators. They couple to the 784 pixel oscillators and equilibrate much faster than the pixels do. Averaged out, they give the pixels a free-energy landscape with a global, non-Gaussian many-body part, in particular a "which digit" variable that the present two-body energy lacks. The learning rule stays local.
 
-**How to read the numbers.** Each generated sample is put in one category (`blend_check.py`,
-`evaluate_samples.py`; Result 2):
+**Key terms** (every other abbreviation is in the Glossary at the end):
+- **Pixels (visible units):** one Duffing oscillator per pixel x_i, with the paper's energy E_vis = Σ_i [k_lin x_i²/2
+  + k_duff x_i⁴/4 + k_6 x_i⁶/6 + bias_i x_i] + Σ_pairs [c_lin (x_i − x_j)² + c_om x_i² x_j + c_duff (x_i − x_j)⁴/4].
+  The pairs lie within a Chebyshev radius (14 at 28x28: 59% of all pixel pairs; 7 at 14x14). **Power 6** is the
+  paper's x⁶ confinement, **power 4** (`--visible quartic`) uses x⁴ instead. **Springs** (`lin`), the
+  **optomechanical** term (`om`, asymmetric) and the **Duffing pair** term (`duff`) are the three pair terms.
+- **Slice:** the diffusion time t = 5 → 0 is cut into 100 slices; every parameter (visible and hidden) has its own
+  value in each slice.
+- **Hidden units** are averaged out exactly, i.e. assumed infinitely fast (Caveat 1). Three kinds:
+  - **Ising unit:** one bistable unit h = ±1 coupled to all pixels, energy −h (b + W·x + Q·x²). Only one is used so
+    far (K = 1).
+  - **Potts unit (Potts M):** one unit with M states, exactly one active; state m has its own couplings W_m, Q_m,
+    b_m to all pixels, so each state acts as a prototype. "Potts 128" is one unit with 128 states, not 128 units. In
+    hardware: M bistable units with winner-take-all inhibition, or one M-well oscillator.
+  - **Per-pixel units** (`--local`): one bistable unit per pixel, coupled only to its own pixel.
+  - **Spring coupling** (`--quad`, Q): the hidden unit also couples to the squared pixels, so each state changes the
+    pixels' stiffness. **"both"** = spring coupling + per-pixel units. **K** = number of Ising units or Potts
+    states; K = 0 is the paper's model.
+- **Exact vs measured statistics:** the learning rule needs hidden-unit averages (e.g. each Potts state's
+  probability given an image). "Exact" computes them analytically; "measured" estimates them from **S** samples
+  of the hidden unit per training image, as a device would (**S16** = 16 samples). **Reads** = hidden readouts per
+  training image and step.
+- **Jackknife (jk):** plugging S-sample averages into the (quadratic) loss biases the gradient by order 1/S; the
+  combination 2·L(all S samples) − mean L(the two halves) cancels that order. **jk2** (second order) also uses the
+  four quarters and cancels order 1/S² as well.
+- **Optimisers for the hidden couplings:** **per-element Adam** (one adaptive step size per coupling), **plain
+  steps** (one per parameter group), **gain per state** (one per hidden state), **visit-count rule** (each state's
+  step divided by how often the samples visit that state).
+- **Effective states:** exp(entropy) of the Potts states' average occupation; **lost states:** average occupation
+  below 1e-32 at t = 0.
+- **Recall / precision** (k-nearest-neighbour, k = 3, per class against real images): the share of real images
+  covered by the samples (variety) / the share of samples that look like real images (fidelity).
+- **base / ext:** two fixed sets of 500 sampling trajectories (start and noise), the same for every model, so
+  models are compared **paired** (McNemar tests, paired bootstrap; [a, b] = 95% interval). `ext` was never used to
+  choose a model.
+
+**How to read the numbers.** Each generated sample is scored by three flags (`blend_check.py`,
+`evaluate_samples.py`; Result 2). "Real images" below are the 1,000 probes: training images scored leave-one-out,
+not unseen test digits (Caveat 6).
 - diverged: an amplitude above 15 normalised units (6.2% of the paper's samples at 28x28; none for the Potts +
   both models of Results 7 and 8);
-- blend: a 0 and a 1 overlaid (adding the other digit's template explains the sample much better than one template
-  alone; the threshold lets 5% of real images count as blends);
-- far: its nearest training image is farther away than for 90% of held-out real images (14x14; at 28x28 a fixed
-  distance, 4.84, from an earlier study);
+- blend: a 0 and a 1 overlaid: one 0 template plus one 1 template fit the sample clearly better than any single
+  template (a squared residual more than 25% smaller at 14x14, 16% at 28x28; the threshold lets 5% of real images
+  count as blends);
+- far: its nearest training image is farther away than for 90% of real images (14x14). At 28x28 a fixed distance,
+  4.84, inherited from an earlier study, which 13.2% of the real images exceed;
 - clean: none of these. Its class (0 or 1) comes from a linear 0-vs-1 discriminant.
 
-**Clean yield (50/50)** is the share of clean samples among the 0s and among the 1s, averaged, so drawing more of
-the easier 1s does not help. It is a pass/fail test per sample: a recognisable digit, not an overlay, about as
-close to some training image as real images are. The thresholds are set on real images, so held-out real images
-score 85.7% at 14x14 and 83% at 28x28, and a model can score above them by drawing only typical digits. It says
-nothing about variety (recall of the real images' variety, `coverage_samples.py`) or copying (the copy check), and
-a pixel distance misses small flaws (a faint ghost, a small gap). So I also look at the images
+The flags overlap: a far blend counts in both rates, and the raw far rate also counts diverged samples (the
+paper's 35.6% far at 28x28 includes its 6.2% diverged).
+
+**Clean yield (50/50)** is the share of clean samples among the non-diverged 0s and among the non-diverged 1s,
+averaged, so drawing more of the easier 1s does not help. Diverged samples are left out, not counted as failures
+(the paper's 31.9% at 28x28 is over its 469 non-diverged samples). It is a pass/fail test per sample: not
+diverged, not an overlay, and about as close to some training image as real images are. Recognisability itself is
+not tested (a sample between the two classes still passes if it is close to a training image). The blend cut, and
+at 14x14 the far cut, are set on real images, so real images score 85.7% at 14x14 and 83% at 28x28 (lower there
+because of the inherited far cut), and a model can score above them by drawing only typical digits. For three and
+four digits the same tests are generalised to C classes (`evaluate_multiclass.py`). Clean yield says nothing about
+variety (recall of the real images' variety, `coverage_samples.py`) or copying (the copy check), and a pixel
+distance misses small flaws (a faint ghost, a small gap). So I also look at the images
 (`out/latent_physical_SGM/gallery/INDEX.md`; what I saw is in Result 13).
 
-**Status (2026-11-09, 08:00).**
+**Status (2026-11-09, 10:55).**
 - **Hidden units improve the samples a lot, and more hidden states help, up to about 256** (Results 7 and 8).
   - At 14x14, 512 states do not differ from 256 on independent trajectories and overshoot towards the training set.
     At 28x28, 512 states with power 4 give the best samples so far: 92.3% clean yield, 1.6% blends, recall of real
@@ -48,7 +93,8 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
   - **New overnight (2026-11-08/09): a device-friendly optimiser for the hidden couplings.** Steps with one step
     size per parameter group lose most hidden states, even with exact statistics. A per-state step divided by the
     state's own visit count (the "visit-count rule": one visit counter per state, one leaky average per coupling)
-    keeps them:
+    keeps most of them (with 2-64 measured draws 17-41 of the 128 states are still lost, against 2 with exact
+    statistics):
     - at 14x14 0/1, 16 hidden reads per configuration (S = 8 plus 8 for the visit counts) give 81.6% clean yield,
       against 75.6% for per-element Adam with the same 16 reads (+6.0 [+2.9, +9.2]); exact statistics 84.3%;
     - 8 reads (S = 4) still give 82.2%, +6.6 [+3.4, +9.8] over per-element Adam with twice the reads. With 4 reads
@@ -60,11 +106,21 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
       from exact training (-1.5 [-4.0, +1.1]) but below S = 256 (-2.8 [-5.3, -0.2]);
     - on three digits, S = 64 with the rule is indistinguishable from exact training (80.1% vs 81.1%, -1.0
       [-4.2, +2.2]), against 73.1% for per-element Adam with S = 64;
-    - **the visit counts can come from the same draws as the statistics, so the rule needs no extra reads:** S = 8
-      with same-draw counts (8 reads) gives 81.7%, the same as with fresh counts (+0.1 [-2.7, +2.8]) and +6.1
-      [+2.8, +9.4] over per-element Adam with twice the reads (S = 16);
+    - **the visit counts can come from the same draws as the statistics at no measurable cost (S = 8 and 16, one
+      run each), so the rule need not read more than per-element Adam:** S = 8 with same-draw counts (8 reads)
+      gives 81.7%, indistinguishable from fresh counts (+0.1 [-2.7, +2.8]); S = 16 gives 83.0% (+1.6 [-1.0, +4.3]
+      against fresh counts; -1.4 [-4.2, +1.4] against exact statistics);
+    - **at exactly equal reads (8 per configuration and step) the rule beats per-element Adam by 13 points:**
+      81.7% against 68.4% (+13.3 [+9.9, +16.8]). Per-element Adam with 8 draws keeps 14 effective states (16 used,
+      112 of 128 lost), the rule 84 (98 used, 30 lost);
+    - **the main comparison replicates at a second training seed** (new k-means prototypes and minibatch stream):
+      S = 8 with the rule and same-draw counts against S = 16 with per-element Adam, +7.1 [+3.9, +10.1] (seed 1:
+      +6.1). Between seeds the same arm moves by 1.1 and 0.2 points;
     - by eye it removes most of the broken strokes of few-sample training (gallery `mnist14_digits01_optimisers/`).
-    - Running: S = 16 with same-draw counts, 28x28 and four digits.
+    - **at full size (28x28, Potts 128 + both, 0/1) S = 16 with the rule matches exact training:** 87.1% against
+      86.3% (+0.9 [-1.4, +3.2]) and against S = 64 with per-element Adam (87.6%, -0.5 [-3.1, +2.1]); the paper's
+      model 31.9% (evaluation 4202042; S = 16 with per-element Adam still being evaluated, 4202044);
+    - Running: four digits.
   - **At full size (28x28) S = 64 hidden samples with the jackknife train as well as exact statistics:** clean yield
     87.6% vs 86.3% ([-1.3, +4.0]), against 31.9% for the paper's model. S = 256 gives the same (86.9%, +0.6
     [-1.5, +2.6] against exact).
@@ -73,7 +129,8 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
   - On a device the hidden statistics are measured from S hidden samples per clamped configuration. That needs a
     bias correction (jackknife) and enough samples. At 14x14, clean yield is 75.6% / 81.1% / 85.6% for S = 16 / 64 /
     256 with the jackknife. Exact statistics give 84.3% (S = 256 vs exact: +1.3, [-1.5, +4.0]); K = 0 gives 38.6%.
-  - What a smaller S costs is hidden states. A rarely occupied state is not visited by the samples, gets no
+  - With per-element Adam, what a smaller S costs is hidden states (with the visit-count rule it is not; below). A
+    rarely occupied state is not visited by the samples, gets no
     gradient, and is lost during or just after the consolidation (slices 10-40, t ≈ 4.5-3.0). Exact training
     brings such states back.
     - A jackknifed run then samples like an exactly trained model with as many states as it kept (S = 64: 74 of 128
@@ -117,13 +174,20 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
         reads.** S = 2 (4 reads) does not: 73.7%, 8.5 points below S = 4 ([-11.8, -5.2]), the level of S = 16 with
         per-element Adam (-1.9, [-5.3, +1.4]); its 0s fail (clean yield of the 0s 52% vs 68%), and only 29 of its
         102 used states win 0s.
+      - With this rule fewer draws do not cost states: S = 4 keeps 95 effective states, more than S = 16 (78) or 64
+        (86), yet its clean yield is no higher and its samples lie farther from the training set (median
+        nearest-image distance 1.424, against 1.359 at S = 16; one run each).
       - **With 32 reads it does what 256 reads do for per-element Adam:** S = 16 with the rule against 16 replicates
         of S = 16, 81.4% vs 80.9% (+0.5, [-2.0, +3.0]). So it removes the visit part of the cost.
-      - The gap to exact statistics that remains at S = 4-16 (2.2-3.0 points; S = 16: [-5.6, -0.3], S = 8: [-5.6,
-        +0.1], p = 0.06; S = 4: [-5.2, +0.8], p = 0.15) does not grow with the 16x larger O(1/S²) bias and 4x the
-        noise variance of S = 4, so it is probably neither mainly bias nor mainly noise. The second-order jackknife
-        agrees: with the visit-count rule it adds +1.5 at S = 16 ([-1.1, +4.1], p = 0.25; 82.9%, -1.5 [-4.0, +1.1]
-        against exact statistics, -2.8 [-5.3, -0.2] against S = 256), against +5.1 with per-element Adam (above).
+      - **A gap to exact statistics remains at S = 4-16, and it does not depend on S.** Against the rule's own
+        exact-statistics run (85.6%): -3.5 at S = 4 ([-6.4, -0.5]), -4.0 at S = 8 ([-6.9, -1.1]), -4.3 at S = 16
+        ([-6.9, -1.6]) (paired evaluation 4203290); against exact statistics with per-element Adam (84.3%) it is
+        2.2-3.0 points (significant only at S = 16). S = 4 against S = 16, both with the rule: +0.8 ([-2.1, +3.7]).
+        The gap does not grow with the 16x larger O(1/S²) bias and 4x the noise variance of S = 4, so it is
+        probably neither mainly bias nor mainly noise; what it is remains open. The second-order jackknife does not
+        decide it: with the rule it adds +1.5 at S = 16 ([-1.1, +4.1], p = 0.25; about half of the 3.0-point gap to
+        exact statistics with per-element Adam as a point estimate; 82.9%, -1.5 [-4.0, +1.1] against that run, -2.8
+        [-5.3, -0.2] against S = 256), against +5.1 with per-element Adam (above).
       - S = 64: 83.4% against 81.1% (+2.3, [-0.4, +5.1], not significant); 86 effective states against 62. Against 4
         replicates of S = 64 (85.7%): -2.3 ([-5.0, +0.5], not significant).
       - **Three digits (0/1/2), S = 64: 80.1% against 73.1% with per-element Adam (+7.1, [+4.1, +10.1]),
@@ -133,9 +197,10 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
         62 with per-element Adam and 86 with the visit-count rule), as expected if it moves a rarely visited state
         as slowly as per-element Adam does (step sizes not measured). In clean yield (82.8%) it is indistinguishable
         from both (-0.6 [-3.4, +2.2] against the visit-count rule).
-      - Some states are still lost, mostly between slices 20 and 40, during and just after the consolidation: at
-        t = 0, 34 of 128 at S = 8, 41 at S = 16 and 31 at S = 64, against 2 with exact statistics; fewer draws do
-        not lose more (17 at S = 4, 26 at S = 2; one run each). A nominally 10
+      - Some states are still lost: at S = 8-64 mostly between slices 20 and 40, during and just after the
+        consolidation (at t = 0, 34 of 128 at S = 8, 41 at S = 16 and 31 at S = 64, against 2 with exact
+        statistics). S = 4 and 2 lose fewer, and later: 17 and 26 at t = 0 (one run each), of which only 7 and 8
+        are below 1e-8 at slice 40 (job 4202874). A nominally 10
         times (in effect about 5 times) longer visit window loses more states, not fewer (50 vs 41; one run). That
         does not support "too few visits per window", though the longer window also lags a falling occupation, so
         it does not rule it out; the mechanism is open.
@@ -168,10 +233,18 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
   - at 28x28: S = 16 with the visit-count rule, and with per-element Adam as its baseline (4202038/39); the best
     model (Potts 512 + both, power 4) trained locally with S = 64 and the visit-count rule (4202207), against its
     exact training (92.3%);
-  - 0/1 at 14x14 (Result 10): S = 16 with the visit counts taken from the same draws as the statistics
-    (`--occ-same-draws`: S reads per configuration and step instead of 2S; 4202939; S = 8 done: as good as fresh
-    counts);
+  - 0/1 at 14x14 (Result 10): S = 4 with same-draw visit counts (4 reads; 4203231);
   - 0/1/2/3 at 14x14: Potts 512 + both, the visit-count rule with S = 64 (4202164), against exact training (85.0%).
+  - **A simpler visible model** (new goal, 2026-11-09: bistable, slowly evolving pixels coupled only to their
+    nearest neighbours, ideally by linear springs only, with the expressivity moved into the hidden units). 0/1 at
+    14x14, power 4, exact training, Potts 128 + both, against the existing radius-7 power-4 run:
+    - step 1: pair-coupling radius 3, 2 and 1 (3,600 / 1,950 / 702 pairs instead of 11,760), and no hidden units at
+      radius 1 (4203390-93; evaluation 4203394);
+    - step 2 (new options `--pair-terms` and `--neighbourhood von_neumann`; test 19, job 4203459, passed: the
+      default path is bit-identical at power 4 and 6, the neighbour lists match brute force, dropped pair terms stay
+      exactly zero in every slice, bad options are refused): 8 or 4 nearest
+      neighbours with springs only, or springs plus the asymmetric optomechanical term x_i² x_j; no pair couplings
+      at all; and the 4-neighbour springs-only model without hidden units (4203467-72; evaluation 4203473).
 - **Idealised, not yet tested** (Caveats):
   - the hidden units are averaged out exactly (infinitely fast; Potts states are exactly one-hot);
   - the nudge measurements the local rule needs are not simulated.
@@ -186,7 +259,7 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
 | `run_latent_checks_neuronic.sh` | CPU Slurm job running both scripts (~1 min of compute); submit from this folder |
 | `results/<check>_4190135/` | copies of the reports and metrics of job 4190135 |
 | `latent_model.py` | problems (mnist28, mnist14, gauss2_8), the paper's schedules, dense visible energy, hidden free energies (Ising, Potts, spring `Q`, per-pixel units) with analytic gradients and Laplacians, the score-matching loss, reference initialisations (Fisher, k-means prototypes, per-pixel) |
-| `train_latent.py` | the paper's training loop (jitted scan), with hidden units: `--K --hidden ising/potts --quad --local --visible sextic/quartic --select best/ema --seed --proto-init perclass/pooled/random --hidden-fixed --problem`; local training: `--hidden-samples S --hidden-jackknife` (force matching with measured hidden statistics), `--hidden-jackknife-order 2` (second-order jackknife: Richardson over S, S/2 and S/4 of the same draws, also removes the O(1/S²) bias), `--hidden-samples-late --hidden-samples-switch` (another S from a given slice on), `--hidden-floor` (homeostatic revival of unvisited Potts states; diverges), `--hidden-norm group` (hidden parameters with one step size per group instead of per-element Adam: the closest tested rule to plain gradient steps), `--hidden-norm state` (one Adam gain per hidden state), `--hidden-norm occupancy --occ-beta` (a per-state step from the state's own occupation, one step scale per group), `--occ-same-draws` (its visit counts from the draws of the gradient statistics instead of fresh draws), `--hidden-replicates R` (diagnostic: R independent S-draw estimates averaged), `--hidden-rule cd1 --cd1-dt --cd1-releases --cd1-hidden-samples` (CD-1, with exact or measured hidden statistics) |
+| `train_latent.py` | the paper's training loop (jitted scan), with hidden units: `--K --hidden ising/potts --quad --local --visible sextic/quartic --radius R --neighbourhood chebyshev/von_neumann --pair-terms all/none/lin,om,duff --select best/ema --seed --proto-init perclass/pooled/random --hidden-fixed --problem`; local training: `--hidden-samples S --hidden-jackknife` (force matching with measured hidden statistics), `--hidden-jackknife-order 2` (second-order jackknife: Richardson over S, S/2 and S/4 of the same draws, also removes the O(1/S²) bias), `--hidden-samples-late --hidden-samples-switch` (another S from a given slice on), `--hidden-floor` (homeostatic revival of unvisited Potts states; diverges), `--hidden-norm group` (hidden parameters with one step size per group instead of per-element Adam: the closest tested rule to plain gradient steps), `--hidden-norm state` (one Adam gain per hidden state), `--hidden-norm occupancy --occ-beta` (a per-state step from the state's own occupation, one step scale per group), `--occ-same-draws` (its visit counts from the draws of the gradient statistics instead of fresh draws), `--hidden-replicates R` (diagnostic: R independent S-draw estimates averaged), `--hidden-rule cd1 --cd1-dt --cd1-releases --cd1-hidden-samples` (CD-1, with exact or measured hidden statistics) |
 | `sample_latent.py` | reverse SDE (SRA1, the paper's settings) from a run or the paper checkpoint; trajectory sets `base` / `ext`; `--snapshots` |
 | `evaluate_samples.py` | blend check, far / copy checks, class-resolved and 50/50 rates, texture, per-class pixel statistics, McNemar and paired-bootstrap tests, example grids |
 | `coverage_samples.py` | k-NN precision / recall, spread, distinct nearest images and centroid distance per class |
@@ -197,7 +270,8 @@ a pixel distance misses small flaws (a faint ghost, a small gap). So I also look
 | `test_latent.py` | 53 checks, all passing in job 4195804: 47 against the paper's code, the paper-checkpoint samples of job 4187940 and autodiff, plus 6 sanity checks |
 | `summarize_training.py`, `analyze_snapshots.py` | per-sample validation-loss comparisons; hidden-unit commitment along trajectories |
 | `run_train_latent_neuronic.sh`, `run_sample_latent_neuronic.sh`, `run_pipeline_neuronic.sh`, `run_small_pipeline_neuronic.sh` | GPU Slurm jobs: training, sampling, a generic train-sample-evaluate pipeline, and the K = 0 / 1, best / EMA pipeline for mnist14 or gauss2_8; submit from this folder |
-| `run_test_latent_neuronic.sh`, `run_test{2,...,9,9b,10,...,18}_latent_neuronic.sh` | GPU Slurm jobs: the validation rounds (`test_latent.py` plus smoke trainings and regressions of the exact path; e.g. round 6, job 4197121: `--hidden-fixed`; round 10, job 4197238: the jackknife; round 11: CD-1 with measured hidden statistics; round 12, job 4199405: replicates and the S switch; round 13, job 4199443: the homeostatic floor; round 14, job 4199773: `--hidden-norm group`; round 15, job 4200507: the first `--hidden-norm occupancy`; round 16, job 4200653: `--hidden-norm state` and the redesigned occupancy; round 17, job 4202647: `--hidden-jackknife-order 2`; round 18, job 4202937: `--occ-same-draws`) |
+| `HARDWARE_NOTES.md` | how buildable hidden units coupled to all pixels are (electronics, photonics, mechanics), with checked references |
+| `run_test_latent_neuronic.sh`, `run_test{2,...,9,9b,10,...,19}_latent_neuronic.sh` | GPU Slurm jobs: the validation rounds (`test_latent.py` plus smoke trainings and regressions of the exact path; e.g. round 6, job 4197121: `--hidden-fixed`; round 10, job 4197238: the jackknife; round 11: CD-1 with measured hidden statistics; round 12, job 4199405: replicates and the S switch; round 13, job 4199443: the homeostatic floor; round 14, job 4199773: `--hidden-norm group`; round 15, job 4200507: the first `--hidden-norm occupancy`; round 16, job 4200653: `--hidden-norm state` and the redesigned occupancy; round 17, job 4202647: `--hidden-jackknife-order 2`; round 18, job 4202937: `--occ-same-draws`) |
 | `run_evaluate_neuronic.sh`, `run_summary_neuronic.sh`, `run_cpu_neuronic.sh` | CPU Slurm jobs: `evaluate_samples.py`, `summarize_training.py`, and any other script of this folder (e.g. `coverage_samples.py`) |
 | `run_gpu_neuronic.sh` | GPU Slurm job running any script of this folder (e.g. `cd1_check.py`) |
 | `submit_sample_eval.sh` | login-node helper that only calls sbatch: samples 500 `base` trajectories from finished full-size runs and evaluates them with the paper baseline |
@@ -445,8 +519,8 @@ held-out probes (for recall: one half of them against the other). Potts 128 + bo
       50% 1s);
     - 0.6% near-copies (128 states 0%; real 5%).
     - At 14x14 this pull became an overshoot at 512 states (Result 8).
-  - **Running:** 512 states with power 4 (`P512_ema_quad_local_quartic`), to see whether the gain saturates or
-    overshoots.
+  - 512 states with power 4 (`P512_ema_quad_local_quartic`): done; the best model so far (Result 9: 92.3% clean
+    yield, not significantly better than 256 states).
 
 - **Potts 32 + both fixes superposition and divergences, halves "far" and removes most of the excess of 1s.** It draws
   52% 1s on `base` and 55% pooled with `ext` (paper 68% and 71%; real images 50%). Against the paper on the same
@@ -850,12 +924,14 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
       - clean yield 80.9% against 75.6% for S = 16 with one estimate (+5.3, [+2.1, +8.6]), but 4.7 points below
         S = 256 ([-7.5, -2.1]); far 17.2% vs 21.6% and 12.0% (McNemar p = 0.005 and 7e-5);
       - 53 effective states at t = 0 by `inspect_states.py` (52 in the training log; 63 used), against 30 for
-        S = 16 with one estimate and 81 for S = 256. They crowd earlier than every other jackknifed or exact run (81
-        at slice 10, 39 at slice 20); only the plug-in runs crowd earlier;
+        S = 16 with one estimate and 81 for S = 256. They crowd earlier than every other jackknifed or exact run with
+        per-element Adam (81 at slice 10, 39 at slice 20); only the plug-in runs, and S = 4 and 2 with the
+        visit-count rule (45 and 28 at slice 10), crowd earlier;
       - so at S = 16 visits (and noise) explain about half of the cost. The rest is not visits or noise; the
         jackknife's O(1/S²) bias was the obvious candidate. With per-element Adam the second-order jackknife
         confirms that the bias costs about as much (+5.1 at the same 16 reads, below); with the visit-count rule
-        it matters less (S = 4-16 flat; order 2 adds +1.5, not significant).
+        its effect is smaller and not significant (S = 4-16 flat; order 2 adds +1.5 [-1.1, +4.1]); whether it is
+        really smaller is untested (one run per arm).
     - **Many draws matter most early** (slices 0-29, which include the consolidation; pipeline 4199409): S = 256
       up to slice 29 and S = 16 afterwards matches S = 256 throughout and exact training in clean yield, far and
       blends with about a third of the draws, but keeps fewer states (a switch at slice 10 would be needed to tie
@@ -991,8 +1067,9 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
           ([-2.0, +3.0]); far (50/50) 16.8% vs 17.7%; 78 effective states against 53 (paired evaluation 4202614;
           states 4201368 and 4199413). So with 32 reads the visit-count rule does what per-element Adam does with
           256: the extra noise of 16 draws costs nothing measurable here. The rest, 4-5 points against S = 256,
-          matches what the 16 replicates leave (-4.7), which pointed to the bias of 16 draws; but S = 8 does as well
-          as S = 16 (below), which argues against bias;
+          matches what the 16 replicates leave (-4.7), which pointed to the bias of 16 draws, and with per-element
+          Adam the second-order jackknife bears that out (+5.1, below); with this rule, though, S = 8 does as well as
+          S = 16 (below), which argues against bias;
         - at S = 64 it stays below 4 replicates of S = 64 (83.4% vs 85.7%, -2.3 [-5.0, +0.5], p = 0.10, not
           significant). If real, its cause is open: probably not the noise of 64 draws alone, since at S = 16 the
           rule matches 16 replicates; the replicate arm also uses per-element Adam.
@@ -1030,7 +1107,7 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
           the same 16 hidden reads per configuration for the statistics as order 1):**
           - **per-element Adam: 80.7% against 75.6% with order 1 (+5.1, [+2.3, +8.0], p = 2e-4)**; far (50/50)
             18.1% vs 22.4% (-4.4, [-7.1, -1.7]). The same as 16 replicates of S = 16 with order 1 (80.9%, -0.2
-            [-3.2, +2.9]; far 17.4% vs 17.2%), which read 16 times as much. Still 3.6 points below exact
+            [-3.2, +2.9]; far (50/50) 18.1% vs 17.7%), which read 16 times as much. Still 3.6 points below exact
             statistics and 4.9 below S = 256 (unpaired differences). Precision of the 1s 0.81 (order 1 0.73,
             exact 0.88); median nearest-image distance 1.360 (order 1 1.384); 41 effective states at t = 0 (48
             used, 80 lost below 1e-32), against 30 with order 1;
@@ -1041,10 +1118,14 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
             S = 256 1.295); 73 effective states at t = 0 (82 used, 46 lost), against 78 (41 lost) with order 1;
           - so the bias that order 2 removes, small next to the noise in any one step (test 17), does add up over
             training with per-element Adam, by about as much as visits and noise do (16 replicates). With the
-            visit-count rule it is at most a small part of what remains, as the flat S = 4-16 results suggested.
-            Why the two optimisers differ here is open;
-          - by eye (gallery job 4202946; Result 13): order 2 repairs some of per-element Adam's broken 1s; the two
-            order-2 models draw nearly the same 100 samples.
+            visit-count rule order 2 adds +1.5, not significant: as a point estimate about half of the 3.0 points
+            left against exact statistics, with an interval from none of that gap to all of it, so this run neither
+            shows nor rules out a bias share; the flat S = 4-16 results argue against a large one. Whether the two
+            optimisers really respond differently is untested (+5.1 [+2.3, +8.0] against +1.5 [-1.1, +4.1]; the
+            intervals overlap and each arm is one run);
+          - by eye (gallery job 4202946; Result 13): order 2 repairs some of per-element Adam's broken 1s; the
+            order-2 model with the visit-count rule draws nearly the same 100 samples as the one with per-element
+            Adam.
       - **Lost states remain.** At t = 0 the visit-count rule leaves 41 (S = 16) and 31 (S = 64) of the 128 states
         below 1e-32 mean occupation, against 2 with exact statistics.
         - Most drop below 1e-8 between slices 20 and 40: states below 1e-8 at slices 20 / 30 / 40 are 1 / 27 / 38 at
@@ -1073,33 +1154,41 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
           effective at slice 10, 41 at slice 20, against 102 and 49) and recovers more later (one run each).
         - So with the visit-count rule the clean yield is flat from S = 8 to 16 (81.6%, 81.4%; 16 replicates of
           S = 16 with per-element Adam: 80.9%) and a little higher at S = 64 (83.4%). The 4x larger O(1/S²) bias and
-          twice the noise variance (√2 the noise) of S = 8 cost nothing measurable, which argues against bias as the
-          main remaining cost at S = 16 with this rule; the second-order jackknife agrees (+1.5, not significant;
-          above).
-      - **S = 4 does as well as S = 8 and 16; S = 2 does not** (pipelines 4202870/71, paired evaluation 4202872,
-        coverage 4202873, states 4202874; one run each):
+          twice the noise variance (√2 the noise) of S = 8 cost nothing measurable in clean yield, which argues
+          against bias as the main remaining cost at S = 16 with this rule; the second-order jackknife is
+          inconclusive (+1.5, not significant; above).
+      - **S = 4 does as well as S = 8 and 16 in clean yield; S = 2 does not** (pipelines 4202870/71, paired
+        evaluations 4202872 and 4203290, coverage 4202873, states 4202874; one run each):
         - S = 4 (8 reads per configuration and step): clean yield 82.2%; against S = 8 with the rule +0.5 ([-2.1,
-          +3.3]); against S = 16 with per-element Adam +6.6 ([+3.4, +9.8], p < 2e-4) at half its reads; against
-          exact statistics -2.2 ([-5.2, +0.8], p = 0.15). Far (50/50) 16.2%; blends 2.0%; precision of the 1s 0.86;
-          recall of real 0s 0.74 (S = 8: 0.78; exact 0.77; subsampling spread ±0.04);
+          +3.3]); against S = 16 with the rule +0.8 ([-2.1, +3.7]); against S = 16 with per-element Adam +6.6
+          ([+3.4, +9.8], p < 2e-4) at half its reads; against exact statistics with per-element Adam -2.2 ([-5.2,
+          +0.8], p = 0.15), with the rule -3.5 ([-6.4, -0.5], p = 0.02). Far (50/50) 16.2%; blends 2.0%; precision
+          of the 1s 0.86; recall of real 0s 0.74 (S = 8: 0.78; exact statistics with per-element Adam 0.77;
+          subsampling spread ±0.04);
         - S = 2 (4 reads): clean yield 73.7%, 8.5 points below S = 4 ([-11.8, -5.2]) and below exact statistics by
           10.7 ([-14.2, -7.2]); indistinguishable from S = 16 with per-element Adam (-1.9, [-5.3, +1.4]) at a
           quarter of its reads. Far (50/50) 24.0%; blends 5.0% (S = 4: 2.0%, McNemar p = 0.008); clean yield of the
           0s 52.3% against 68.4% for S = 4 (1s: 95.0% vs 96.0%); precision of the 1s 0.81, recall of real 0s 0.71;
         - the median nearest-image distance grows steadily as S falls, also where the clean yield is flat: exact
-          1.260, S = 64 1.308, 16 1.359, 8 1.385, 4 1.424, 2 1.558 (held-out real images 1.165). So the samples
-          drift away from the training images with fewer draws (copies stay at 0-0.6%);
-        - states: fewer draws do not lose more. At t = 0, S = 4 keeps 95 effective states (111 used as argmax, 17
-          below 1e-32), S = 2 84 (102 used, 26 lost), against 82 and 78 at S = 8 and 16 (34 and 41 lost). Both
-          crowd earlier (45 and 28 effective states at slice 10, against 86 at S = 8 and 102 at S = 16) and recover
-          more later. That argues further against "too few visits" as the cause of the states lost at S = 8-16;
-        - allocation: the fewer the draws, the fewer states win the 0s at t = 0 (states used as argmax, 0s / 1s):
-          exact 65 / 61, S = 64 50 / 47, S = 16 42 / 45, S = 8 42 / 52, S = 4 40 / 71, S = 2 29 / 73. At S = 2 the
-          0s, the class with more variety, get under a third of the states, and the 0s are what fails;
+          statistics with per-element Adam 1.260, then with the rule S = 64 1.308, 16 1.359, 8 1.385, 4 1.424, 2
+          1.558 (real images 1.165). So the samples drift away from the training images with fewer draws (copies
+          stay at 0-0.6%);
+        - states: S = 4 and 2 lose fewer states than S = 8-16, though S = 2 loses more than S = 4 (one run each).
+          At t = 0, S = 4 keeps 95 effective states (111 used as argmax, 17 below 1e-32), S = 2 84 (102 used, 26
+          lost), against 82 and 78 at S = 8 and 16 (34 and 41 lost). Both crowd earlier (45 and 28 effective states
+          at slice 10, against 86 at S = 8 and 102 at S = 16) and recover more later; most of their lost states drop
+          out after slice 40 (only 7 and 8 are below 1e-8 there). That argues further against "too few visits" as
+          the cause of the states lost at S = 8-16;
+        - allocation (states used as argmax at t = 0, 0s / 1s, all with the visit-count rule): exact statistics
+          65 / 61, S = 64 50 / 47, S = 16 42 / 45, S = 8 42 / 52, S = 4 40 / 71, S = 2 29 / 73. The 0s' share
+          falls with S (52, 52, 48, 45, 36, 28%), mostly because the 1s take more states; the 0s' count is flat from
+          S = 16 to 4 and drops only at S = 2. At S = 2 the 0s, the class with more variety, get under a third of
+          the states, and the 0s are what fails (one run; whether one causes the other is untested);
         - so with the visit-count rule the clean yield is flat from S = 4 to 16 (82.2, 81.6, 81.4%) and breaks
           between 4 and 2. S = 4 has 16 times the O(1/S²) bias and 4 times the noise variance of S = 16 at no
-          measurable cost, so the 2-3 points that S = 4-16 leave against exact statistics are probably neither
-          mainly bias nor mainly noise. What they are is open.
+          measurable cost in clean yield (its samples do lie farther from the training set), so the 3.5-4.3 points
+          that S = 4-16 leave against the rule's exact-statistics run are probably neither mainly bias nor mainly
+          noise. What they are is open.
       - **Visit counts from the same draws** (`--occ-same-draws`): the rule as above, but each state's visits are
         counted among the S draws the gradient statistics already use (`latent_model.loss_draw_occupation`), so it
         reads S hidden states per configuration and step instead of 2S. Test 18 (job 4202937) passed: the counts
@@ -1113,10 +1202,24 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
           ([-5.6, +0.2], p = 0.07). Far (50/50) 16.7%; precision of the 1s 0.87, recall of real 0s 0.76; median
           nearest-image distance 1.365 (fresh counts 1.385). 84 effective states at t = 0 (98 used, 30 lost; 0s /
           1s 42 / 56), against 82 (94 used, 34 lost; 42 / 52) with fresh counts.
-        - So a numerator and a denominator from the same draws do not bias the step measurably here, and the rule
-          reads no more hidden states than per-element Adam: S per configuration and step. At equal reads (8) it
-          gives 81.7% where per-element Adam with twice the reads gives 75.6%.
-        - Running: S = 16 with same-draw counts (4202939; evaluation 4202940 with both runs).
+        - So taking the numerator and the denominator from the same draws costs nothing measurable in the trained
+          model here (one run; the bias of the step itself was not measured), and the rule then reads no more
+          hidden states than per-element Adam: S per configuration and step. With 8 reads it gives 81.7%, where
+          per-element Adam with twice the reads gives 75.6%.
+        - **S = 16 with same-draw counts** (pipeline 4202939; evaluation 4202940, coverage 4202941, states 4202942):
+          83.0% against 81.4% with fresh counts (+1.6, [-1.0, +4.3]) and 84.3% with exact statistics (-1.4, [-4.2,
+          +1.4]); 74 effective states at t = 0 (83 used, 45 lost).
+        - **Equal reads, 8 per configuration and step** (pipeline 4203228; evaluation 4203232, coverage 4203233,
+          states 4203234): per-element Adam with S = 8 gives 68.4%, the rule with same-draw counts 81.7% (+13.3,
+          [+9.9, +16.8]; far (50/50) 29.6% vs 16.7%). Per-element Adam loses almost every state: 14 effective at
+          t = 0 (16 used, 112 lost), against 84 (98 used, 30 lost). With per-element Adam, halving the draws from
+          16 to 8 costs 7.2 points ([-10.4, -4.2]); with the rule it costs nothing measurable.
+        - **Second training seed** (`--seed 2`: new k-means prototypes and minibatch stream; pipelines 4203229/30,
+          evaluation 4203235, coverage 4203236, states 4203237): S = 8 with the rule and same-draw counts 82.8%
+          against S = 16 with per-element Adam 75.8% (+7.1, [+3.9, +10.1]; seed 1: +6.1 [+2.8, +9.4]). Each arm
+          moves little between seeds (+1.1 [-1.4, +3.7] and +0.2 [-2.7, +3.0]); 86 against 33 effective states at
+          t = 0. Against exact training at seed 2 (86.1%) the rule is -3.2 ([-6.2, -0.2]), as at seed 1. So the main
+          comparison replicates, and seed-to-seed variation is about a point here.
       - Also running: at 28x28, S = 16 with the visit-count rule against per-element Adam (4202038/39).
       - By eye (gallery job 4201995, `mnist14_digits01_optimisers/`; Result 13): plain steps and S = 16 with
         per-element Adam break strokes and put a detached blob on top of slanted 1s; the visit-count rule with S = 16
@@ -1515,30 +1618,45 @@ model), and `nearest_<model>.png` (samples above their nearest training images).
     slanted 1 of column 14 a heavy top and turns the small 0 of column 15 into a 1 with a bulge. S = 2 changes more:
     besides these two, it draws 0s where every other model draws a 1 (column 3, a thin, faint 0; column 12, an
     oval 0) and a 1 with a gap near the top (column 11).
-  - `S4jk_visit_count.png`: mostly clean 0s and 1s, about as many flawed samples as with S = 16 (by my count 7-9:
-    the scribble at row 3 column 3 and the bent 1 at row 6 column 9 are the same trajectories that S = 16 gets
-    wrong; a 0 with a bar through it, row 6 column 7; 1s broken into two pieces, rows 3 and 9). New: a
-    saturated sample, row 9 column 4, a mostly white square with black holes.
+  - `S4jk_visit_count.png`: mostly clean 0s and 1s, about as many flawed samples as with S = 16 (by my count 7-9,
+    nearly all on trajectories that S = 16 also gets wrong: the scribble at row 3 column 3, the bent 1 at row 6
+    column 9, the 0 with a bar through it at row 6 column 7, which every model draws, and the 1s broken into two
+    pieces in rows 3 and 9). New with S = 4: a saturated sample, row 9 column 4, a mostly white square with black
+    holes.
   - Saturated samples counted over all 500 trajectories of every 14x14 0/1 run (jobs 4203167 and 4203221; ink
     fraction, pixels above 0.5, over 0.35, which 6 of 11,846 training images reach; a threshold chosen after seeing
     the sample):
-    - they are an old failure of weaker models, not new: K = 0 has 1-4 per 500 (besides its 11-19 divergences),
-      one Ising unit up to 5, Potts 8-32 without the per-pixel units 2-4. They recur on the same few trajectories
-      (for example 3, 24, 28, 215, 408), so some starts and noise paths are hard;
-    - their largest amplitudes are 11-12 normalised units, against 3.1-3.3 for the brightest training pixels and
-      the divergence threshold of 15: near-divergent samples, which the evaluation counts as far, not diverged;
+    - they are an old failure of weaker models, not new: K = 0 at power 6 has 1-4 per 500 (besides its 11-19
+      divergences; none at power 4), one Ising unit up to 5, and Potts 8-32 without spring or per-pixel units 2-4
+      (Potts 8 with spring alone: 0). They recur on the same few trajectories (for example 3, 28, 215 and 408), so
+      some starts and noise paths are hard;
+    - the four whose amplitude was printed (job 4203167) peak at 11.2-11.8 normalised units, and every saturated
+      sample exceeds 8 units (job 4203221), against 3.1-3.3 for the brightest training pixels and the divergence
+      threshold of 15: near-divergent samples, which the evaluation counts as far, not diverged;
     - among the Potts 128 + both trainings they appear with the plug-in estimates without the jackknife (S = 4: 2,
       S = 16: 1), with CD-1 (1), and in 4 of the 9 visit-count runs (exact statistics 1, S = 2: 1, S = 4: 2, S = 8
       with same-draw counts: 1; 5 of 4,500 samples), but in none of the 18 runs with exact or jackknifed statistics
-      and per-element Adam, plain steps or one gain per state (0 of 9,000; one-sided p ≈ 0.004 for all 5 falling
-      among the visit-count runs by chance). Samples above 8 units, a threshold-free version: 10 of 4,500 against
-      1 of 9,000;
-    - so the visit-count rule lets through a little of a failure that the best trainings remove: rare (0-0.4% per
-      run), but a real difference from per-element Adam.
+      and per-element Adam, plain steps or one gain per state (0 of 9,000);
+    - this is not yet shown to come from the optimiser. 4 of the visit-count rule's 5 come from S = 2, 4 and 8,
+      where no jackknifed per-element Adam run exists, and plug-in per-element Adam at S = 4 has 2 as well. At
+      matched settings (exact statistics, S = 16 and 64) it is 1 of 2,500 against 0 of 9,000 (p ≈ 0.2). Above 8
+      units, a check that avoids the ink cut but is also chosen after looking, it is 3 of 2,500 (all from the
+      exact-statistics run) against 1 of 9,000 (p ≈ 0.03). The cut was set after seeing the S = 4 sample, so
+      none of these p-values is a planned test;
+    - so small S (and perhaps the visit-count rule) lets through a little of a failure that the best trainings
+      remove: rare, 0-0.4% per run.
   - `S2jk_visit_count.png`: clearly worse, as the metrics say, and the flaws are mostly 0s and things that are
-    neither digit: scribbles or smudges at rows 3, 7, 9 and 10 (row 3 column 3, row 7 columns 3 and 9, row 9
-    columns 5 and 7, row 10 columns 3 and 6), a 0 open on one side (row 7 column 4), 0s with a bar through them,
-    and more broken 1s; about 12-15 of 100 by my count. The 1s that are fine look like those of S = 4.
+    neither digit: scribbles or smudges at row 7 columns 3 and 9, row 9 column 7 and row 10 columns 3 and 6
+    (besides the row 3 column 3 scribble of S = 16, 8 and 4 and the row 9 column 5 speckle of every model), a 0
+    open on one side (row 7 column 4), 0s with a bar through them, and more broken 1s; about 12-15 of 100 by my
+    count. The 1s that are fine look like those of S = 4.
+  - `S8jk_visit_count_same_draws.png` (visit counts from the same 8 samples; gallery job 4203212, 08:08) against
+    `S8jk_visit_count.png` (fresh counts): nearly the same samples, trajectory by trajectory (4 of 100 differ). It
+    draws a near-divergent white sample at row 2 column 7 where the fresh-count run draws a slanted 0; at row 2
+    column 5 the thick 1 with a bulge that S = 4 and 2 also draw (compare.png column 15), where the fresh-count run
+    draws a small 0 with a stroke inside; and a speckled 1 with a flag and a base at row 9 column 7 where the
+    fresh-count run draws a clean slanted 1. The fresh-count run draws the same kind of speckled shape at row 7
+    column 9, where the same-draw run draws a thin 0.
 - **The second-order jackknife at S = 16 (gallery job 4202946, 08:00; rows `S16jk2_per_element_Adam`,
   `S16jk2_visit_count`):**
   - `S16jk2_per_element_Adam.png` against `S16jk_per_element_Adam.png` (order 1, same trajectories): several of
@@ -1547,7 +1665,7 @@ model), and `nearest_<model>.png` (samples above their nearest training images).
     gets bent instead (row 6 column 9, the trajectory that the visit-count rule also bends). By my count about 8-10
     flawed samples of 100, against 11-12 with order 1; the 0s look the same.
   - `S16jk2_visit_count.png` is nearly identical to `S16jk2_per_element_Adam.png`, trajectory by trajectory (it
-    keeps the flat 0 at row 5 column 9), as the paired difference (+2.1, not significant) suggests.
+    keeps the flat 0 at row 5 column 9); as for most hidden-unit models, the trajectory decides the digit.
 - **Three digits with the visit-count rule (gallery job 4202168, 03:42; `compare.png` regenerated by job 4202921 at
   05:55, after an older gallery job had overwritten it without this row; `mnist14_digits012/`):**
   - `compare.png`: the S = 64 visit-count model draws the same digit in the same pose as exact training (Potts
@@ -1655,8 +1773,10 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
    The seeds differ by up to about 2 points (50/50 far: -2.0 and -1.5 at 14x14, -2.1 at 28x28; none significant).
    Most p-values cover trajectory noise only.
 5. **Model selection and multiple testing.**
-   - About 40 variants (about 15 at 28x28, 25 at 14x14) were compared on the `base` trajectories of their size, with
-     many McNemar tests.
+   - Far more than 40 variants were compared on the `base` trajectories of their size, with many McNemar tests
+     and paired bootstraps: about 15 at 28x28; at 14x14 over 55 sample sets for 0/1 (31 of them Potts 128 + both
+     training variants), plus 0/1/2, 0/1/2/3, 1/4 and 4/9. Borderline single results (p around 0.01-0.05) should
+     be read with that in mind.
    - Confirmed on the independent `ext` trajectories:
      - 28x28: Potts 32 + both against the paper (Result 7), and its power-4 version (Result 9);
      - 14x14: K = 0 and Potts + both with 32, 128, 256 and 512 states, and power 4 at 32 and 128 states (Results 8
@@ -1672,7 +1792,7 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
      `mean_max_p` and `eff_states` omit the spring term Q·x² of the input field and are wrong. For example they show
      25 effective states at t = 0 for 28x28 Potts 128 + both, where the correct value is 112. Training was not
      affected; use `inspect_states.py`.
-7. **Hardware cost.** Per time slice, on top of the visible model's 545,566 parameters:
+7. **Hardware cost** (how buildable global hidden units are, platform by platform, with references: `HARDWARE_NOTES.md`). Per time slice, on top of the visible model's 545,566 parameters:
    - Potts 32 + both adds 51,776 parameters (9.5%) and a 32-way winner-take-all;
    - Potts 128 + both adds 202,400 (37%) and a 128-way one;
    - Potts 256 + both adds 403,232 (74%) and a 256-way one.
@@ -1693,38 +1813,47 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
    visit counts can come from the same S draws as the statistics at no measurable cost (S = 8), so it reads no
    more than per-element Adam.
    - Test it at 28x28 (S = 16, and Potts 512 + both with S = 64, running) and on four digits (S = 64 running).
-   - Why S = 2 starves the 0s of states (29 of 102), while S = 4 does not break; whether a per-class view of the
-     visit counts (or a minimum step) keeps the allocation balanced at S = 2.
+   - Why at S = 2 the states recovered after the consolidation go mostly to the 1s (0s / 1s 23 / 22 at slice 20,
+     29 / 73 at t = 0), whether that is why its 0s fail, and why S = 4 does not break; whether a minimum step (or
+     a label-free balance of the visit counts) keeps the allocation balanced at S = 2.
    - Visit counts from the draws of the statistics (half the reads, `--occ-same-draws`, test 18 passed): S = 8 as
      good as fresh counts (81.7% vs 81.6%); S = 16 running (4202939). Next: same-draw counts in the 28x28 and
      multi-digit runs, and S = 4 with same-draw counts (4 reads).
-   - The states it still loses (34-41 of 128 at S = 8-16; 17 at S = 4): a longer visit window does not help (it
-     loses more), and fewer draws do not lose more.
+   - The states it still loses (34-41 of 128 at S = 8-16; 17 at S = 4, 26 at S = 2): a longer visit window does
+     not help (it loses more), and S = 4 and 2 lose fewer than S = 8-16.
      Untested: many reads only during consolidation (with per-element Adam, S = 256 up to slice 29 and then 16
      matched S = 256 in clean yield, paired -0.8 [-3.1, +1.6], but lost states right after the switch, 71 vs 81
      effective at t = 0; and at S = 16 a third of the visit-count rule's lost states drop out after slice 30).
-   - The 2-3-point gap to exact statistics at S = 4-16 is neither mainly bias (the second-order jackknife adds
-     +1.5, not significant) nor mainly noise (S = 4 as good as 16); what it is remains open. With per-element Adam
-     the bias does matter (+5.1 from order 2). Untested: order 2 with fewer draws under the visit-count rule
-     (S = 4 or 8), and whether order 2 and replicates add up for per-element Adam.
+   - The gap to exact statistics at S = 4-16 (3.5-4.3 points against the rule's own exact-statistics run,
+     significant at S = 4, 8 and 16; flat in S) is probably neither mainly bias nor mainly noise: S = 4, with 16
+     times the O(1/S²) bias and 4 times the noise variance of S = 16, does as well in clean yield (+0.8 [-2.1,
+     +3.7]; one run each). The second-order jackknife's +1.5 at S = 16 is not significant and does not decide it.
+     With per-element Adam the bias does matter (+5.1 from order 2). What the gap is remains open. Untested: order
+     2 with fewer draws under the visit-count rule (S = 4 or 8), and whether order 2 and replicates add up for
+     per-element Adam.
    - The per-pixel units already train with one step size per group in the visit-count runs (only the Potts
      couplings get the per-state rule), and those runs match per-element Adam. Still to check: no Adam-like global
      scale at all (a fixed learning-rate schedule), and the visible couplings (per-element Adam in every run).
-3. **Hardware realism, at 14x14 first:**
+3. **A simpler visible model, with the expressivity in the hidden units** (running, Status): power 4 (already
+   shown to work with 128+ states, Result 9), pixel pairs coupled only to their nearest neighbours, springs only or
+   springs plus the optomechanical term. Then, one step at a time: more Potts states (256, 512) at the smallest
+   coupling range that holds up, watching near-copies; whether the trained pixel potentials are bistable (double
+   wells) and whether that can be imposed; 28x28; local training with the visit-count rule.
+4. **Hardware realism, at 14x14 first:**
    - replace the M-state Potts unit by M bistable units with finite lateral inhibition, and find how strong it must be;
    - simulate the hidden dynamics explicitly, at finite speed (now they are averaged out exactly);
    - model the nudge measurements of the force-matching rule with readout noise (DESIGN §2.1: symmetric nudges are
      exact otherwise);
    - CD-1 would become usable with hidden readouts that stay correlated across the release; that needs the explicit
      hidden dynamics above.
-4. **Variety.** The samples are more typical than real images; the most varied class is under-covered (28x28 0s:
+5. **Variety.** The samples are more typical than real images; the most varied class is under-covered (28x28 0s:
    recall 0.55-0.61 vs 0.89; 14x14 2s: 0.72 with 256 states vs 0.88). Options:
    - more states (they add variety at 28x28 and on 0/1/2 up to at least 256);
    - frozen couplings, which keep more variety (28x28: recall of real 0s 0.59 vs 0.38), combined with a learned
      spring, which adds clean yield (untested combination);
    - low-rank Potts-gated pair couplings, so that each state carries its own covariance, not only its own mean and
      per-pixel widths.
-5. **More classes and full size:** four digits need 512 states at 14x14 (Result 14). Next all ten digits at 14x14
+6. **More classes and full size:** four digits need 512 states at 14x14 (Result 14). Next all ten digits at 14x14
    (about 1,000-2,000 states by that count, or a second Potts unit), and three or four digits at 28x28.
-6. **Seeds:** a second training seed of the local-training runs (S = 256 with the jackknife) and of 28x28 Potts 256 +
+7. **Seeds:** a second training seed of the local-training runs (S = 256 with the jackknife) and of 28x28 Potts 256 +
    both.

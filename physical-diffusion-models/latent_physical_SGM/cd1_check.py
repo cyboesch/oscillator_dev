@@ -85,7 +85,7 @@ def main():
     with open(os.path.join(run_dir, "config.json")) as f:
         cfg = json.load(f)
     K, hidden, local = cfg["K"], cfg.get("hidden", "ising"), cfg.get("local", False)
-    prob = lm.make_problem(cfg.get("problem", "mnist28"), cfg.get("radius"))
+    prob = lm.make_problem(cfg.get("problem", "mnist28"), cfg.get("radius"), cfg.get("neighbourhood", "chebyshev"))
     data, n = prob["data"], prob["n"]
     T = lm.TEMP
     vis = lm.DenseVisible(prob["conn"], n)

@@ -55,7 +55,7 @@ def load_params(run):
     th = np.load(os.path.join(run_dir, "params_history.npy"))
     hid = np.load(os.path.join(run_dir, "hidden_history.npz"))
     prov = {"params_sha256": lm.sha256_file(os.path.join(run_dir, "params_history.npy")), "hidden": hidden,
-            "radius": cfg.get("radius")}
+            "radius": cfg.get("radius"), "neighbourhood": cfg.get("neighbourhood", "chebyshev")}
     if "wl" in hid.files:
         prov["local"] = (hid["wl"], hid["bl"])
     if "Q" in hid.files:
@@ -64,7 +64,7 @@ def load_params(run):
 
 
 def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="ising", local=None, quad=None,
-               radius=None):
+               radius=None, neighbourhood="chebyshev"):
     n_theta = theta_hist.shape[1]
     K = W_hist.shape[1]
     grid, r0 = lm.problem_geometry(problem)
@@ -77,7 +77,7 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
         parts += [local[0], local[1]]
     stacked = np.concatenate(parts, axis=1)
     interp = interpolate_parameters(jnp.asarray(stacked), jnp.asarray(lm.forward_time_pts()))
-    conn = lm.connectivity(grid, radius)
+    conn = lm.connectivity(grid, radius, neighbourhood)       # the run's neighbourhood (config, default chebyshev)
     _, unflatten = lm.paper_theta_layout(conn.shape[0], n)
     if 4 * n + 3 * conn.shape[0] != n_theta:
         raise ValueError(f"parameter count {n_theta} does not match problem {problem}")
@@ -135,7 +135,8 @@ def main():
           f"set {args.set}, n {args.n}", flush=True)
 
     drift, diffusion = make_drift(theta_hist, W_hist, b_hist, args.sampler, problem, prov.get("hidden", "ising"),
-                                  prov.pop("local", None), prov.pop("quad", None), prov.get("radius"))
+                                  prov.pop("local", None), prov.pop("quad", None), prov.get("radius"),
+                                  prov.get("neighbourhood", "chebyshev"))
     knots = jnp.asarray(np.sort(lm.T_FORWARD - lm.forward_time_pts())[1:-1])
     n_save = 11 if args.snapshots else 2
     grid, _ = lm.problem_geometry(problem)

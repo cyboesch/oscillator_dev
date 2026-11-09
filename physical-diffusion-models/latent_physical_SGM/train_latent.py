@@ -37,6 +37,10 @@ take); state: one root-mean-square per hidden state (scale_by_adam_per_state; a 
 each Potts state divides a leaky average of its gradient by a leaky average of its own occupation, over one
 occupation-weighted step scale per group (OccupancyTransform; a per-state learning rate from the state's visit count);
 --occ-same-draws counts the visits among the draws of the gradient statistics instead of fresh draws.
+Option --pair-terms (default all): which visible pair-coupling groups exist, a comma list of lin (c_lin (x_i - x_j)^2),
+om (c_om x_i^2 x_j, optomechanical) and duff (c_duff (x_i - x_j)^4 / 4), or none; the others start at zero and are
+held at exactly zero after every step. Option --neighbourhood von_neumann: couple only pairs within Manhattan distance
+--radius (radius 1: the 4 nearest neighbours) instead of Chebyshev distance.
 Option --hidden-rule cd1: the hidden parameters are trained with the local CD-1 short-release rule of DESIGN 2 instead
 of the exact gradient (release length --cd1-dt, or kappa^2 T / S per slice; --cd1-releases per sample).
 --cd1-hidden-samples S measures the hidden statistics of the CD-1 terms from S sampled hidden states per released
@@ -105,6 +109,13 @@ def parse():
     ap.add_argument("--radius", type=int, default=None,
                     help="Chebyshev radius of the visible pair couplings instead of the problem's default (mnist28 14, "
                          "mnist14 7); grid - 1 couples all pairs")
+    ap.add_argument("--neighbourhood", choices=list(lm.NEIGHBOURHOODS), default="chebyshev",
+                    help="von_neumann: couple only the pairs within Manhattan distance --radius (radius 1: the 4 "
+                         "nearest neighbours) instead of Chebyshev distance (radius 1: 8 neighbours)")
+    ap.add_argument("--pair-terms", default="all",
+                    help="visible pair-coupling groups that exist: 'all' (default), 'none', or a comma list of lin "
+                         "(c_lin (x_i - x_j)^2), om (c_om x_i^2 x_j) and duff (c_duff (x_i - x_j)^4 / 4); the others "
+                         "start at zero and are held at exactly zero")
     ap.add_argument("--hidden-fixed", action="store_true",
                     help="hold the hidden couplings at the closed-form reference of each slice (Fisher or prototype "
                          "W*, b*; per-pixel w*, c*) and train only the visible parameters. Not with --quad (no "
@@ -280,8 +291,10 @@ class OccupancyTransform:
 
 def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sextic", n_pairs=None,
                  cd1_grad=None, cd1_releases=1, loss_key=False, floor=0.0, floor_samples=0, hidden_norm="element",
-                 occ_beta=0.999, occ_same_draws=False):
+                 occ_beta=0.999, occ_same_draws=False, zero_slices=()):
     """Jitted scan of n training steps, identical in effect to the paper's training_step loop.
+    zero_slices (--pair-terms): slices of the flat visible parameters set to exactly zero after every step (dropped
+    pair-coupling groups); empty by default, which leaves every step unchanged.
 
     Carry: (params, adam_state, key, step, best_params, best_loss, best_epoch, ema_params). best_* implement the
     paper's slice result (the post-update iterate at the lowest pre-update mini-batch loss); ema_params is an
@@ -322,6 +335,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         kd, cd = lm.kduff_slice(n_vis), lm.cduff_slice(n_vis, n_pairs)
 
     def project(theta):
+        for s in zero_slices:             # --pair-terms: dropped pair-coupling groups stay exactly zero
+            theta = theta.at[s].set(0.0)
         if visible == "sextic":           # the paper's constraint
             return theta.at[k6].set(jnp.maximum(theta[k6], lm.K6_FLOOR))
         theta = theta.at[k6].set(0.0)
@@ -453,6 +468,9 @@ def main():
                          "0 < --occ-beta < 1")
     if args.occ_same_draws and (args.hidden_norm != "occupancy" or args.hidden_samples < 1):
         raise ValueError("--occ-same-draws needs --hidden-norm occupancy and --hidden-samples S > 0")
+    pair_terms = lm.parse_pair_terms(args.pair_terms)          # raises on an invalid list
+    if args.neighbourhood != "chebyshev" and args.radius is None:
+        raise ValueError("--neighbourhood von_neumann needs an explicit --radius")
     if args.hidden_norm == "state" and (args.K < 1 or args.hidden_fixed):
         raise ValueError("--hidden-norm state needs trained hidden units (--K >= 1, not --hidden-fixed)")
     if args.hidden_rule == "cd1" and (args.hidden_fixed or not (args.K > 0 or args.local) or args.cd1_releases < 1
@@ -485,6 +503,7 @@ def main():
         "hidden_samples_late": args.hidden_samples_late, "hidden_samples_switch": args.hidden_samples_switch,
         "hidden_floor": args.hidden_floor, "hidden_norm": args.hidden_norm, "occ_beta": args.occ_beta,
         "hidden_jackknife_order": args.hidden_jackknife_order, "occ_same_draws": args.occ_same_draws,
+        "pair_terms": ",".join(pair_terms) if pair_terms else "none", "neighbourhood": args.neighbourhood,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -497,7 +516,8 @@ def main():
                 "cd1_hidden_samples": 0, "hidden_replicates": 1,
                 "hidden_samples_late": 0, "hidden_samples_switch": 0,
                 "hidden_floor": 0.0, "hidden_norm": "element", "occ_beta": 0.999,
-                "hidden_jackknife_order": 1, "occ_same_draws": False}   # runs started before these options existed
+                "hidden_jackknife_order": 1, "occ_same_draws": False,
+                "pair_terms": "duff,lin,om", "neighbourhood": "chebyshev"}   # runs started before these options existed
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -523,12 +543,12 @@ def main():
         return
     log(logf, f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; job {os.environ.get('SLURM_JOB_ID', 'manual')}; "
               f"jax {jax.__version__}; devices {jax.devices()}; code {code_sha}; config "
-              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws')})}"
+              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood')})}"
               + (f"; cd1 kappa {args.cd1_kappa}, dt {args.cd1_dt}, releases {args.cd1_releases}, "
                  f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else ""))
 
     # ---- data -------------------------------------------------------------------------------------------------
-    prob = lm.make_problem(args.problem, args.radius)
+    prob = lm.make_problem(args.problem, args.radius, args.neighbourhood)
     data, labels, n_vis = prob["data"], prob["labels"], prob["n"]
     if args.cls == "none":
         data_train, labels_train = data, labels
@@ -543,6 +563,9 @@ def main():
     theta0, _ = lm.paper_theta_layout(vis.P, n_vis)
     if args.visible == "quartic":
         theta0 = lm.quartic_initial_theta(theta0, n_vis, vis.P)
+    zero_slices = lm.dropped_pair_slices(n_vis, vis.P, pair_terms)    # --pair-terms: groups held at exactly zero
+    for s in zero_slices:
+        theta0 = theta0.at[s].set(0.0)
     K = args.K
     taus = lm.forward_time_pts()
     lr_v = lm.lr_schedule()
@@ -559,7 +582,7 @@ def main():
     run, adam = build_runner(loss_fn, data_train, n_vis, args.ema_steps, args.visible, vis.P,
                              cd1_grad=cd1_grad, cd1_releases=args.cd1_releases, loss_key=args.hidden_samples > 0,
                              floor=args.hidden_floor, floor_samples=args.hidden_samples, hidden_norm=args.hidden_norm,
-                             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws)
+                             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices)
     run_late = None
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
         run_late, _ = build_runner(
@@ -567,7 +590,7 @@ def main():
                          jackknife=jk, replicates=args.hidden_replicates),
             data_train, n_vis, args.ema_steps, args.visible, vis.P, loss_key=True,
             floor=args.hidden_floor, floor_samples=args.hidden_samples_late, hidden_norm=args.hidden_norm,
-            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws)
+            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices)
 
     state_cls = None
     if K == 1 and args.hidden == "ising":

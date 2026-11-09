@@ -57,7 +57,7 @@ def main():
             continue
         pname = cfg.get("problem", "mnist28")
         if pname not in probs:
-            probs[pname] = lm.make_problem(pname, cfg.get("radius"))
+            probs[pname] = lm.make_problem(pname, cfg.get("radius"), cfg.get("neighbourhood", "chebyshev"))
         prob = probs[pname]
         data, labels, grid = prob["data"], prob["labels"], prob["grid"]
         clean_px = np.asarray(data) * prob["std"] + prob["mean"]

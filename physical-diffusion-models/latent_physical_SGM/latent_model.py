@@ -144,9 +144,21 @@ def sha256_file(path):
 # ---------------------------------------------------------------------------------------------------------------
 # Visible model
 # ---------------------------------------------------------------------------------------------------------------
-def connectivity(grid=GRID, radius=N_NEIGHBOUR_COUPLINGS):
-    """Sorted unique (i, j), i < j, pairs within Chebyshev distance `radius` (default: the paper's 28x28, 14)."""
-    return np.asarray(create_2d_square_lattice_connectivity(grid_size=grid, n_neighbour_couplings=radius))
+NEIGHBOURHOODS = ("chebyshev", "von_neumann")
+
+
+def connectivity(grid=GRID, radius=N_NEIGHBOUR_COUPLINGS, neighbourhood="chebyshev"):
+    """Sorted unique (i, j), i < j, pairs within Chebyshev distance `radius` (default: the paper's 28x28, 14).
+    neighbourhood = "von_neumann": only the pairs within Manhattan distance `radius` (a subset of the Chebyshev
+    list; radius 1 = the 4 nearest neighbours of each pixel)."""
+    conn = np.asarray(create_2d_square_lattice_connectivity(grid_size=grid, n_neighbour_couplings=radius))
+    if neighbourhood == "chebyshev":
+        return conn
+    if neighbourhood != "von_neumann":
+        raise ValueError(f"neighbourhood must be one of {NEIGHBOURHOODS}, not {neighbourhood!r}")
+    ri, ci = np.divmod(conn[:, 0], grid)
+    rj, cj = np.divmod(conn[:, 1], grid)
+    return conn[np.abs(ri - rj) + np.abs(ci - cj) <= radius]
 
 
 def paper_theta_layout(n_pairs, n=N):
@@ -176,6 +188,38 @@ def kduff_slice(n=N):
 
 def cduff_slice(n, n_pairs):
     return slice(3 * n + 2 * n_pairs, 3 * n + 3 * n_pairs)
+
+
+def clin_slice(n, n_pairs):
+    return slice(3 * n, 3 * n + n_pairs)
+
+
+def com_slice(n, n_pairs):
+    return slice(3 * n + n_pairs, 3 * n + 2 * n_pairs)
+
+
+# The three pair-coupling groups of the visible energy, by name (--pair-terms):
+#   lin  c_lin (x_i - x_j)^2   (linear spring),   om  c_om x_i^2 x_j   (optomechanical, asymmetric),
+#   duff c_duff (x_i - x_j)^4 / 4   (Duffing pair term).
+PAIR_TERMS = {"lin": clin_slice, "om": com_slice, "duff": cduff_slice}
+
+
+def parse_pair_terms(spec):
+    """'all' / 'none' / a comma list of lin, om, duff -> sorted tuple of kept pair-coupling groups."""
+    spec = spec.strip().lower()
+    if spec == "all":
+        return tuple(sorted(PAIR_TERMS))
+    if spec == "none":
+        return ()
+    terms = tuple(sorted({t.strip() for t in spec.split(",") if t.strip()}))
+    if not terms or any(t not in PAIR_TERMS for t in terms):
+        raise ValueError(f"pair terms must be 'all', 'none' or a comma list of {sorted(PAIR_TERMS)}, not {spec!r}")
+    return terms
+
+
+def dropped_pair_slices(n, n_pairs, kept):
+    """Slices of the flat visible parameters of the pair-coupling groups NOT in `kept` (held at exactly zero)."""
+    return tuple(PAIR_TERMS[t](n, n_pairs) for t in sorted(PAIR_TERMS) if t not in kept)
 
 
 K4_FLOOR = 0.01                  # quartic visible energy (--visible quartic): k_duff >= 0.01, c_duff >= 0, k_6 = 0
@@ -238,10 +282,11 @@ def toy_patterns(grid=8):
     return ring.ravel(), bar.ravel()
 
 
-def make_problem(name, radius=None):
-    """Returns dict(name, grid, n, radius, conn, data (jnp, normalised), labels (np, 1 = class 1), mean, std).
+def make_problem(name, radius=None, neighbourhood="chebyshev"):
+    """Returns dict(name, grid, n, radius, neighbourhood, conn, data (jnp, normalised), labels (np, 1 = class 1),
+    mean, std).
     radius: Chebyshev coupling radius of the visible pairs instead of the problem's default (PROBLEM_GEOMETRY);
-    grid - 1 couples all pairs.
+    grid - 1 couples all pairs. neighbourhood "von_neumann": Manhattan instead of Chebyshev distance (connectivity).
 
     mnist28  : the paper's problem (11,846 images, radius 14).
     mnist14  : the same images, 2x2 average-pooled to 14x14 before the paper's noise and normalisation (radius 7).
@@ -282,8 +327,9 @@ def make_problem(name, radius=None):
         raise ValueError(name)
     if radius is not None:                   # explicit coupling radius (the data do not depend on it)
         radius = int(radius)
-    conn = connectivity(grid, radius)
-    return {"name": name, "grid": grid, "n": grid * grid, "radius": radius, "conn": conn, "data": data,
+    conn = connectivity(grid, radius, neighbourhood)
+    return {"name": name, "grid": grid, "n": grid * grid, "radius": radius, "neighbourhood": neighbourhood,
+            "conn": conn, "data": data,
             "labels": np.asarray(labels, dtype=np.int64), "mean": mean, "std": std,
             "digits": digits if digits is not None else ([0, 1] if name.startswith("mnist") else None)}
 
