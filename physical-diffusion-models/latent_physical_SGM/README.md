@@ -1519,14 +1519,22 @@ model), and `nearest_<model>.png` (samples above their nearest training images).
     the scribble at row 3 column 3 and the bent 1 at row 6 column 9 are the same trajectories that S = 16 gets
     wrong; a 0 with a bar through it, row 6 column 7; 1s broken into two pieces, rows 3 and 9). New: a
     saturated sample, row 9 column 4, a mostly white square with black holes.
-  - Saturated samples counted over all 500 trajectories (job 4203167; ink fraction, pixels above 0.5, over 0.35,
-    which 6 of 11,846 training images reach): 2 at S = 4, 1 at S = 2 and 1 with the visit-count rule and exact
-    statistics; none in the other 14 models of this comparison (S = 8, 16 and 64 with the visit-count rule, and
-    every run with per-element Adam, plain steps or one gain per state). Their largest amplitudes are 11-12
-    normalised units, against about 3 for full ink and the divergence threshold of 15, so they are near-divergent
-    and the evaluation counts them as far, not diverged. Rare (0.2-0.4% per model), but so far seen only with the
-    visit-count rule (4 of 3,500 samples against 0 of 5,000; one-sided p ≈ 0.03, with a threshold chosen after
-    seeing the sample).
+  - Saturated samples counted over all 500 trajectories of every 14x14 0/1 run (jobs 4203167 and 4203221; ink
+    fraction, pixels above 0.5, over 0.35, which 6 of 11,846 training images reach; a threshold chosen after seeing
+    the sample):
+    - they are an old failure of weaker models, not new: K = 0 has 1-4 per 500 (besides its 11-19 divergences),
+      one Ising unit up to 5, Potts 8-32 without the per-pixel units 2-4. They recur on the same few trajectories
+      (for example 3, 24, 28, 215, 408), so some starts and noise paths are hard;
+    - their largest amplitudes are 11-12 normalised units, against 3.1-3.3 for the brightest training pixels and
+      the divergence threshold of 15: near-divergent samples, which the evaluation counts as far, not diverged;
+    - among the Potts 128 + both trainings they appear with the plug-in estimates without the jackknife (S = 4: 2,
+      S = 16: 1), with CD-1 (1), and in 4 of the 9 visit-count runs (exact statistics 1, S = 2: 1, S = 4: 2, S = 8
+      with same-draw counts: 1; 5 of 4,500 samples), but in none of the 18 runs with exact or jackknifed statistics
+      and per-element Adam, plain steps or one gain per state (0 of 9,000; one-sided p ≈ 0.004 for all 5 falling
+      among the visit-count runs by chance). Samples above 8 units, a threshold-free version: 10 of 4,500 against
+      1 of 9,000;
+    - so the visit-count rule lets through a little of a failure that the best trainings remove: rare (0-0.4% per
+      run), but a real difference from per-element Adam.
   - `S2jk_visit_count.png`: clearly worse, as the metrics say, and the flaws are mostly 0s and things that are
     neither digit: scribbles or smudges at rows 3, 7, 9 and 10 (row 3 column 3, row 7 columns 3 and 9, row 9
     columns 5 and 7, row 10 columns 3 and 6), a 0 open on one side (row 7 column 4), 0s with a bar through them,
