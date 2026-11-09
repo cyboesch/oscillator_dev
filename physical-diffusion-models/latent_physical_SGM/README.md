@@ -116,11 +116,25 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
     - **the main comparison replicates at a second training seed** (new k-means prototypes and minibatch stream):
       S = 8 with the rule and same-draw counts against S = 16 with per-element Adam, +7.1 [+3.9, +10.1] (seed 1:
       +6.1). Between seeds the same arm moves by 1.1 and 0.2 points;
-    - by eye it removes most of the broken strokes of few-sample training (gallery `mnist14_digits01_optimisers/`).
+    - by eye it removes most of the broken strokes of few-sample training (gallery `14x14_0-1_local_training_optimisers_Potts128/`).
     - **at full size (28x28, Potts 128 + both, 0/1) S = 16 with the rule matches exact training:** 87.1% against
       86.3% (+0.9 [-1.4, +3.2]) and against S = 64 with per-element Adam (87.6%, -0.5 [-3.1, +2.1]); the paper's
       model 31.9% (evaluation 4202042; S = 16 with per-element Adam still being evaluated, 4202044);
-    - Running: four digits.
+    - with per-element Adam, S = 16 at 28x28 gives 85.3% (-1.0 [-3.9, +1.8] against exact; the rule +1.9 [-0.9,
+      +4.7] over it; evaluation 4202044), so at 28x28 the optimiser matters less than at 14x14;
+    - S = 4 with same-draw counts (4 reads) still gives 81.5% (= S = 8, -0.2 [-2.6, +2.2]; +5.9 [+2.7, +9.1] over
+      per-element Adam with 16 reads; evaluation 4203238);
+    - **four digits (0/1/2/3, Potts 512 + both, S = 64 with the rule) fall short: 74.7% against 85.0% for exact
+      training (-10.3 [-13.9, -6.7]; evaluation 4202165).** Local training does not yet scale to more classes.
+  - **Simpler visible model (power 4, 14x14 0/1, Potts 128 + both, exact training; evaluation 4203473):**
+    - radius 7 / 3 / 2 / 1 (8 neighbours): 84.7 / 83.9 / 83.8 / 81.4% (radius 1 against 7: -3.3 [-6.1, -0.6]);
+    - at radius 1, springs only = all three pair terms (81.4 vs 81.4%), and the optomechanical term adds nothing
+      (-0.3 [-2.6, +2.0]; with 4 neighbours +0.1 [-1.8, +2.1]);
+    - 4 nearest neighbours instead of 8: 74.2%, -7.2 ([-10.1, -4.4]); no pair couplings: 60.0% (-21.4);
+    - without hidden units the nearest-neighbour models produce essentially no clean samples (K = 0, radius 1:
+      3.5%; 4 neighbours, springs only: 0.0%); with Potts 128 + both, 74.2%.
+    - So 8 neighbours with springs only cost about 3 points; the optomechanical term is not needed; 4 neighbours
+      cost 10. Next: more Potts states at 8 and 4 neighbours, springs only.
   - **At full size (28x28) S = 64 hidden samples with the jackknife train as well as exact statistics:** clean yield
     87.6% vs 86.3% ([-1.3, +4.0]), against 31.9% for the paper's model. S = 256 gives the same (86.9%, +0.6
     [-1.5, +2.6] against exact).
@@ -204,7 +218,7 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
         times (in effect about 5 times) longer visit window loses more states, not fewer (50 vs 41; one run). That
         does not support "too few visits per window", though the longer window also lags a falling occupation, so
         it does not rule it out; the mechanism is open.
-      - By eye (gallery `mnist14_digits01_optimisers/`, same start and noise): plain steps and S = 16 with
+      - By eye (gallery `14x14_0-1_local_training_optimisers_Potts128/`, same start and noise): plain steps and S = 16 with
         per-element Adam break strokes and put a detached blob on top of slanted 1s; the visit-count rule with S = 16
         mostly does not (Result 13).
   - From a random start, force matching finds class-pure prototype states by itself.
@@ -1221,7 +1235,7 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
           t = 0. Against exact training at seed 2 (86.1%) the rule is -3.2 ([-6.2, -0.2]), as at seed 1. So the main
           comparison replicates, and seed-to-seed variation is about a point here.
       - Also running: at 28x28, S = 16 with the visit-count rule against per-element Adam (4202038/39).
-      - By eye (gallery job 4201995, `mnist14_digits01_optimisers/`; Result 13): plain steps and S = 16 with
+      - By eye (gallery job 4201995, `14x14_0-1_local_training_optimisers_Potts128/`; Result 13): plain steps and S = 16 with
         per-element Adam break strokes and put a detached blob on top of slanted 1s; the visit-count rule with S = 16
         mostly does not.
 
@@ -1585,7 +1599,7 @@ model), and `nearest_<model>.png` (samples above their nearest training images).
     per-element Adam with 128 states, trajectory by trajectory. The metric difference (clean 70.4% vs 84.3%) is in
     the 0s' fine shape (far 52% within the 0s), which these 14x14 images barely show; a few 1s get a stray blob or
     bend. (Seen side by side, below, the 1s' flaws are more frequent than "a few".)
-- **The hidden-unit optimisers side by side (gallery job 4201995, 03:10; `mnist14_digits01_optimisers/`):** 0/1 at
+- **The hidden-unit optimisers side by side (gallery job 4201995, 03:10; `14x14_0-1_local_training_optimisers_Potts128/`):** 0/1 at
   14x14, Potts 128 + both, the same 500 trajectories in every model. Against `real.png`:
   - In `compare.png` (16 trajectories) most columns give the same digit in the same pose in every model. The
     columns that differ are where the optimisers differ:
@@ -1613,7 +1627,7 @@ model), and `nearest_<model>.png` (samples above their nearest training images).
   - So the metric gap of plain steps and few samples, which is largest in the 0s (far), also shows in the 1s by
     eye.
 - **The visit-count rule with S = 8, 4 and 2 (gallery job 4203152, 07:52; rows `S8jk_visit_count`,
-  `S4jk_visit_count`, `S2jk_visit_count` of `mnist14_digits01_optimisers/compare.png`, and their 100-sample grids):**
+  `S4jk_visit_count`, `S2jk_visit_count` of `14x14_0-1_local_training_optimisers_Potts128/compare.png`, and their 100-sample grids):**
   - `compare.png`: S = 8 and 4 draw the same digit in the same pose as S = 16 in most columns. S = 4 gives the
     slanted 1 of column 14 a heavy top and turns the small 0 of column 15 into a 1 with a bulge. S = 2 changes more:
     besides these two, it draws 0s where every other model draws a 1 (column 3, a thin, faint 0; column 12, an
@@ -1667,7 +1681,7 @@ model), and `nearest_<model>.png` (samples above their nearest training images).
   - `S16jk2_visit_count.png` is nearly identical to `S16jk2_per_element_Adam.png`, trajectory by trajectory (it
     keeps the flat 0 at row 5 column 9); as for most hidden-unit models, the trajectory decides the digit.
 - **Three digits with the visit-count rule (gallery job 4202168, 03:42; `compare.png` regenerated by job 4202921 at
-  05:55, after an older gallery job had overwritten it without this row; `mnist14_digits012/`):**
+  05:55, after an older gallery job had overwritten it without this row; `14x14_0-1-2_three_digits_Potts/`):**
   - `compare.png`: the S = 64 visit-count model draws the same digit in the same pose as exact training (Potts
     128) in 15 of the 16 columns, and as S = 256 in 15 (column 13: exact training draws a 1 where the local models
     draw a 2; column 12: S = 256 draws a thin 0 where the others draw a looped 2). The broken 0 with two dots on
@@ -1728,7 +1742,7 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
 - The states split by class at t = 0 (`inspect_states.py`, 4198802): 77 / 24 / 89 / 66 states carry 0s / 1s / 2s /
   3s with 256 states (all 256 used, purity 0.977, 204 effective states), 141 / 51 / 175 / 135 with 512 (502 used,
   purity 0.990, 386 effective). The 1s, the least varied digit, get the fewest states.
-- **What the images show** (`gallery/mnist14_digits0123/`, read by eye against `real.png`):
+- **What the images show** (`gallery/14x14_0-1-2-3_four_digits_Potts/`, read by eye against `real.png`):
   - K = 0 draws almost no recognisable digit: dark, speckled superpositions of two or three digits. 4 of the first
     100 samples saturate to white noise but stay below the divergence cut (|x| > 15).
   - With 512 states the four classes come out in even shares. The 0s and 1s look like real ones, apart from the
