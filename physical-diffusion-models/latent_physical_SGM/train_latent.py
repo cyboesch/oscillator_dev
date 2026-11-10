@@ -133,6 +133,12 @@ def parse():
     ap.add_argument("--hidden-jackknife", action="store_true",
                     help="with --hidden-samples S (even): remove the O(1/S) bias of the plug-in statistics, 2 L(S) - "
                          "[L(first S/2) + L(second S/2)] / 2 from the same draws (latent_model.make_loss_per_sample)")
+    ap.add_argument("--ising-reseed", action="store_true",
+                    help="K Ising units (split tree): at the start of every slice, reset the units whose field hardly "
+                         "varies over the slice's data (std a_j < 0.1 T) to that slice's split-tree reference (Q_j = 0)")
+    ap.add_argument("--ising-weak-boost", type=float, default=1.0,
+                    help="K Ising units (split tree): step-size factor, for one slice, for the units that are weak at "
+                         "its start (1 = off)")
     ap.add_argument("--occ-same-draws", action="store_true",
                     help="with --hidden-norm occupancy and --hidden-samples S: count each Potts state's visits among the "
                          "S draws per sample that the gradient statistics already use (latent_model."
@@ -429,6 +435,12 @@ def main():
     tree = None                              # split tree of K Ising units (latent_model.split_tree), if any
     lm.problem_geometry(args.problem)                       # unknown problem names fail here
     n_cls = lm.problem_classes(args.problem)
+    if (args.ising_reseed or args.ising_weak_boost != 1.0) and not (args.hidden == "ising" and args.K > 0 and not fisher
+                                                                    and not args.hidden_fixed):
+        raise ValueError("--ising-reseed and --ising-weak-boost need K > 0 trained Ising units from the split tree "
+                         "(--hidden ising, not the K = 1 Fisher unit, not --hidden-fixed)")
+    if args.ising_weak_boost <= 0:
+        raise ValueError(f"--ising-weak-boost {args.ising_weak_boost}: must be > 0")
     if fisher and n_cls != 2:
         raise NotImplementedError("the Fisher initialisation of one Ising unit needs two classes")
     if args.hidden == "ising" and args.K > 0 and not fisher:          # K Ising units from the split tree
@@ -531,6 +543,7 @@ def main():
         "hidden_floor": args.hidden_floor, "hidden_norm": args.hidden_norm, "occ_beta": args.occ_beta,
         "hidden_jackknife_order": args.hidden_jackknife_order, "occ_same_draws": args.occ_same_draws,
         "pair_terms": ",".join(pair_terms) if pair_terms else "none", "neighbourhood": args.neighbourhood,
+        "ising_reseed": args.ising_reseed, "ising_weak_boost": args.ising_weak_boost,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -544,7 +557,8 @@ def main():
                 "hidden_samples_late": 0, "hidden_samples_switch": 0,
                 "hidden_floor": 0.0, "hidden_norm": "element", "occ_beta": 0.999,
                 "hidden_jackknife_order": 1, "occ_same_draws": False,
-                "pair_terms": "duff,lin,om", "neighbourhood": "chebyshev"}   # runs started before these options existed
+                "pair_terms": "duff,lin,om", "neighbourhood": "chebyshev",
+                "ising_reseed": False, "ising_weak_boost": 1.0}   # runs started before these options existed
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -570,7 +584,7 @@ def main():
         return
     log(logf, f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; job {os.environ.get('SLURM_JOB_ID', 'manual')}; "
               f"jax {jax.__version__}; devices {jax.devices()}; code {code_sha}; config "
-              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood')})}"
+              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost')})}"
               + (f"; cd1 kappa {args.cd1_kappa}, dt {args.cd1_dt}, releases {args.cd1_releases}, "
                  f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else ""))
 
@@ -757,6 +771,39 @@ def main():
             on = k >= args.freeze_hidden_slices and not args.hidden_fixed
             lrs.update(wl=float(args.hidden_lr_scale * swl[k]) if on else 0.0,
                        bl=float(args.hidden_lr_scale * sbl[k]) if on else 0.0)
+        lr_log = {"W": lrs["W"], "b": lrs["b"]}       # scalars for the log (--ising-weak-boost makes lrs per unit)
+        n_boost = None
+        if tree is not None and train_hidden and (args.ising_reseed or args.ising_weak_boost != 1.0):
+            # --ising-reseed / --ising-weak-boost: units whose field hardly varies over this slice's data (std a_j <
+            # 0.1 T on a batch of p_tau, the training log's "weak") are reset to this slice's split-tree reference
+            # (Q_j = 0) and/or get a larger step size for this slice.
+            Xs = np.asarray(sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train,
+                                                   jr.fold_in(jr.PRNGKey(VAL_SEED + 2), k), beta=1))
+            def weak_units(p):
+                A = lm.ising_fields(np.asarray(p["W"]), np.asarray(p["b"]),
+                                    np.asarray(p["Q"]) if "Q" in p else None, Xs)
+                return A.std(axis=0) < 0.1 * lm.TEMP
+            weak = weak_units(params)
+            n_weak0, n_weak1 = int(weak.sum()), int(weak.sum())
+            if args.ising_reseed and weak.any():
+                params = dict(params)
+                params["W"] = jnp.where(jnp.asarray(weak)[:, None], jnp.asarray(W_ref[k]), params["W"])
+                params["b"] = jnp.where(jnp.asarray(weak), jnp.asarray(b_ref[k]), params["b"])
+                if "Q" in params:
+                    params["Q"] = jnp.where(jnp.asarray(weak)[:, None], 0.0, params["Q"])
+                weak = weak_units(params)            # still weak after the reset (the reference can be weak too)
+                n_weak1 = int(weak.sum())
+            if args.ising_weak_boost != 1.0:         # per-unit step sizes (always arrays, so the runner traces once)
+                g = 1.0 + (args.ising_weak_boost - 1.0) * weak.astype(np.float64)
+                for name in ("W", "Q"):
+                    if name in lrs:
+                        lrs[name] = jnp.asarray(lrs[name] * g[:, None])
+                lrs["b"] = jnp.asarray(lrs["b"] * g)
+                n_boost = int(weak.sum())
+            log(logf, f"slice {k}: {n_weak0} weak units at the start"
+                      + (f", {n_weak1} still weak after reseeding" if args.ising_reseed else "")
+                      + (f"; step size x{args.ising_weak_boost:g} for {int(weak.sum())}"
+                         if args.ising_weak_boost != 1.0 else ""))
         dt_k = 0.0                                # CD-1 release length of this slice (unused with exact gradients)
         if cd1_grad is not None:
             if args.cd1_dt > 0:
@@ -794,7 +841,8 @@ def main():
         yv = src_labels[idx]
         val_ps = np.asarray(loss_ps(params, Xv))
         val = float(np.mean(val_ps))
-        rec = {"slice": k, "t": t_curr, "steps": n_steps, "lr_v": lrs["theta"], "lr_W": lrs["W"], "lr_b": lrs["b"],
+        rec = {"slice": k, "t": t_curr, "steps": n_steps, "lr_v": lrs["theta"], "lr_W": lr_log["W"], "lr_b": lr_log["b"],
+               **({"n_weak_boosted": n_boost} if n_boost is not None else {}),
                **({"cd1_dt": dt_k} if cd1_grad is not None else {}),
                **({"hidden_samples": args.hidden_samples_late if run_k is run_late else args.hidden_samples}
                   if run_late is not None else {}),

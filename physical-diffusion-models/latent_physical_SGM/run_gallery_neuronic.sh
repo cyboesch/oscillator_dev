@@ -26,10 +26,10 @@ export MPLBACKEND=Agg
 export OMP_NUM_THREADS=${SLURM_CPUS_PER_TASK:-4}
 OUT=../out/latent_physical_SGM                       # host path, to test which sample files exist
 G=/physical-diffusion-models/out/latent_physical_SGM/gallery
-run() { apptainer exec ${RUNTIME_ARGS} ${IMAGE} python3 -u /physical-diffusion-models/latent_physical_SGM/make_gallery.py "$@"; }
+run() { if [ ${#SETS[@]} -eq 0 ]; then echo "skip gallery: no finished runs yet ($*)"; return 0; fi; apptainer exec ${RUNTIME_ARGS} ${IMAGE} python3 -u /physical-diffusion-models/latent_physical_SGM/make_gallery.py "$@"; }
 SETS=()
-add() {   # add NAME RUN: the run's 500 base samples, if present
-  local f="$2/samples/sde_base_n500.npy"
+add() {   # add NAME RUN [N]: the run's N (default 500) base samples, if present
+  local f="$2/samples/sde_base_n${3:-500}.npy"
   if [ -f "${OUT}/${f}" ]; then SETS+=("$1=${f}"); else echo "skip $1 ($2: no samples yet)"; fi
 }
 rc=0
@@ -130,12 +130,14 @@ SETS=()
 for K in 1 8 32 128 196 256 512 1024; do add Ising${K}_8nb mnist14_K${K}_ema_ising_quad_local_quartic_r1_lin; done
 add Potts128_8nb mnist14_K128_ema_potts_quad_local_quartic_r1_lin
 add Potts512_8nb mnist14_K512_ema_potts_quad_local_quartic_r1_lin
+for v in reseed boost10 reseed_boost10; do add Ising512_8nb_${v} mnist14_K512_ema_ising_quad_local_quartic_r1_lin_${v}; done
 run --problem mnist14 --out ${G}/14x14_0-1_power4_springs_only_number_of_Ising_units --title "14x14, digits 0/1, power 4, nearest-neighbour springs only: number of Ising units" \
     "${SETS[@]}" --nearest Ising128_8nb || rc=1
 
 # four digits with the simplest pixel model (power 4, springs only, 8 neighbours): Ising units against Potts 512
 SETS=()
 for K in 196 256 512; do add Ising${K}_8nb mnist14_d0123_K${K}_ema_ising_quad_local_quartic_r1_lin; done
+add Ising512_8nb_reseed_boost10 mnist14_d0123_K512_ema_ising_quad_local_quartic_r1_lin_reseed_boost10
 add Potts512_8nb mnist14_d0123_K512_ema_potts_quad_local_quartic_r1_lin_pooled
 add Potts512_full_pixel_model mnist14_d0123_K512_ema_potts_quad_local_pooled
 run --problem mnist14_d0123 --out ${G}/14x14_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts --title "14x14, digits 0/1/2/3, power 4, nearest-neighbour springs only: Ising units against Potts" \
@@ -146,7 +148,26 @@ run --problem mnist14_d0123 --out ${G}/14x14_0-1-2-3_four_digits_power4_springs_
 SETS=()
 for K in 784 1568 3136; do add Ising${K}_8nb mnist28_d0123_K${K}_ema_ising_quad_local_quartic_r1_lin; done
 for K in 784 1536; do add Potts${K}_8nb mnist28_d0123_K${K}_ema_potts_quad_local_quartic_r1_lin_pooled; done
+for K in 784 1536; do add Potts${K}_frozen_8nb mnist28_d0123_K${K}_ema_potts_local_quartic_r1_lin_pooled_fixed; done
 run --problem mnist28_d0123 --out ${G}/28x28_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts --title "28x28, digits 0/1/2/3, power 4, nearest-neighbour springs only: Ising units and Potts states" \
+    "${SETS[@]}" || rc=1
+
+# 28x28, all ten digits, the simplest pixel model (power 4, springs only, 8 neighbours): Potts 1536 / 3072, Ising 3136
+SETS=()
+add Ising3136_8nb mnist28_d0123456789_K3136_ema_ising_quad_local_quartic_r1_lin
+for K in 1536 3072; do add Potts${K}_8nb mnist28_d0123456789_K${K}_ema_potts_quad_local_quartic_r1_lin_pooled; done
+for K in 1536 3072; do add Potts${K}_frozen_8nb mnist28_d0123456789_K${K}_ema_potts_local_quartic_r1_lin_pooled_fixed; done
+run --problem mnist28_d0123456789 --out ${G}/28x28_all_ten_digits_power4_springs_only_Ising_vs_Potts --title "28x28, digits 0-9, power 4, nearest-neighbour springs only: Ising units and Potts states" \
+    "${SETS[@]}" || rc=1
+
+# the same, sweep over the number of hidden elements for the paper (2,000 samples each, the same trajectories in all)
+SETS=()
+add no_hidden_elements_K0 mnist28_d0123456789_K0_ema_potts_quad_local_quartic_r1_lin_pooled 2000
+add pixels_only_no_units mnist28_d0123456789_K0_ema_quartic_r1_lin 2000
+for K in 64 256 784 1536 3072; do add Potts${K}_8nb mnist28_d0123456789_K${K}_ema_potts_quad_local_quartic_r1_lin_pooled 2000; done
+for K in 64 256 784 1568 3136; do add Ising${K}_8nb mnist28_d0123456789_K${K}_ema_ising_quad_local_quartic_r1_lin 2000; done
+for K in 1536 3072; do add Potts${K}_frozen_8nb mnist28_d0123456789_K${K}_ema_potts_local_quartic_r1_lin_pooled_fixed 2000; done
+run --problem mnist28_d0123456789 --out ${G}/28x28_all_ten_digits_sweep_number_of_hidden_elements --title "28x28, digits 0-9, power 4, nearest-neighbour springs only: number of Ising units and Potts states" \
     "${SETS[@]}" || rc=1
 
 SETS=()

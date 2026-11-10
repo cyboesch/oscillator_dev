@@ -123,7 +123,13 @@ def main():
     ap.add_argument("--sampler", default="sde", choices=["sde", "ode"])
     ap.add_argument("--snapshots", action="store_true",
                     help="also save the states at t = 0, 0.5, ..., 5 (interpolated; the steps are unchanged)")
+    ap.add_argument("--quench", default="",
+                    help="comma-separated durations s (e.g. 0.05,0.25,1): afterwards, relax every finite sample at zero "
+                         "temperature for time s under the learned t = 0 energy, dx/ds = -grad F(x; params at t = 0) "
+                         "(cooling the bath at the end); writes <stem>_q<s>.npy. If <stem>.npy exists, the saved samples "
+                         "are quenched and not resampled.")
     args = ap.parse_args()
+    quench = [float(s) for s in args.quench.split(",") if s.strip()]
 
     theta_hist, W_hist, b_hist, run_dir, prov, problem = load_params(args.run)
     out_dir = os.path.join(run_dir, "samples")
@@ -134,9 +140,52 @@ def main():
           f"jax {jax.__version__}; devices {jax.devices()}; run {args.run}; K {W_hist.shape[1]}; {args.sampler}, "
           f"set {args.set}, n {args.n}", flush=True)
 
+    local_p, quad_p = prov.pop("local", None), prov.pop("quad", None)
     drift, diffusion = make_drift(theta_hist, W_hist, b_hist, args.sampler, problem, prov.get("hidden", "ising"),
-                                  prov.pop("local", None), prov.pop("quad", None), prov.get("radius"),
-                                  prov.get("neighbourhood", "chebyshev"))
+                                  local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"))
+    if quench and os.path.exists(stem + ".npy"):
+        x_final = np.load(stem + ".npy")
+        print(f"quench only: loaded {stem}.npy ({x_final.shape[0]} samples)", flush=True)
+    else:
+        x_final = sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start)
+    if quench:
+        drift_ode, _ = make_drift(theta_hist, W_hist, b_hist, "ode", problem, prov.get("hidden", "ising"),
+                                  local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"))
+        do_quench(x_final, drift_ode, quench, stem, args, t_start)
+    print(f"total {time.time() - t_start:.0f} s", flush=True)
+
+
+def do_quench(x_final, drift_ode, durations, stem, args, t_start):
+    """Zero-temperature relaxation under the learned t = 0 free energy: the PF-ODE drift at the end of the reverse
+    process (t = T_FORWARD, i.e. forward time 0) is x - grad F, so dx/ds = drift_ode(T_FORWARD, x) - x = -grad F."""
+    def qdrift(s, x, args_):
+        return drift_ode(lm.T_FORWARD, x, args_) - x
+
+    ok = np.all(np.isfinite(x_final), 1)
+    idx_ok = np.flatnonzero(ok)
+    for s in durations:
+        t_q = time.time()
+        fn = vmap(lambda y: solve_ODE(qdrift, y, 0.0, s, 2, lm.DT0, rtol=lm.RTOL_ODE, atol=lm.ATOL_ODE))
+        xq = np.full_like(x_final, np.nan)
+        for c0 in range(0, idx_ok.size, args.chunk):
+            idx = idx_ok[c0:c0 + args.chunk]
+            pad = np.concatenate([idx, np.repeat(idx[-1:], args.chunk - idx.size)])
+            sol = fn(jnp.asarray(x_final[pad]))
+            xq[idx] = np.asarray(sol.ys[:, -1, :])[: idx.size]
+        name = f"{stem}_q{s:g}"
+        np.save(name + ".npy", xq)
+        d = np.linalg.norm(xq[ok] - x_final[ok], axis=1)
+        info = {"source": os.path.basename(stem) + ".npy", "quench_duration": s, "n_quenched": int(ok.sum()),
+                "median_displacement": float(np.median(d)), "max_abs_final": float(np.nanmax(np.abs(xq))),
+                "seconds": time.time() - t_q, "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"),
+                "sha256_sample_latent": lm.sha256_file(os.path.join(HERE, "sample_latent.py"))}
+        with open(name + ".json", "w") as f:
+            json.dump(info, f, indent=2)
+        print(f"quench s = {s:g}: {int(ok.sum())} samples, median displacement {np.median(d):.4f} (normalised units), "
+              f"{time.time() - t_q:.0f} s; saved {name}.npy", flush=True)
+
+
+def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start):
     knots = jnp.asarray(np.sort(lm.T_FORWARD - lm.forward_time_pts())[1:-1])
     n_save = 11 if args.snapshots else 2
     grid, _ = lm.problem_geometry(problem)
@@ -184,6 +233,7 @@ def main():
         print(f"reproduction of job 4187940: median max|diff| {np.median(d):.2e}, max {np.max(d):.2e}; "
               f"{int(np.sum(d < 1e-3))}/{d.size} below 1e-3", flush=True)
     print(f"saved {stem}.npy; total {time.time() - t_start:.0f} s", flush=True)
+    return x_final
 
 
 if __name__ == "__main__":

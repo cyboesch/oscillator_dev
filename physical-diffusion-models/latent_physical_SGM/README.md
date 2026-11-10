@@ -85,8 +85,23 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
     Potts models do not have, faint dotted near-empty images (about 10 of 100 flawed at 196 units, against about 3
     for Potts 512). A likely reading, untested: a Potts unit is a mixture (each sample picks one prototype), Ising
     units a product of on/off features, which can combine features of both digits.
-  - Running (17:22): more than 196 Ising units (256 / 512 / 1024; the 196 cap was only needed for the random start),
-    and four digits with 196 / 256 / 512 Ising units against Potts 512, all with the simplest pixel model.
+  - More Ising units (22:00): 512 units 83.5%, 1024 units 85.4%, still 4 points below Potts 512 (about +2 per
+    doubling); on four digits Ising is flat from 256 to 512 (67%) and 12 points below Potts 512 (79.0%), with
+    14-16% blends, and the Ising samples hardly change with K (the extra units seem unused; untested).
+  - **Potts samples are not "prototype plus blur"** (Result 15, prototype test): each state partitions the data like
+    a stored pattern of a dense associative memory, but samples sit only 5-11% closer to their state's prototype than
+    held-out real images and vary within a state 90-100% as much as real members, independent of the number of
+    states (32-512); a third of the samples have their nearest training image in another state, as real images do.
+  - **28x28 best model trained locally:** Potts 512 + both, power 4, S = 64 with the visit-count rule, 90.5%
+    against 92.3% with exact training (-1.8 [-4.3, +0.7], not significant), 31.9% for the paper.
+  - **Idle Ising units are not the limit** (2026-11-10, Result 15): resetting weak units to the split-tree formula
+    every slice keeps all 512 units active but gives +1.3 points on 0/1 (n.s.) and -0.1 on four digits; a 10x step
+    size for weak units does not revive them. The Ising-Potts gap is in the model form, not the optimiser.
+  - **28x28, four digits, simplest pixel model (2026-11-10, Result 15):** Potts 784 92.2% clean (real probes
+    86.8%), Ising 784 66.2%, frozen Potts 784 74.6%. Grainy strokes, no copies.
+  - Running (18:30): 28x28, 0/1/2/3, the simplest pixel model, Ising 784 / 1568 / 3136 and Potts 784 / 1536
+    (trained and frozen). Since 22:40 / 01:00: 28x28, all ten digits, Potts 1536 / 3072 (trained and frozen) and
+    plain Ising 3136.
 - **Hidden units improve the samples a lot, and more hidden states help, up to about 256** (Results 7 and 8).
   - At 14x14, 512 states do not differ from 256 on independent trajectories and overshoot towards the training set
     (with the full, long-range power-6 pixel model; with the simplest pixel model 512 states do help, +4.3 and +7.4
@@ -269,8 +284,10 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
   problem; not tested across problems). The 2s and 3s are the weak classes; by eye 7-11 of 100 samples are bad,
   nearly all 2s or 3s.
 - **Running (2026-11-09, 17:22):**
-  - at 28x28: the best model (Potts 512 + both, power 4) trained locally with S = 64 and the visit-count rule
-    (4202207, since the morning; evaluation 4202209), against its exact training (92.3%);
+  - 28x28, 0/1/2/3, power 4, springs only, 8 neighbours, exact training: Ising 784 / 1568 / 3136 (4206653-55) and
+    Potts 784 / 1536 (4206669-70); evaluations 4206656-58, 4206671-72; galleries 4206673-77 (folder
+    `28x28_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts`). Expected: 784 early on 11-10, 1536/1568
+    around 09:00, 3136 in the evening of 11-10.
   - simplest pixel model (power 4, springs only, 8 nearest neighbours, exact training), Result 15 continued:
     - 0/1 with 256 / 512 / 1024 Ising units (4206339-41; evaluations 4206346, and 4206348 with 1024). More than 196
       Ising units (the number of pixels) are now allowed with the split-tree start; the tree's smallest child size
@@ -302,6 +319,8 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
 | `evaluate_samples.py` | blend check, far / copy checks, class-resolved and 50/50 rates, texture, per-class pixel statistics, McNemar and paired-bootstrap tests, example grids |
 | `coverage_samples.py` | k-NN precision / recall, spread, distinct nearest images and centroid distance per class |
 | `inspect_states.py` | what the Potts states of a run represent, per slice: mean data image, class mix, W_m and Q_m of the most occupied states; effective states, class purity, commitment, states per majority class, and the states' mean occupations by decade (lost states) |
+| `fid_score.py` | FID and KID in the features of a small MNIST CNN (trained once per resolution with `--train-only --grid 14/28`, cached in `out/latent_physical_SGM/fid/`), against balanced MNIST test images; raw and clipped; real-image floor at the same n; paired bootstrap (`--pair A,B`); CNN class shares (CPU job; Result 15) |
+| `prototype_test.py` | do Potts samples just recall their state's prototype? Distance to the own prototype, within-state spread, nearest training image, posterior sharpness, against held-out real images (CPU job; Result 15) |
 | `make_gallery.py`, `run_gallery_neuronic.sh` | image gallery (Result 13): real images, unsorted samples per model, the same trajectories side by side, nearest training images; into `out/latent_physical_SGM/gallery/` (CPU job; resubmit as runs finish) |
 | `make_digit_data.py`, `evaluate_multiclass.py` | other MNIST digit sets (the paper's preprocessing, verified identical for 0/1, 0/1/2, 0-3; problems `mnist14_d<digits>`, `mnist28_d<digits>`) and their evaluation for C ≥ 2 classes (identical to `evaluate_samples.py` for C = 2) |
 | `cd1_check.py` | on the slices of a trained run: the local force-matching rule against autodiff (`--local-rule`), measured-statistics gradients (`--samples`, `SxR` for R replicates, suffix `o2` for the second-order jackknife) and CD-1 short-release gradients (`--cd1-samples`: with measured hidden statistics) against the exact gradient and its minibatch noise |
@@ -1820,6 +1839,184 @@ start for K > 1), both "+ both" (spring and per-pixel units). Exact training, se
 - Running (17:22, Status): 256 / 512 / 1024 Ising units on 0/1; 196 / 256 / 512 Ising units and Potts 512 on
   0/1/2/3, all with this pixel model and 8 neighbours.
 
+
+**Update (2026-11-09, 22:00): more Ising units, and four digits** (evaluations 4206346, 4206348, 4206349; coverage
+4206347; gallery 4206350).
+
+| 0/1, 8 neighbours | clean | 0s clean | 1s clean | blends | 0s recall | copies |
+|---|---|---|---|---|---|---|
+| Ising 196 | 81.1% | 68.8 | 93.5 | 6.4% | 0.81 | 0.2% |
+| Ising 256 | 80.7% | 66.8 | 94.5 | 5.6% | 0.81 | 0.8% |
+| Ising 512 | 83.5% | 70.5 | 96.5 | 4.8% | 0.80 | 2.4% |
+| Ising 1024 | 85.4% | 74.6 | 96.2 | 4.8% | | 2.4% |
+| Potts 512 | 89.4% | 80.7 | 98.0 | 2.2% | 0.84 | 0.4% |
+
+- 256 -> 512: +2.8 ([+0.5, +5.2]); 512 -> 1024: +1.9 ([-0.2, +4.1], p = 0.08); Ising 1024 against Potts 512: -4.0
+  ([-7.5, -0.5]). Ising keeps improving slowly (about +2 points per doubling against about +4 for Potts at this
+  size), mostly in the 1s and blends; the recall of the 0s does not move (0.80-0.81). Copies 2.4% at 512 and 1024
+  (held-out real images 4.9%, by construction of the threshold), median nearest-image distance 1.12-1.16: closer
+  to the training set than Potts 512, not memorisation.
+- By eye (`Ising1024_8nb.png`): the faint, near-empty samples remain, at the same trajectories as with 196 units
+  (e.g. trajectories 7, 12, 49, 85).
+
+| 0/1/2/3, 8 neighbours | clean (std) | 0 | 1 | 2 | 3 | blends |
+|---|---|---|---|---|---|---|
+| Ising 196 | 64.5% | 63.1 | 87.4 | 45.0 | 62.6 | 14.3% |
+| Ising 256 | 67.0% | 68.0 | 89.4 | 46.7 | 63.7 | 13.9% |
+| Ising 512 | 66.9% | 67.8 | 88.0 | 48.2 | 63.4 | 15.5% |
+| Potts 512 | 79.0% | 91.1 | 96.3 | 58.0 | 70.6 | 2.6% |
+| Potts 512, full pixel model (Result 14) | 85.0% | 93.1 | 98.6 | 64.6 | 83.8 | 2.7% |
+| real images (probes) | 86.2% | 92.2 | 96.2 | 71.8 | 84.5 | 5.1% |
+
+- Four digits: Ising flat from 256 to 512 (-0.1 [-3.1, +3.0]) and 12.1 points below Potts 512 ([-16.4, -7.8]),
+  with 14-16% blends against 2.6%. The product of features does not scale better with the number of classes than
+  the Potts mixture; on this evidence it scales worse. The simplest pixel model costs Potts 512 6.0 points on four
+  digits ([-9.3, -2.8]; about 3 on 0/1 at 128 states).
+- By eye (`14x14_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts/compare.png`): the Ising 196, 256 and 512
+  rows are nearly the same image for image: the extra units hardly change the samples. Trajectories 6, 7, 9 and
+  14 are scribbles in every Ising row where both Potts models draw a 1, a 0, a 0 and a 1.
+- Reading (untested): the extra Ising units seem not to be used. Units deep in the split tree separate small leaves
+  and start small; whether they stay small, or duplicate other units, is what `inspect_units.py` would show.
+
+**Do the Potts states just recall prototypes?** (`prototype_test.py`, job 4207598; figures in
+`out/latent_physical_SGM/prototype_test/4207598/`). Under the t = 0 couplings, every training image, probe and sample
+is assigned to its most likely state; a state's prototype is the mean of its training members. Samples against the
+1,000 probes (real images not used to build the clusters):
+
+| run | distance to own prototype, samples / probes | within-state spread, samples / real | nearest training image in own state, samples / probes |
+|---|---|---|---|
+| Potts 32, 8 nb | 0.93 | 0.90 | 0.58 / 0.72 |
+| Potts 128, 8 nb | 0.91 | 0.93 | 0.65 / 0.64 |
+| Potts 256, 8 nb | 0.89 | 0.91 | 0.67 / 0.63 |
+| Potts 512, 8 nb | 0.91 | 0.90 | 0.69 / 0.62 |
+| Potts 512, 4 nb | 0.94 | 0.95 | 0.66 / 0.63 |
+| Potts 128, full pixel model | 0.95 | 0.95 | 0.67 / 0.66 |
+| Potts 512, 0/1/2/3, full pixel model | 0.93 | 1.02 | 0.65 / 0.59 |
+
+- Not "prototype plus blur": samples sit only 5-11% closer to their state's prototype than real images do, and vary
+  within a state about 90-100% as much as real members. The contraction does not grow with the number of states
+  (0.93 at 32, 0.91 at 512).
+- About a third of the samples have their nearest training image in another state, as for real images: the samples
+  are not confined to their state's members.
+- At t = 0 every image, real or generated, belongs decisively to one state (max posterior 0.99-1.00): the states
+  partition the data like a dense associative memory, and the variation within a state comes from the pixel model.
+- State sizes are very uneven (Potts 512: one state of 1,146 training images, 389 states with >= 5 members, effective
+  number 229), so the average of 23 images per state understates how coarse the main states are. The samples use
+  fewer states than the training images (229 of 464), partly because 500 samples cannot hit every small state
+  (1,000 probes use 192 effective states against the samples' 155; not corrected for sample size).
+- By eye (Potts 512, 8 nb; the 8 states most used by samples are all 1s): the samples of a state are different 1s
+  of the state's slant and thickness, slightly noisier than the real members, none a copy of the prototype.
+
+**Update (2026-11-10, 01:00): idle Ising units are not what limits Ising.** The training logs of Ising 128 / 512 /
+1024 on 0/1 show that at slice 50 (t about 2.5) only about 40-50 units are decided (|m| > 0.9) whatever K is; the
+others are weak (field std < 0.1 T: 0 / 113 / 671 units) and switch on only late (t < 1). Two fixes in
+`train_latent.py`, both for split-tree Ising units with exact training:
+- `--ising-reseed`: at the start of every slice, weak units are reset to the split-tree formula (W, b from
+  `split_reference`, Q = 0);
+- `--ising-weak-boost B`: weak units get B times the step size (B = 10).
+
+Ising 512, 14x14, simplest pixel model, 8 neighbours (runs 4207321-24; evaluations 4207325, 4207327; coverage 4207326;
+gallery 4207328). Paired against plain Ising 512 (same initial states and noise):
+
+| run | weak units at slices 30 / 50 / 70 | clean (0/1) | difference [95% CI] | clean std (0/1/2/3) | difference [95% CI] |
+|---|---|---|---|---|---|
+| Ising 512 | (113 at slice 50) | 83.5% | | 66.9% | |
+| reseed | 1 / 2 / 0 before, 0 after reseeding | 84.8% | +1.3 [-1.2, +3.7], p = 0.31 | | |
+| boost 10 | 278 / 278 / 250 | 84.5% | +1.0 [-1.3, +3.3] | | |
+| reseed + boost 10 | 1 / 0 / 0 | 82.8% | -0.7 [-3.4, +1.9] | 66.8% | -0.1 [-3.4, +3.2] |
+| Potts 512 | | 89.4% | | 79.0% | |
+
+- Reseeding keeps every unit active through the diffusion, yet the samples do not improve: on four digits the
+  blends even rise (18.2% against 15.2%, p = 0.07). The larger step size alone does not revive the weak units.
+- Reseeding lowers far-off samples on 0/1 (11.5% against 14.1%, -2.7 [-4.7, -0.5]), but not the clean yield.
+- Coverage (0/1) unchanged: recall of the 0s 0.83-0.84 for all Ising variants, 0.88 for Potts 512.
+- By eye: the reseeded 0/1 samples look like plain Ising 512 (a few faint near-empty images remain); on four digits
+  the same broken and blended 2s and 3s.
+- Reading: the units were weak because, with exact training, the extra units carry little score; giving them the
+  formula couplings does not make them useful. The gap to Potts is in the form of the model (a product of on/off
+  features against a mixture of prototypes), not in the optimiser.
+- Consequence (decision rule agreed 2026-11-09): no fix beat plain Ising 512 by >= 3 points, so at 28x28 on all ten
+  digits only plain Ising 3136 runs, as the comparison for Potts 1536 / 3072 (job 4208054; evaluation 4208055 against
+  Potts 1536 / 3072; gallery 4208056, folder `28x28_all_ten_digits_power4_springs_only_Ising_vs_Potts`).
+
+**Update (2026-11-10, 08:30): 28x28, four digits, simplest pixel model** (power 4, springs only, 8 neighbours,
+exact training; runs 4206653, 4206669, 4207686; evaluations 4206656, 4206671, 4207688; gallery
+`28x28_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts`).
+
+| 0/1/2/3, 28x28 | clean (std) | 0 | 1 | 2 | 3 | far (std) | blends | copies | median NN |
+|---|---|---|---|---|---|---|---|---|---|
+| Ising 784 | 66.2% | 64.4 | 85.0 | 52.7 | 62.7 | 24.4% | 17.0% | 0.4% | 4.90 |
+| Potts 784 | **92.2%** | 93.2 | 98.6 | 85.6 | 91.3 | 5.2% | 3.4% | 0.0% | 4.49 |
+| Potts 784, frozen (formula couplings) | 74.6% | 74.4 | 99.3 | 52.1 | 72.4 | 24.9% | 0.8% | 0.0% | 5.14 |
+| real images (probes) | 86.8% | 93.0 | 97.7 | 71.0 | 85.7 | 10.1% | 5.0% | 5.0% | 4.41 |
+
+- Potts 784 against Ising 784: +26.0 points ([+21.6, +30.4]); against frozen Potts 784: +17.6 ([+13.7, +21.6]).
+- Potts 784 is above the real probes on clean yield: fewer far samples (5.2% against 10.1%), i.e. somewhat more
+  typical than real digits, with no copies and a median nearest-image distance near the probes' (4.49 against
+  4.41). The 2s gain most (85.6 against 71.0 for real).
+- With the simplest pixel model, 28x28 is much better than 14x14 (Potts 512 at 14x14: 79.0%); Ising is the same at
+  both sizes (about 66-67%).
+- Training the hidden couplings matters: the frozen formula couplings give speckled, broken 2s and 3s.
+- By eye (`Potts784_8nb.png`): nearly all 100 samples are clear digits with natural variety; strokes are grainy
+  (white speckle on the ink, a few isolated dots around it). Ising 784 draws smoother strokes but many broken or
+  blended 2s and 3s.
+
+**FID and KID, in addition to the % measures (2026-11-10, `fid_score.py`; jobs 4209862-65, classifiers 4209809/10).**
+Features: the 128 hidden units of a small CNN trained on all ten MNIST training digits (test accuracy 98.2% at
+14x14, 99.1% at 28x28). Reference: balanced MNIST test images of the problem's digits (never seen by any model),
+with the paper's 0.01 pixel noise. Raw pixel values (as the % measures); "clip" = clipped to [0, 1]. Floor = 500 real
+training images against the same reference (FID is biased upwards at n = 500, so read models against the floor, not
+against 0). Confident = the CNN assigns one of the problem's digits with max p >= 0.9. FID and KID agree throughout.
+
+| problem | model | FID | FID clip | confident | clean (% measure) |
+|---|---|---|---|---|---|
+| 14x14 0/1 | real floor | 0.85 | | 94.3% | |
+| | Potts 32 / 128 / 256 / 512, 8 nb | 4.17 / 2.45 / 1.70 / 1.38 | 5.36 / 3.25 / 2.27 / 1.83 | 88-95% | 65.5-89.4% |
+| | Ising 128 / 196 / 256 / 512 / 1024 | 3.56 / 3.48 / 3.47 / 3.49 / 3.75 | 3.9-4.2 | 88-90% | 78.7-85.4% |
+| | Ising 512 reseed / boost10 / both | 3.20 / 4.08 / 3.29 | | 89-90% | 82.8-84.8% |
+| 14x14 0/1/2/3 | real floor | 1.50 | | 94.3% | 86.2% |
+| | Ising 196 / 256 / 512 / 512 both fixes | 8.99 / 8.54 / 8.28 / 7.87 | 8.6-10.1 | 71% | 64.5-67.0% |
+| | Potts 512, simplest pixel model | 3.40 | 4.83 | 93.2% | 79.0% |
+| | Potts 512, full pixel model | 4.15 | 5.09 | 90.6% | 85.0% |
+| 28x28 0/1 | real floor | 2.80 | | 98.6% | |
+| | paper (no hidden units) | 135.0 | 134.6 | 55.7% | 31.9% |
+| | Potts 32 / 128 / 256, full model | 20.3 / 12.8 / 10.8 | | 96-99% | |
+| | Potts 128 frozen | 21.5 | | 94.8% | |
+| | Potts 256 / 512, power 4 | 9.89 / 8.17 | | 98.4% | 92.3% (512) |
+| | Potts 512, power 4, local S = 64 visit-count | 9.52 | | 97.8% | 90.5% |
+| 28x28 0/1/2/3 | real floor | 4.57 | | 98.4% | 86.8% |
+| | Ising 784 | 37.3 | 38.1 | 71.6% | 66.2% |
+| | Potts 784 | 20.3 | 22.6 | 98.6% | 92.2% |
+| | Potts 784 / 1536 frozen | 57.4 / 48.3 | | 84 / 88% | 74.6% (784) |
+
+Paired bootstrap differences (same trajectories), 95% intervals:
+- Ising against Potts at equal size: 14x14 0/1 Ising 512 - Potts 512 +2.1 [+0.8, +4.3]; four digits +4.9 [+3.1, +7.1];
+  28x28 four digits Ising 784 - Potts 784 +17.0 [+12.3, +23.0].
+- More states: Potts 512 - 128 (14x14 0/1) -1.1 [-1.8, -0.3]; Potts 512 - 256 power 4 (28x28 0/1) -1.7 [-2.3, -1.0].
+- Trained against frozen hidden couplings: 28x28 0/1 Potts 128 -8.7 [-10.3, -7.2]; four digits Potts 784 -37.1
+  [-39.9, -34.1].
+- Local training (S = 64, visit-count rule) against exact, Potts 512 power 4 at 28x28: +1.35 [+0.6, +2.0], p < 0.01.
+  On clean yield the same comparison was -1.8 points, not significant: FID resolves a small cost of local training.
+- Ising 512 reseed - plain (14x14 0/1): -0.30 [-0.63, +0.02], n.s. Full against simplest pixel model, Potts 512,
+  four digits at 14x14: +0.75 [+0.01, +1.46] (KID +14 [+3, +26]).
+
+Reading:
+- FID confirms the main ranking: hidden units >> none (paper 135 against 8.2), more Potts states help, trained >>
+  frozen, Potts >> Ising, and the Ising fixes do not help.
+- FID shows Ising flat from 128 units on (3.5-3.8 at 14x14), where clean yield still rose a few points.
+- At 14x14 on 0/1 the best Potts models are near the real floor (1.38 against 0.85) and the CNN finds as many
+  confident digits as in real images. At 28x28 they are not: Potts 512 power 4 has FID 8.2 against a floor of 2.8, and
+  four-digit Potts 784 20.3 against 4.6, although its clean yield (92.2%) is above the real images' (86.8%). The
+  clean yield measures shape (class, blend, distance to the nearest training image); FID also sees texture, and the
+  28x28 samples are grainy (speckle on the ink, stray dots). The remaining gap at 28x28 is likely the grain.
+- The two measures disagree on the pixel model at 14x14, four digits: clean yield favours the full pixel model
+  (85.0 against 79.0%, Result 14 / above), FID and KID the simplest (3.40 against 4.15), as does the CNN's confident
+  share (93.2 against 90.6%). The claim "the simplest pixel model costs 6 points on four digits" depends on the
+  measure.
+- Clipping to [0, 1] changes FID little for good models (Potts 512 14x14 1.38 -> 1.83) and slightly worsens it; it
+  matters for bad ones (no hidden units, four digits: 229 raw, dominated by a few out-of-range samples, 51 clipped).
+- Pending (chained to the runs): 28x28 four digits with all runs (4209815) and ten digits (4209816).
+
 ## Caveats
 
 1. **The hidden units are idealised.**
@@ -1923,13 +2120,14 @@ start for K > 1), both "+ both" (spring and per-pixel units). Exact training, se
    neighbours (196: 81.1%, matching Potts at equal K up to 128). The optomechanical pixel term is not needed (Status).
    Ising units are the preferred hardware story (one bistable element each, no winner-take-all), so the next steps
    follow the Ising units:
-   - more than 196 Ising units on 0/1 (256 / 512 / 1024, running): does Ising keep up with Potts 512 (89.4%), or
-     does it flatten near 81%?
-   - four digits (196 / 256 / 512 Ising units against Potts 512 with the same pixel model, running): does the
-     product of features scale better with the number of classes than the Potts mixture?
-   - the Ising failure modes (blends, faint near-empty samples): what the hidden units do on those trajectories
-     (`inspect_units.py`), and whether a few Ising units with hidden-hidden coupling or a winner-take-all among
-     groups of units fixes them;
+   - done: more Ising units on 0/1 (512: 83.5%, 1024: 85.4%, about +2 per doubling, still below Potts 512) and four
+     digits (flat at 67% from 256 to 512, 12 points below Potts 512); idle-unit fixes (reseed, step-size boost) do
+     not help (Result 15, 01:00 update);
+   - running: 28x28, four digits, Ising 784 / 1568 / 3136; all ten digits, plain Ising 3136 against Potts 1536 /
+     3072;
+   - the Ising failure modes (blends, faint near-empty samples) are in the model form, so the next candidates change
+     the model: hidden-hidden coupling among Ising units, or a winner-take-all among groups of units (a step
+     towards Potts with bistable elements);
    - if Ising scales: 4 nearest neighbours, ten digits (proposed 2026-11-09, deferred until the Ising results),
      28x28, and local training with measured statistics (so far exact training only);
    - open: whether the trained pixel potentials are bistable (double wells) and whether that can be imposed.

@@ -132,7 +132,8 @@ def main():
         seed = int(cfg.get("seed", lm.KEY_SEED))
         proto = cfg.get("proto_init", "perclass")
         pooled = proto in ("pooled", "random")
-        W_ref, _, tree = lm.split_reference(data, labels, taus, T, K, seed=100 * (seed - lm.KEY_SEED), pooled=pooled)
+        W_ref, _, tree = lm.split_reference(data, labels, taus, T, K, seed=100 * (seed - lm.KEY_SEED), pooled=pooled,
+                                         n_min=lm.tree_n_min(len(data), K))
         lines.append("")
         lines.append(f"{run} ({pname}, {K} Ising units, init {cfg.get('init')}, proto_init {proto}, seed {seed}, quad "
                      f"{cfg.get('quad', False)}, local {cfg.get('local', False)}, fixed {cfg.get('hidden_fixed', False)})")
