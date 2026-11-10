@@ -149,6 +149,7 @@ SETS=()
 for K in 784 1568 3136; do add Ising${K}_8nb mnist28_d0123_K${K}_ema_ising_quad_local_quartic_r1_lin; done
 for K in 784 1536; do add Potts${K}_8nb mnist28_d0123_K${K}_ema_potts_quad_local_quartic_r1_lin_pooled; done
 for K in 784 1536; do add Potts${K}_frozen_8nb mnist28_d0123_K${K}_ema_potts_local_quartic_r1_lin_pooled_fixed; done
+add Potts784_8nb_2x_steps mnist28_d0123_K784_ema_potts_quad_local_quartic_r1_lin_pooled_steps2
 run --problem mnist28_d0123 --out ${G}/28x28_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts --title "28x28, digits 0/1/2/3, power 4, nearest-neighbour springs only: Ising units and Potts states" \
     "${SETS[@]}" || rc=1
 

@@ -314,7 +314,7 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
 | `run_latent_checks_neuronic.sh` | CPU Slurm job running both scripts (~1 min of compute); submit from this folder |
 | `results/<check>_4190135/` | copies of the reports and metrics of job 4190135 |
 | `latent_model.py` | problems (mnist28, mnist14, gauss2_8), the paper's schedules, dense visible energy, hidden free energies (Ising, Potts, spring `Q`, per-pixel units) with analytic gradients and Laplacians, the score-matching loss, reference initialisations (Fisher, k-means prototypes, per-pixel) |
-| `train_latent.py` | the paper's training loop (jitted scan), with hidden units: `--K --hidden ising/potts --quad --local --visible sextic/quartic --radius R --neighbourhood chebyshev/von_neumann --pair-terms all/none/lin,om,duff --select best/ema --seed --proto-init perclass/pooled/random --hidden-fixed --problem`; local training: `--hidden-samples S --hidden-jackknife` (force matching with measured hidden statistics), `--hidden-jackknife-order 2` (second-order jackknife: Richardson over S, S/2 and S/4 of the same draws, also removes the O(1/S²) bias), `--hidden-samples-late --hidden-samples-switch` (another S from a given slice on), `--hidden-floor` (homeostatic revival of unvisited Potts states; diverges), `--hidden-norm group` (hidden parameters with one step size per group instead of per-element Adam: the closest tested rule to plain gradient steps), `--hidden-norm state` (one Adam gain per hidden state), `--hidden-norm occupancy --occ-beta` (a per-state step from the state's own occupation, one step scale per group), `--occ-same-draws` (its visit counts from the draws of the gradient statistics instead of fresh draws), `--hidden-replicates R` (diagnostic: R independent S-draw estimates averaged), `--hidden-rule cd1 --cd1-dt --cd1-releases --cd1-hidden-samples` (CD-1, with exact or measured hidden statistics) |
+| `train_latent.py` | the paper's training loop (jitted scan), with hidden units: `--K --hidden ising/potts --quad --local --visible sextic/quartic --radius R --neighbourhood chebyshev/von_neumann --pair-terms all/none/lin,om,duff --select best/ema --seed --proto-init perclass/pooled/random --hidden-fixed --problem`; local training: `--hidden-samples S --hidden-jackknife` (force matching with measured hidden statistics), `--hidden-jackknife-order 2` (second-order jackknife: Richardson over S, S/2 and S/4 of the same draws, also removes the O(1/S²) bias), `--hidden-samples-late --hidden-samples-switch` (another S from a given slice on), `--hidden-floor` (homeostatic revival of unvisited Potts states; diverges), `--hidden-norm group` (hidden parameters with one step size per group instead of per-element Adam: the closest tested rule to plain gradient steps), `--hidden-norm state` (one Adam gain per hidden state), `--hidden-norm occupancy --occ-beta` (a per-state step from the state's own occupation, one step scale per group), `--occ-same-draws` (its visit counts from the draws of the gradient statistics instead of fresh draws), `--hidden-replicates R` (diagnostic: R independent S-draw estimates averaged), `--hidden-rule cd1 --cd1-dt --cd1-releases --cd1-hidden-samples` (CD-1, with exact or measured hidden statistics); `--steps-scale` (multiple of the paper's steps per slice); `--val-every N` (learning curves: validation loss of the slice result every N steps on the slice's fixed validation batch, per-sample losses in `<run>/val_curves/slice_<k>.npz`, second-half gain in `train_log.jsonl`) |
 | `sample_latent.py` | reverse SDE (SRA1, the paper's settings) from a run or the paper checkpoint; trajectory sets `base` / `ext`; `--snapshots`; `--sampler ode` (PF-ODE); `--quench 0.05,0.25,1` (zero-temperature relaxation under the learned t = 0 energy after sampling; quenches the saved samples if they exist, writes `<stem>_q<s>.npy`) |
 | `evaluate_samples.py` | blend check, far / copy checks, class-resolved and 50/50 rates, texture, per-class pixel statistics, McNemar and paired-bootstrap tests, example grids |
 | `coverage_samples.py` | k-NN precision / recall, spread, distinct nearest images and centroid distance per class |
@@ -1948,9 +1948,16 @@ exact training; runs 4206653, 4206669, 4207686; evaluations 4206656, 4206671, 42
 | Ising 784 | 66.2% | 64.4 | 85.0 | 52.7 | 62.7 | 24.4% | 17.0% | 0.4% | 4.90 |
 | Potts 784 | **92.2%** | 93.2 | 98.6 | 85.6 | 91.3 | 5.2% | 3.4% | 0.0% | 4.49 |
 | Potts 784, frozen (formula couplings) | 74.6% | 74.4 | 99.3 | 52.1 | 72.4 | 24.9% | 0.8% | 0.0% | 5.14 |
+| Ising 1568 (12:20 update) | 70.8% | 68.3 | 87.2 | 61.2 | 66.7 | 19.6% | 15.2% | | |
+| Potts 1536 (12:20 update) | **95.8%** | 97.6 | 99.3 | 87.0 | 99.2 | 2.1% | 2.6% | | |
+| Potts 1536, frozen (12:20 update) | 87.6% | 87.9 | 100.0 | 76.4 | 86.2 | 11.7% | 0.7% | 0.0% | 4.93 |
 | real images (probes) | 86.8% | 93.0 | 97.7 | 71.0 | 85.7 | 10.1% | 5.0% | 5.0% | 4.41 |
 
 - Potts 784 against Ising 784: +26.0 points ([+21.6, +30.4]); against frozen Potts 784: +17.6 ([+13.7, +21.6]).
+- 12:20 update (evaluations 4206657, 4206672, 4207681): doubling helps both, Potts 1536 - 784 +3.6 [+0.9, +6.4],
+  Ising 1568 - 784 +4.6 [+1.4, +8.0]; the gap stays (Ising 1568 - Potts 1536 -25.0 [-29.5, -20.5]). Frozen
+  couplings improve with size (74.6 -> 87.6%) but stay below trained (-8.2 [-11.5, -5.0]). FID of these follows in
+  4209815 after Ising 3136.
 - Potts 784 is above the real probes on clean yield: fewer far samples (5.2% against 10.1%), i.e. somewhat more
   typical than real digits, with no copies and a median nearest-image distance near the probes' (4.49 against
   4.41). The 2s gain most (85.6 against 71.0 for real).
@@ -2047,6 +2054,20 @@ If the grain were thermal, the quench would remove it and FID would drop towards
   per 500 samples) and could be part of the sampling protocol in the paper, reported next to plain SDE sampling.
   It does not change any conclusion. Whether more hidden elements shrink the learned grain is what the ten-digit
   sweep will show; if FID levels off above the floor there, the pixel couplings are the limit.
+
+**Is training converged? (2026-11-10, running)** Every slice trains a fixed number of steps (the paper's schedule,
+10,901 at t = 5 rising to 30,901 at t = 0; the paper's early stopping never triggers), with no convergence check.
+Crude test from the logs: if a slice had converged, its best mini-batch would fall anywhere in the slice (about 10%
+of slices in the last 10% of steps). Observed: 51 / 53 / 55 of 100 slices (28x28 four digits Potts 784 / Ising 784;
+14x14 0/1 Potts 512). Mid-diffusion slices look flat (best mini-batch at 7-53% of the steps); the late slices (80-99,
+the ones that set the t = 0 energy and so the grain) have it at 83-99% of the steps in every run, so they are
+still improving when they stop. Risks: part of the learned grain may be undertraining, and a fixed budget could make
+FID level off with K for a training reason (larger models may need more steps).
+- Test (job 4211741, about 20 h; FID 4211742, eval 4211743, gallery 4211744): four-digit Potts 784 retrained with
+  twice the steps (`--steps-scale 2`) and learning curves (`--val-every 1000`: EMA validation loss every 1,000
+  steps, paired per-sample losses). If FID barely moves, keep the fixed schedule and report the check; if it improves
+  clearly, choose a convergence criterion from the curves (e.g. stop when the validation loss improved by less than
+  one standard error over the last few thousand steps, capped at about 3x) and rerun the sweep, largest K first.
 
 ## Caveats
 

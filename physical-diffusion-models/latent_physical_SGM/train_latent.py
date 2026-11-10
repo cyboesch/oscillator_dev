@@ -106,6 +106,10 @@ def parse():
     ap.add_argument("--select", choices=["best", "ema"], default="best",
                     help="slice result: the paper's luckiest-mini-batch iterate, or an EMA of the iterates")
     ap.add_argument("--ema-steps", type=float, default=1000.0)
+    ap.add_argument("--val-every", type=int, default=0,
+                    help="learning curves: every N steps (a multiple of 100; 0 = off) the validation loss of the current "
+                         "slice result (EMA or best iterate, as --select) on the slice's fixed validation batch; per-sample "
+                         "losses saved in <run>/val_curves/slice_<k>.npz (paired comparisons between checkpoints)")
     ap.add_argument("--proto-init", choices=["perclass", "pooled", "random"], default=None,
                     help="Potts initial prototypes: K/2 k-means prototypes per class (uses the labels), or K prototypes "
                          "of all images together (pooled: no labels are used anywhere in training), or none (random: "
@@ -477,6 +481,8 @@ def main():
                          "--hidden-samples-late, if used) divisible by 4")
     if args.hidden_samples < 0 or (args.hidden_samples > 0 and not (args.K > 0 or args.local)):
         raise ValueError("--hidden-samples needs hidden units")
+    if args.val_every < 0 or args.val_every % 100:
+        raise ValueError("--val-every must be 0 or a positive multiple of 100")
     if args.hidden_rule == "cd1" and args.hidden_jackknife:
         raise ValueError("--hidden-jackknife is for force matching: with --hidden-rule cd1 only the visible gradient "
                          "uses the loss, and it is linear in the measured statistics (no plug-in bias)")
@@ -543,7 +549,7 @@ def main():
         "hidden_floor": args.hidden_floor, "hidden_norm": args.hidden_norm, "occ_beta": args.occ_beta,
         "hidden_jackknife_order": args.hidden_jackknife_order, "occ_same_draws": args.occ_same_draws,
         "pair_terms": ",".join(pair_terms) if pair_terms else "none", "neighbourhood": args.neighbourhood,
-        "ising_reseed": args.ising_reseed, "ising_weak_boost": args.ising_weak_boost,
+        "ising_reseed": args.ising_reseed, "ising_weak_boost": args.ising_weak_boost, "val_every": args.val_every,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -558,7 +564,7 @@ def main():
                 "hidden_floor": 0.0, "hidden_norm": "element", "occ_beta": 0.999,
                 "hidden_jackknife_order": 1, "occ_same_draws": False,
                 "pair_terms": "duff,lin,om", "neighbourhood": "chebyshev",
-                "ising_reseed": False, "ising_weak_boost": 1.0}   # runs started before these options existed
+                "ising_reseed": False, "ising_weak_boost": 1.0, "val_every": 0}   # runs started before these options existed
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -816,9 +822,21 @@ def main():
         losses = []
         run_k = run_late if run_late is not None and k >= args.hidden_samples_switch else run
         n_full, rem = divmod(n_steps, 100)
-        for _ in range(n_full):
+        curve_steps, curve_ps = [], []
+        if args.val_every:                      # learning curve on the slice's fixed validation batch (as below)
+            kc_idx, kc_noise = jr.split(jr.fold_in(jr.PRNGKey(VAL_SEED), k))
+            src_c = data if args.cls == "none" else data_train
+            idx_c = np.asarray(jr.choice(kc_idx, src_c.shape[0], shape=(VAL_N,), replace=True))
+            e_c = np.exp(-t_curr)
+            Xc = e_c * src_c[idx_c] + np.sqrt(lm.TEMP * (1.0 - e_c * e_c)) * jr.normal(kc_noise, (VAL_N, n_vis))
+            curve_steps.append(0)
+            curve_ps.append(np.asarray(loss_ps(carry[4] if args.select == "best" else carry[7], Xc), np.float32))
+        for i_chunk in range(n_full):
             carry, l = run_k(carry, t_curr, lrs, 100, dt_k)
             losses.append(l)
+            if args.val_every and ((i_chunk + 1) * 100) % args.val_every == 0:
+                curve_steps.append((i_chunk + 1) * 100)
+                curve_ps.append(np.asarray(loss_ps(carry[4] if args.select == "best" else carry[7], Xc), np.float32))
         if rem:
             carry, l = run_k(carry, t_curr, lrs, rem, dt_k)
             losses.append(l)
@@ -850,6 +868,18 @@ def main():
                "best_loss": best_loss, "best_epoch": best_epoch, "val_loss": val, "val_median": float(np.median(val_ps)),
                "select": args.select, "seconds": t_train, "steps_per_s": n_steps / t_train,
                "job": os.environ.get("SLURM_JOB_ID", "manual"), "code_sha256": code_sha}
+        if args.val_every:                      # learning curve: add the final slice result, save per-sample losses
+            if curve_steps[-1] != n_steps:
+                curve_steps.append(n_steps)
+                curve_ps.append(val_ps.astype(np.float32))
+            os.makedirs(os.path.join(out_dir, "val_curves"), exist_ok=True)
+            np.savez(os.path.join(out_dir, "val_curves", f"slice_{k:03d}.npz"), steps=np.asarray(curve_steps),
+                     val_per_sample=np.stack(curve_ps), t=t_curr)
+            cm = [float(np.mean(v)) for v in curve_ps]
+            half = int(np.searchsorted(curve_steps, n_steps // 2))      # improvement over the second half of the slice
+            dd = curve_ps[-1].astype(np.float64) - curve_ps[half].astype(np.float64)
+            rec.update(val_curve_steps=[int(s) for s in curve_steps], val_curve_mean=cm,
+                       val_gain_second_half=float(np.mean(dd)), val_gain_second_half_se=float(np.std(dd) / np.sqrt(dd.size)))
         extra = {}
         if paper is not None:
             pp = {"theta": jnp.asarray(np.array(paper[k], dtype=np.float64)), "W": jnp.zeros((0, n_vis)), "b": jnp.zeros((0,))}
@@ -922,6 +952,9 @@ def main():
         msg = (f"slice {k:3d} t {t_curr:.4f}: {n_steps} steps in {t_train:.0f} s ({rec['steps_per_s']:.0f}/s); "
                f"loss first {rec['first_loss']:.4g}, last-1000 mean {rec['last1000_mean']:.6g}, best {best_loss:.6g} "
                f"@ {best_epoch}; val {val:.6g}")
+        if args.val_every:
+            msg += (f"; val change over the 2nd half of the slice {rec['val_gain_second_half']:.4g} "
+                    f"+- {rec['val_gain_second_half_se']:.2g}")
         if "val_loss_paper" in rec:
             msg += f" (paper {rec['val_loss_paper']:.6g}; diff {rec['val_diff_paper']:.4g} +- {rec['val_diff_paper_se']:.2g})"
         if K > 0 and args.hidden == "potts":
