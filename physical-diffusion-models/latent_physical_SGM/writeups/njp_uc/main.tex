@@ -1,0 +1,587 @@
+% Version prepared for author review on 21 August 2026.
+% Springer Nature LaTeX authoring template v3.1 (December 2024).
+% Target: npj Unconventional Computing, Article.
+% Lines containing "AUTHOR CHECK" require verification before submission.
+
+\documentclass[referee,lineno,pdflatex,sn-nature]{sn-jnl}
+
+\usepackage{graphicx}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{bm}
+\usepackage{booktabs}
+\usepackage{array}
+\usepackage{mathrsfs}
+\usepackage{xcolor}
+\usepackage{textcomp}
+
+\raggedbottom
+
+\newcommand{\kBT}{k_{\mathrm B}T}
+\newcommand{\vect}[1]{\boldsymbol{#1}}
+\newcommand{\Ehat}{\widehat E}
+\newcommand{\Fhat}{\widehat{\vect F}}
+\newcommand{\authorcheck}[1]{\textbf{[AUTHOR CHECK: #1]}}
+
+\begin{document}
+
+\title[Local learning for physical generative models]
+{Local learning rules for nonequilibrium physical generative models}
+
+\author*[1]{\fnm{Cyrill} \sur{B\"osch}}\email{cb7454@princeton.edu}
+\author[1]{\fnm{Geoffrey} \sur{Roeder}}
+\author[2]{\fnm{Marc} \sur{Serra-Garcia}}
+\author[1]{\fnm{Ryan P.} \sur{Adams}}
+
+\affil*[1]{\orgdiv{Department of Computer Science},
+  \orgname{Princeton University},
+  \orgaddress{\city{Princeton}, \postcode{08540}, \state{NJ},
+  \country{USA}}}
+\affil[2]{\orgname{AMOLF},
+  \orgaddress{\street{Science Park 104}, \postcode{1098 XG},
+  \city{Amsterdam}, \country{The Netherlands}}}
+
+\abstract{Score-based generative models produce samples through a time-dependent
+nonequilibrium stochastic process, but their neural implementations are usually
+trained by global backpropagation. We derive a parameter-local rule for training
+the required score field in a conservative physical system. We parameterize a
+time-dependent score energy in a network of nonlinear overdamped oscillators. For this
+model, we derive an estimator whose expectation equals the score-matching gradient.
+It uses local force components measured with the full state clamped and analytic
+derivatives of the corresponding energy feature. When forces cannot be measured, a
+one-step contrastive estimator approaches the same gradient as the release time
+tends to zero. We illustrate the construction
+numerically for a two-mode distribution and, as a qualitative proof of principle,
+for grayscale MNIST images of zeros and ones using a $28\times28$ oscillator network.
+This connects local physical learning with nonequilibrium generative sampling.}
+
+\keywords{physical learning, score matching, diffusion models, thermodynamic
+computing, nonlinear oscillators, probabilistic computing}
+
+\maketitle
+
+\section{Introduction}\label{sec:introduction}
+
+Physical computing maps a computation onto a device's native dynamics
+\cite{jaeger2023toward,finocchio2024roadmap,
+melanson2025thermodynamic,aifer2024thermodynamic,duffield2025thermodynamic,
+wanjura2024fully,lin2025memristive,nakajima2015information}. The physical parameters
+must still be trained for the target task. Physical learning derives updates from
+measurements local to each tunable element
+\cite{momeni2024training,stern2023learning,stern2021supervised,
+dillavou2022demonstration,dillavou2024machine,altman2024experimental}. Many such
+rules use equilibria or steady states of the physical dynamics
+\cite{scellier2017equilibrium,baldi1991contrastive,laydevant2024training,
+guzman2025unsupervised}.
+
+Diffusion models instead use explicitly time-dependent dynamics. A score-based
+generative model (SGM) evolves a simple distribution into a target distribution
+through a finite stochastic process \cite{song2019generative,
+song2021scorebased}. The reverse dynamics depend on the score, the spatial gradient
+of the log density at every noise time. Neural score models are normally trained
+by differentiating a digital model. A physical realization should instead learn the
+required force field without differentiating a numerical model of the device.
+
+Recent work has mapped generative diffusion inference to physical systems. Passive
+diffractive optical systems have been programmed to perform denoising inference
+\cite{oguz2024optical}, and analog fixed-point formulations retain conventional
+model training while mapping inference to noisy optical hardware
+\cite{chu2026analog}. A resistive-memory neural differential-equation solver has
+implemented time-continuous score-based diffusion with an offline-trained analog
+neural network and feedback integrator \cite{yang2026resistive}. Denoising
+thermodynamic models are built from sparse, locally
+connected Boltzmann machines and have been analysed together with an all-transistor
+probabilistic architecture \cite{jelincic2026efficient}. These studies either
+perform or model physical diffusion inference and, in some cases, provide device-level
+performance projections. We focus on training a time-indexed physical score energy
+from local observables.
+
+Local training has also been developed through equilibrium propagation,
+contrastive procedures, and related steady-state constructions
+\cite{scellier2017equilibrium,stern2021supervised,dillavou2022demonstration}.
+Related work uses equilibrium propagation to obtain local denoising-score
+gradients from a zero-nudge limit and multiple equilibrium states in a bilinear
+thermodynamic model \cite{de2026symmetric}. Our direct rule instead uses one fully
+clamped force configuration for each sample at a positive noise time. The
+expectation of the resulting local estimator equals the population score-matching
+gradient. A short-time contrastive release provides an alternative when the force
+is not directly observable.
+Here, locality means that each parameter update uses only the coordinates and force
+signals associated with its energy feature.
+
+We make three contributions. First, we express the score through a time-dependent
+learned energy and derive a local force-matching rule for its coefficients.
+All per-sample coefficient-gradient contributions can be accumulated in parallel
+from the same clamped configuration, provided that the corresponding force
+components are readable.
+Second, we formulate a one-step contrastive semi-gradient that converges to the same
+score-matching gradient as the release duration tends to zero. Third, we map the
+learned score to the open-loop energy protocol of a nonlinear overdamped oscillator
+network and demonstrate the construction numerically on a bimodal distribution and
+on grayscale MNIST images. The numerical examples illustrate the learning
+construction; they do not demonstrate a fabricated device or compare end-to-end
+energy or speed.
+
+\section{Results}\label{sec:results}
+
+\subsection{Reverse diffusion as driven Langevin dynamics}
+
+Generative modelling seeks samples from a target distribution $p$ observed only
+through a dataset
+$\mathcal D=\{\vect x^{(m)}\in\mathbb R^N\}_{m=1}^{M}$. We use
+$t\in[0,\tau]$ for forward time. The forward Ornstein--Uhlenbeck process is
+\begin{equation}\label{eq:forward}
+  \mathrm d\vect X_t=-\vect X_t\,\mathrm dt
+  +\sqrt{2\kBT}\,\mathrm d\vect W_t,
+\end{equation}
+with $p_0=p$. Its transition law is
+\begin{equation}\label{eq:ou-transition}
+  q_t(\vect x_t\mid\vect x_0)
+  =\mathcal N(a_t\vect x_0,\sigma_t^2\vect I),\qquad
+  a_t=e^{-t},\quad \sigma_t^2=\kBT(1-e^{-2t}).
+\end{equation}
+For the experiments, the dataset defines the forward distribution
+\begin{equation}\label{eq:empirical-smoothed}
+ p_t^{\mathcal D}(\vect x)=\frac{1}{M}\sum_{m=1}^{M}
+ q_t(\vect x\mid\vect x^{(m)}), \qquad t>0.
+\end{equation}
+For sufficiently large $\tau$, $p_\tau$ is approximated by
+$\mathcal N(\vect 0,\kBT\vect I)$.
+
+Let $s\in[0,\tau]$ denote reverse time, with $s=0$ at the noisy endpoint. The
+reverse process is \cite{anderson1982reverse,song2021scorebased}
+\begin{equation}\label{eq:reverse}
+  \mathrm d\vect Y_s=
+  \left[\vect Y_s+2\kBT\nabla_{\vect x}\log p_{\tau-s}(\vect Y_s)\right]
+  \mathrm ds+\sqrt{2\kBT}\,\mathrm d\overline{\vect W}_s,
+\end{equation}
+where $\vect Y_0\sim p_\tau$. With an exact score and this initial distribution,
+$\vect Y_\tau\sim p_0$.
+
+We parameterize the score at forward time $t$ through a learned score energy,
+\begin{equation}\label{eq:force-score}
+  \Fhat_{\vect\theta,t}(\vect x)
+  =-\nabla_{\vect x}\Ehat_{\vect\theta,t}(\vect x),\qquad
+  \vect s_{\vect\theta,t}(\vect x)
+  =\frac{\Fhat_{\vect\theta,t}(\vect x)}{\kBT}.
+\end{equation}
+The energy replayed by the physical system at sampling time $s$ is
+\begin{equation}\label{eq:reverse-energy}
+  U_{\vect\theta,s}(\vect x)
+  =2\Ehat_{\vect\theta,\tau-s}(\vect x)
+  -\frac{1}{2}\lVert\vect x\rVert^2 .
+\end{equation}
+Its overdamped force is
+$-\nabla U_{\vect\theta,s}=\vect x+2\Fhat_{\vect\theta,\tau-s}$,
+which reproduces the learned drift in Eq.~\eqref{eq:reverse}. The score energy and
+the physical reverse energy are denoted by $\Ehat$ and $U$, respectively.
+
+\subsection{Polynomial oscillator model}
+
+We represent $\Ehat_{\vect\theta,t}$ using a low-order polynomial energy on an
+interaction graph $\mathcal E$. We assign a fixed ordering to each retained pair
+$(n,m)$ because the $\chi_{nm}$ and $\omega_{nm}$ features are
+exchange-asymmetric. The on-site contribution is
+\begin{equation}\label{eq:local-energy}
+ \Ehat^{\mathrm l}_{\vect\theta,t}(\vect x)
+ =\sum_{n=1}^{N}\left[
+ \frac{\alpha_n(t)}{2}x_n^2+
+ \frac{\beta_n(t)}{4}x_n^4+
+ \frac{\gamma_n(t)}{6}x_n^6+f_n^{\mathrm{ext}}(t)x_n\right],
+\end{equation}
+and the pair contribution for $(n,m)\in\mathcal E$ is
+\begin{align}\label{eq:pair-energy}
+ \Ehat^{\mathrm{pair}}_{nm,t}(x_n,x_m)
+ ={}&\frac{\kappa_{nm}(t)}{2}(x_n-x_m)^2
+ +\frac{\lambda_{nm}(t)}{4}(x_n-x_m)^4 \nonumber\\
+ &+\chi_{nm}(t)x_nx_m^2+\omega_{nm}(t)x_n^2x_m .
+\end{align}
+The complete learned energy is
+$\Ehat_{\vect\theta,t}=\Ehat^{\mathrm l}_{\vect\theta,t}
++\sum_{(n,m)\in\mathcal E}\Ehat^{\mathrm{pair}}_{nm,t}$.
+We constrain $\gamma_n(t)>0$ to keep the learned energy coercive.
+
+Oscillator coordinates provide continuous state variables. On-site nonlinearities
+and pair interactions can represent the polynomial energy, while thermal
+fluctuations and clamped force readout supply the noise and training signal. The
+$\chi_{nm}$ and $\omega_{nm}$ features are exchange-asymmetric polynomial monomials.
+Because they belong to a scalar energy, the resulting force field remains
+conservative. Related monomials can arise in optomechanical, magnetic, and
+geometrically nonlinear systems
+\cite{sankey2010strong,serra2018tunable,serra2016mechanical}.
+
+\subsection{Force matching gives parameter-local score gradients}
+
+At a fixed positive noise time, let the learned energy be linear in features,
+\begin{equation}\label{eq:feature-energy}
+  \Ehat_{\vect\theta}(\vect x)=\sum_i\theta_i\phi_i(\vect x),
+\end{equation}
+and let $\mathcal S_i$ contain the coordinates on which $\phi_i$ depends. The score-matching objective is \cite{hyvarinen2005scorematching}
+\begin{equation}\label{eq:sm-objective}
+ J_{\mathrm{SM}}(\vect\theta;t)=
+ \mathbb E_{\vect X\sim p_t}\left[
+ \nabla_{\vect x}\!\cdot\vect s_{\vect\theta}(\vect X)
+ +\frac{1}{2}\lVert\vect s_{\vect\theta}(\vect X)\rVert^2\right].
+\end{equation}
+Using Eq.~\eqref{eq:force-score}, its derivative is
+\begin{equation}\label{eq:local-gradient}
+ \frac{\partial J_{\mathrm{SM}}}{\partial\theta_i}
+ =\mathbb E_{p_t}\left[
+ -\frac{\Delta\phi_i(\vect X)}{\kBT}
+ -\frac{\nabla\phi_i(\vect X)\cdot\Fhat_{\vect\theta}(\vect X)}
+ {(\kBT)^2}\right].
+\end{equation}
+Equation~\eqref{eq:local-gradient} is exact for the
+objective~\eqref{eq:sm-objective}. In the experiments, we replace $p_t$ by
+$p_t^{\mathcal D}$ from Eq.~\eqref{eq:empirical-smoothed}; the same exactness
+statement holds at $t>0$. Finite samples and imperfect force measurements
+introduce estimation error. Each sample requires preparing and clamping the full
+network state. Because $\nabla\phi_i$ and $\Delta\phi_i$ vanish outside $\mathcal S_i$,
+the contribution for $\theta_i$ uses only the coordinates and force components in
+$\mathcal S_i$. The curvature term is an analytic function of those coordinates;
+the other term is obtained from the force of the clamped system.
+
+For the on-site Duffing feature $\phi_{\beta_n}=x_n^4/4$,
+\begin{equation}\label{eq:duffing-gradient}
+ \frac{\partial J_{\mathrm{SM}}}{\partial\beta_n}
+ =\mathbb E_{p_t}\left[-\frac{3X_n^2}{\kBT}
+ -\frac{X_n^3\widehat F_{\vect\theta,n}(\vect X)}{(\kBT)^2}\right].
+\end{equation}
+For a coupling feature $\phi_i(x_n,x_m)$, the update uses $x_n$, $x_m$, and the
+corresponding components $\widehat F_n$ and $\widehat F_m$ of the total learned
+force. All per-sample coefficient-gradient contributions can therefore be
+accumulated in parallel from one clamped configuration.
+
+The learned force can be measured directly if the training configuration implements
+$\Ehat$. If instead the complete reverse energy $U$ is active, clamping the network
+and measuring $\vect F^{\mathrm{rev}}=-\nabla U$ gives
+$\Fhat=(\vect F^{\mathrm{rev}}-\vect x)/2$. No differentiation through a numerical
+device model is required.
+
+\subsection{Short-time contrastive estimator}
+
+When force components cannot be measured, a short physical release provides an
+alternative. Starting from $\vect X_t\sim p_t$, we approximate a Langevin release
+of duration $\delta$ under the learned score energy by one Euler--Maruyama step:
+\begin{equation}\label{eq:cd-release}
+ \vect X_t^- =\vect X_t-\delta\nabla_{\vect x}\Ehat_{\vect\theta}(\vect X_t)
+ +\sqrt{2\delta\kBT}\,\vect W,
+ \qquad \vect W\sim\mathcal N(\vect0,\vect I).
+\end{equation}
+For a linearly parameterized energy, define the stop-gradient semi-gradient
+\begin{equation}\label{eq:cd-semigradient}
+ g_i^{\mathrm{CD1}}(\vect\theta;t,\delta)
+ =\mathbb E\left[\phi_i(\vect X_t^-)-\phi_i(\vect X_t)\right].
+\end{equation}
+In hardware, the corresponding state can be obtained by running the continuous
+Langevin dynamics under $\Ehat_{\vect\theta}$ for duration $\delta$; the displayed
+step approximates those dynamics to first order in $\delta$. The full coupled state
+evolves during the release. Locality applies to the feature difference used for a
+parameter update, not to the release dynamics. The update is formed directly from
+this measured feature difference; no derivative of the release trajectory is
+taken. Under the smoothness assumptions of the
+score-matching--contrastive-divergence expansion \cite{hyvarinen2007connections},
+\begin{equation}\label{eq:cd-limit}
+ -\frac{g_i^{\mathrm{CD1}}}{\delta(\kBT)^2}
+ =\frac{\partial J_{\mathrm{SM}}}{\partial\theta_i}+O(\delta).
+\end{equation}
+Repeated releases reduce Monte Carlo variance but not the finite-$\delta$ bias. For
+$\phi_{\beta_n}=x_n^4/4$, Eq.~\eqref{eq:cd-semigradient} is the average of
+$[(X_{t,n}^-)^4-X_{t,n}^4]/4$. This operation needs the feature definition,
+temperature, and measured states.
+
+
+\subsection{Nonequilibrium sampling of a bimodal distribution}
+
+We first consider a two-dimensional mixture of two Gaussians,
+\begin{equation}
+ p(x_1,x_2)=\sum_{j=1}^{2}\varpi_j
+ \mathcal N\!\left((x_1,x_2)\mid\vect\mu_j,\vect\Sigma_j\right).
+\end{equation}
+\authorcheck{Insert the mixture weights, mean vectors, covariance matrices, and
+number of training samples.}
+We train a two-oscillator network using Eq.~\eqref{eq:local-gradient} and generate
+$S=2000$ independent trajectories of duration $\tau$. Figure~\ref{fig:mog}
+shows that the samples populate both modes and that their relative frequencies
+visually agree with the target weights on this time scale.
+
+For an equilibrium comparison with the same endpoint energy, we use
+$\Ehat_{\vect\theta,0}$ as a static Boltzmann energy. One persistent Langevin chain,
+without restarts, is evolved for total time $S\tau$ and recorded every $\tau$. On the simulated time
+scale it remains in the right basin even though the learned energy contains both
+basins. For this initialization and runtime, the persistent chain mixes slowly
+because transitions between the basins are rare. Each reverse trajectory instead
+reaches a mode through a finite-time denoising path.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig1.png}
+\caption{\textbf{Two-dimensional Gaussian-mixture example.} Top row: learned
+nonequilibrium reverse process. Bottom row: the matched persistent equilibrium
+chain. (a, d) Histograms of $2000$ recorded samples and exact marginal densities.
+(b, e) Learned endpoint score energy $\Ehat_{\vect\theta,0}$ with samples.
+(c, f) Boltzmann density defined by the same endpoint score energy; yellow dashed
+curves show target-density contours. The nearly uniform dark-blue background reflects
+the linear colour scale and broad dynamic range of the density.}
+\label{fig:mog}
+\end{figure}
+
+The CD1 estimator learns a different energy and visually captures both modes in
+this example (Fig.~\ref{fig:cd1}). The force-matching
+estimator is used for the larger example below as it avoids the $O(\delta)$ bias.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig3.png}
+\caption{\textbf{Two-dimensional example trained with the CD1 estimator.}
+Top row: learned reverse-process samples, learned score energy, and the associated
+endpoint Boltzmann density. Bottom row: matched persistent equilibrium comparison.
+Histograms contain $2000$ recorded samples; yellow dashed curves show target-density
+contours. The update uses the feature differences defined in
+Eq.~\eqref{eq:cd-semigradient}.}
+\label{fig:cd1}
+\end{figure}
+
+\subsection{MNIST generation with 784 oscillators}
+
+We next train the polynomial oscillator model on grayscale MNIST images restricted
+to digits 0 and 1. Each of the $28\times28=784$ pixels is represented by one
+continuous oscillator coordinate. The graph used in the reported experiment
+contains couplings between positions separated by as many as 14 sites.
+Figure~\ref{fig:mnist} compares representative data images with samples from the
+learned reverse protocol. The generated patterns are recognizable as zeros or ones,
+but are blurrier and less regular than the data examples.
+
+\begin{figure}[t]
+\centering
+\includegraphics[width=\textwidth]{fig2.png}
+\caption{\textbf{MNIST samples.} (a) Representative grayscale images of zeros and
+ones from the training data. (b) Endpoint samples generated by the locally trained
+$28\times28$ oscillator network.}
+\label{fig:mnist}
+\end{figure}
+
+\subsection{System boundary and scaling}
+
+The proposed computer is hybrid. The physical system generates the stochastic
+dynamics and nonlinear forces. An external controller initializes the state and
+replays the learned schedule $\vect\theta^*(\tau-s)$, using the same schedule for
+every sample. The controller and its programming cost are therefore part of the
+system. Training also requires preparing and clamping corrupted data states,
+measuring forces or running short releases, and updating the coefficients. The CD1
+releases use the learned score energy $\Ehat$ rather than the reverse energy $U$.
+
+For the basis above, the number of programmed coefficients is
+\begin{equation}\label{eq:pcount}
+ P_{\mathrm{elem}}=4N+4|\mathcal E|.
+\end{equation}
+A schedule stored at $N_t$ noise times contains $P_{\mathrm{elem}}N_t$ values.
+
+Let $K_{\mathrm{opt}}$ be the number of optimizer updates per noise time, $B$ the
+batch size, and $R$ the number of CD1 releases per clamped state. Force matching uses
+$O(N_tK_{\mathrm{opt}}B)$ clamped configurations and
+$O(P_{\mathrm{elem}}N_tK_{\mathrm{opt}}B)$ gradient contributions. CD1 uses
+$O(RN_tK_{\mathrm{opt}}B)$ short releases and
+$O(P_{\mathrm{elem}}RN_tK_{\mathrm{opt}}B)$ feature differences (see Table~\ref{tab:scaling}).
+
+\begin{table}[t]
+\caption{Resources and system boundary of the proposed implementation. The counts
+describe the polynomial model; hardware performance depends on the platform. $N$ is
+the number of degrees of freedom, $\mathcal E$ the interaction graph of retained
+pairs, $P_{\mathrm{elem}}=4N+4|\mathcal E|$ the number of coefficients, $N_t$ the
+number of stored noise times, $B$ the batch size, and $R$ the number of repeated CD1
+releases. Gradient costs are for one batch at one noise time.}
+\label{tab:scaling}
+\small
+\begin{tabular*}{\textwidth}{@{\extracolsep\fill}
+>{\raggedright\arraybackslash}p{0.20\textwidth}
+>{\raggedright\arraybackslash}p{0.20\textwidth}
+>{\raggedright\arraybackslash}p{0.50\textwidth}}
+\toprule
+Resource & Nominal scaling & Notes \\
+\midrule
+Physical state and edges & $O(N+|\mathcal E|)$ & $N$ state elements and a
+platform-dependent implementation of each retained interaction. \\
+Coefficients & $P_{\mathrm{elem}}=4N+4|\mathcal E|$ & Four on-site coefficients per coordinate and
+four coupling coefficients per retained pair. \\
+Schedule storage & $O(P_{\mathrm{elem}}N_t)$ & Stored knots for temporal replay;
+precision and interpolation add platform-dependent cost. \\
+Force-matching gradient & $B$ clamps and $O(BP_{\mathrm{elem}})$ local
+contributions & Each clamp provides $N$ force-component values and one contribution
+for every coefficient. \\
+CD1 gradient & $BR$ short releases and $O(BRP_{\mathrm{elem}})$ local feature
+differences & $R$ repetitions reduce variance; the release duration sets the
+finite-time bias. \\
+Temporal replay & $O(P_{\mathrm{elem}}N_t)$ values & Average delivery rate
+$\sim P_{\mathrm{elem}}N_t/\tau$; multiplexing trades channels for bandwidth. \\
+Time-to-space mapping & $O(N_t)$ stages and $O(P_{\mathrm{elem}}N_t)$ programmed
+elements & Trades control bandwidth for device area and transport. \\
+Peripheral cost & Platform dependent & State preparation, sensing, schedule memory,
+and controller operation; quantifying these requires a specific platform. \\
+\botrule
+\end{tabular*}
+\end{table}
+
+Electrical circuits provide one possible route. Coupled noisy RLC circuits have
+experimentally realized programmable linear Langevin dynamics
+\cite{melanson2025thermodynamic}, while feedback-controlled electrical circuits have
+realized time-dependent nonlinear effective potentials in one dimension
+\cite{chang2021generation}. Networked quartic Langevin models have also been studied
+numerically \cite{whitelam2026nonlinear}. A circuit for the present model would need
+to combine these capabilities. For example, a node voltage could represent $x_n$,
+and a nonlinear current--voltage element could implement the on-site potential. The
+four pair features would require platform-specific nonlinear couplers or active
+feedback.
+Johnson or injected noise supplies the bath. With circuit-specific calibration, the
+holding current at a clamped node can estimate one force component. The nonlinear
+coefficients, mobility, and noise must all be calibrated.
+
+Diffusion requires the coefficients to change during generation. The cost of
+replaying this schedule lies within the system boundary. A spatial device could
+instead encode the schedule along a propagation
+axis, trading runtime control for device area. It would still need to implement
+the stochastic nonlinear dynamics and the trained longitudinal profile. End-to-end
+efficiency depends on the specific hardware implementation.
+
+\section{Discussion}\label{sec:discussion}
+
+The time-indexed score field of a diffusion generator can be represented by a driven
+conservative energy and trained using quantities accessible to physical measurement.
+The reported tests use simulated forces. At positive noise times, the direct
+force-matching estimator is unbiased for the score-matching gradient. The
+short-time contrastive rule
+replaces force sensing with repeated releases, at the cost of finite-time bias and
+additional sampling variance. As in standard score-model training, each forward
+noise time has a separate objective. Here, each objective can be optimized from
+parameter-local quantities without differentiating a numerical device model.
+Parameter locality means that each update uses only the coordinate and total-force
+components appearing in its energy feature. Preparing a sample still requires
+clamping the full state, and CD1 evolves the full coupled system.
+
+A stochastic-circuit implementation still requires an open-loop controller to store
+and replay the learned schedule. An alternative strategy is to explore a spatial
+encoding of this schedule along a waveguide propagation axis. Longitudinal
+modulation and Kerr nonlinearity have been demonstrated in waveguide arrays
+\cite{juergensen2021quantized}. A mapping to the dynamics used here remains open.
+
+In the two-dimensional example, the learned finite-time protocol produces samples
+in both modes, whereas the persistent equilibrium chain remains in one basin over
+the same total simulated time. The nonequilibrium protocol therefore avoids the
+slow inter-basin mixing encountered by the static chain for this initialization and
+runtime.
+The MNIST experiment applies the construction to 784 continuous degrees of freedom
+and produces recognizable but blurred digit patterns.
+
+Experimental work should test the rule in a programmable stochastic circuit and
+measure controller, sensing, and state-preparation costs. 
+A latent-space formulation could decouple the number of oscillators from the data
+dimension \cite{vahdat2021score}, but would require a digital encoder and decoder.
+Related associative-memory models use a separation of time scales to integrate out
+fast hidden variables and obtain effective higher-order interactions
+\cite{krotov2020large}. We are currently exploring this idea to extend the parameter-local rule to hidden oscillators. 
+
+\section{Methods}\label{sec:methods}
+
+\subsection{Empirical training distributions}
+
+At each positive noise time, we sample directly from
+$p_t^{\mathcal D}$ in Eq.~\eqref{eq:empirical-smoothed}. This distribution is
+continuous for $t>0$.
+The endpoint is handled implicitly by continuing the sequential optimization to
+$t=0$. Here $p_0^{\mathcal D}$ is atomic and has no ordinary density score. The
+finite polynomial model cannot represent this singular limit and instead gives a
+smooth interpolation between the training samples~\cite{kamb2024analytic}. The exact score-matching
+interpretation therefore applies only for $t>0$.
+The MNIST images~\cite{lecun1998gradient} are non-binarized grayscale arrays, which we treat as points in
+$\mathbb R^{784}$. 
+The data set was standardized for training.
+
+\subsection{Force-matching derivation}
+
+We substitute $\vect s_{\vect\theta}=-\nabla\Ehat_{\vect\theta}/\kBT$ into the
+Hyv\"arinen objective. Since $\phi_i=\partial_{\theta_i}\Ehat$ and parameter and
+state derivatives commute,
+\begin{align}
+ \partial_{\theta_i}\nabla\!\cdot\vect s_{\vect\theta}
+ &=-\Delta\phi_i/\kBT,\\
+ \partial_{\theta_i}\tfrac12\lVert\vect s_{\vect\theta}\rVert^2
+ &=\vect s_{\vect\theta}\cdot(-\nabla\phi_i/\kBT)
+ =-\nabla\phi_i\cdot\Fhat_{\vect\theta}/(\kBT)^2,
+\end{align}
+which gives Eq.~\eqref{eq:local-gradient}. The derivation does not differentiate
+through the reverse-time trajectory because a separate objective is optimized at
+each forward noise time.
+
+
+\subsection{Training protocol}
+
+We initialized $\alpha_n=-1$, $\beta_n=1$, and $\gamma_n=1$ for every site. We
+initialized the linear field coefficients $f_n^{\mathrm{ext}}$ and all couplings to
+zero.
+During optimization, we constrained $\gamma_n$ to exceed $0.001$ to prevent an
+unbounded polynomial potential. The coefficients reported in this Article
+parameterize the learned score energy $\Ehat$, not the reverse energy $U$.
+
+We optimized sequentially over noise times: the solution at one time initialized
+the next. We interpolated the resulting discrete coefficient schedules for
+inference. The horizon is $\tau=5$. The mixture experiments use
+$N_t=15$ time points, with $\kBT=0.1$ for force matching and $\kBT=0.01$ for
+CD1. The MNIST experiment uses $N_t=100$ and $\kBT=0.02$. These values were
+selected through a coarse hyperparameter search, and all training and simulations
+were run on one NVIDIA L40 GPU.
+
+\authorcheck{Add the CD1 release duration $\delta$ and repeat count $R$.}
+
+
+\subsection{Use of generative AI in manuscript preparation}
+
+During preparation of this manuscript, the authors used OpenAI Codex for language
+editing, structural suggestions, literature searches, and mathematical consistency
+checks. The authors reviewed and independently verified all AI-assisted text,
+references, and equations and take full responsibility for the content.
+
+\backmatter
+
+\bmhead{Data availability}
+
+The MNIST dataset is publicly available. The numerical data and learned coefficient
+schedules underlying the figures will be made available in the accompanying
+repository.
+\authorcheck{Insert the repository or archive DOI.}
+
+
+\bmhead{Code availability}
+
+The code, configuration files, and scripts used to generate all numerical results
+will be made available in a public repository upon publication and to editors and
+referees during review.
+\authorcheck{Insert the repository or archive DOI.}
+
+\bmhead{Acknowledgements}
+
+We thank Cindy Zhang for helpful discussions. This research was funded in whole or
+in part by the Swiss National Science Foundation (SNSF) through C.B.'s
+Postdoc.Mobility fellowship P500PT~217673/1. For the purpose of open access, a CC BY
+public copyright licence is applied to any author accepted manuscript (AAM) version
+arising from this submission.
+This work was performed in part at the Aspen Center for Physics, which is supported
+by National Science Foundation grant
+PHY-2210452. M.S.-G. was funded by the European Union. Views and opinions expressed
+are those of the authors only and do not necessarily reflect those of the European
+Union or the European Research Council Executive Agency; neither the European Union
+nor the granting authority can be held responsible for them. This work was supported
+by ERC grant 101040117 (INFOPASS) and NSF grant OAC-2118201. The funders had no
+role in study design, data collection, analysis, interpretation, or preparation of
+the manuscript.
+
+\bmhead{Author contributions}
+
+\authorcheck{Insert the author-approved contribution statement using C.B., G.R.,
+M.S.-G., and R.P.A.}
+
+\bmhead{Competing interests}
+
+The authors declare no financial or non-financial competing interests.
+
+\bibliography{apssamp}
+
+\end{document}
