@@ -1,6 +1,6 @@
 # K > 1 Ising hidden units: changes in the staging folder
 
-Staging folder: `physical-diffusion-models/latent_physical_SGM_ising_dev/`, next to the live folder
+Staging folder: `physical-diffusion-models/latent_physical_SGM_ising_dev/`, next to the live folder (removed 2026-11-10: the merged code lives in `latent_physical_SGM/`)
 `physical-diffusion-models/latent_physical_SGM/`. `PKG` and `OUT_ROOT` in `latent_model.py` resolve to the same project
 folder and the same `out/latent_physical_SGM`. Specification: `k_ising_spec.md`, sections 2.1 to 2.4.
 
