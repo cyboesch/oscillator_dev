@@ -80,3 +80,25 @@
   of the sampling dynamics.}
   \label{fig:visible_coupling_evolution_draft}
 \end{figure}
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/force_comparison_final.pdf}
+  \caption{\textbf{Force contributions at the end of generation.}
+  Energy forces evaluated at $t=0$ ($s=5$) on all $2000$ saved generated
+  configurations of the Potts1536 model. No configurations were excluded.
+  (a) Euclidean norms across the $784$ visible pixels, evaluated separately
+  for each configuration, of the visible pair, on-site, global Potts,
+  per-pixel Ising, total hidden and net energy forces.
+  (b) Paired comparisons against the visible pair-force norm; the diagonal
+  indicates equal magnitudes. Hidden contributions are added as vectors
+  before calculating the all-hidden norm.
+  (c) Per-pixel root-mean-square forces across configurations, using one
+  logarithmic colour scale. Alignment and cancellation statistics refer to
+  total visible force (pair plus on-site) and total hidden force (global plus
+  per-pixel). These are components of $-\nabla F$; the reverse-SDE drift is
+  $\mathbf{x}+2(-\nabla F)$. The decomposition describes the saved parameters
+  and does not by itself establish causal importance. Intermediate trajectory
+  forces are not available from these final configurations.}
+  \label{fig:force_comparison_final_draft}
+\end{figure}

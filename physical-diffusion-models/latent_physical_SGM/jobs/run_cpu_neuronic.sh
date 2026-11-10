@@ -12,7 +12,7 @@
 #SBATCH --exclude=neu306
 
 # CPU only. Runs any script of this folder with its arguments, e.g.
-#   sbatch jobs/run_cpu_neuronic.sh analyze_snapshots.py K1
+#   sbatch jobs/run_cpu_neuronic.sh coverage_samples.py <args>
 # Writes physical-diffusion-models/out/latent_physical_SGM/<script-specific>/<job>/. Submit from latent_physical_SGM/.
 
 set -uo pipefail

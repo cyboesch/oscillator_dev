@@ -8,6 +8,7 @@ Rebuild from this manuscript directory (writeups/njp_uc):
 
     python3 plotting_scripts/make_conceptual_figure.py
     bash plotting_scripts/render_parameter_evolution.sh --also-linear
+    bash plotting_scripts/render_force_comparison.sh
 
 The additional visible_coupling_evolution figure is rendered by
 make_visible_coupling_evolution.py with NumPy/Matplotlib (use the same container
@@ -132,6 +133,48 @@ visible_coupling_evolution.pdf / .png / .svg
     42-edge central patch across all 100 saved times. Each edge is counted once
     in the global curve. This diagnostic separates location-specific patterns
     from whole-lattice behaviour.
+
+force_comparison_final.pdf / .png / .svg
+    Force contributions measured on all 2,000 saved final generated images
+    from sde_base_n2000.npy, at forward time t=0 / generation time s=5.
+    This is a final-time comparison, not a force curve along trajectories.
+    Only nonfinite configurations would be excluded and reported; the default
+    dataset contains 2,000 finite configurations and none were excluded.
+
+    The force components, using standardized coordinates, are:
+      visible pairs: -2 sum_j c_ij (x_i-x_j)
+      visible on-site: -(k_i x_i + u_i x_i^3 + ell_i)
+      global Potts: sum_m p_m(x) [W_mi + 2 Q_mi x_i]
+      per-pixel Ising: wl_i tanh[(bl_i + wl_i x_i)/T]
+    Incident edge contributions are summed at each pixel before taking its
+    component's vector norm over all 784 pixels. All-hidden force is the
+    vector sum of global and per-pixel hidden forces, not the sum of their norms.
+
+    The plots show per-configuration L2 norms, paired scatter plots, and
+    per-pixel RMS forces across configurations on one logarithmic colour scale.
+    Norms are measured before averaging across configurations. Cosine alignment
+    and net/(visible+hidden norm) reveal cancellation between components.
+    The energy force is -grad F; the full reverse-SDE drift is x+2*(-grad F).
+    White Brownian noise is not assigned a finite instantaneous force norm.
+
+    The on-site/global-hidden split depends on the saved parameterization:
+    a common shift of all Potts W/Q, compensated by visible bias/stiffness,
+    preserves total F while redistributing those two force components.
+    Norm dominance is therefore not a causal importance or ablation result.
+
+    Scripts: make_force_comparison.py and force_comparison_layout.py.
+    The wrapper uses one CPU thread in the existing container. No training,
+    sampling or JAX/model import is performed. Only the final hidden slice
+    is copied, not the full multi-GB history. Optional arguments include
+    --run PATH, --samples PATH, --batch 128 and --output-dir PATH.
+
+force_comparison_final_data.npz / force_comparison_final_metrics.json
+    Per-sample norms, original sample indices, per-pixel RMS maps, alignment
+    and cancellation statistics, exact input provenance and summary quantiles.
+    Sample manifest's visible checkpoint hash is verified against the history.
+    Energy finite differences independently checked all four force components
+    on the first three saved samples (maximum scaled error about 2e-8).
+    The sum of internal pair forces was also checked to vanish.
 
 figure_captions.tex
     Suggested LaTeX figure environments for author review. Not yet included

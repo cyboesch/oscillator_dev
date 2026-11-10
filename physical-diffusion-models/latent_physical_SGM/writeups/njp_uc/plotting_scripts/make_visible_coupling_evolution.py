@@ -3,6 +3,7 @@
 
 Read-only checkpoint access; no model imports, training or sampling. Requires
 NumPy/Matplotlib and the adjacent make_parameter_evolution.py utilities.
+Writes the PDF to the output directory and SVG/metrics to sibling figure_data/.
 """
 import argparse
 import json
@@ -24,9 +25,10 @@ def main():
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
     args = parser.parse_args()
     run, output = args.run.resolve(), args.output_dir.resolve()
+    data_output = (output.parent / "figure_data").resolve()
     if not (run / "DONE").is_file():
         raise ValueError("Only completed runs with a DONE marker are accepted")
-    if output == run or run in output.parents:
+    if any(path == run or run in path.parents for path in (output, data_output)):
         raise ValueError("Write figure outputs outside the checkpoint directory")
     paths = [run / k for k in ("config.json", "params_history.npy", "hidden_history.npz")]
     before = {p.name: signature(p) for p in paths}
@@ -137,8 +139,9 @@ def main():
     fig.text(.745, .092, f"Central patch: $s={pp['generation_time']:.2f}$\nRMS = {pp['rms']:.3g}", fontsize=9, color="#d55e00", linespacing=1.5)
     fig.text(.055, .022, "$c_{ij}$ multiplies $(x_i-x_j)^2$. All maps and curves use saved coefficients, not sampled trajectories.", fontsize=8.5, color=muted)
     output.mkdir(parents=True, exist_ok=True)
-    for ext in ("pdf", "png", "svg"):
-        fig.savefig(output / f"visible_coupling_evolution.{ext}", dpi=200, facecolor="white")
+    data_output.mkdir(parents=True, exist_ok=True)
+    fig.savefig(output / "visible_coupling_evolution.pdf", dpi=200, facecolor="white")
+    fig.savefig(data_output / "visible_coupling_evolution.svg", dpi=200, facecolor="white")
     plt.close(fig)
     metadata = {"run": run.name, "source_stats": before, "n_edges": len(edges),
                 "slices": indices, "generation_times": s[indices].tolist(),
@@ -149,9 +152,10 @@ def main():
                 "patch_definition": "Both endpoints in rows/columns 12..15, zero based",
                 "magnitude_definition": "sqrt(mean_edges(c_ij**2)) at each saved time",
                 "peaks": peaks}
-    (output / "visible_coupling_evolution_metrics.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    (data_output / "visible_coupling_evolution_metrics.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(json.dumps(peaks, indent=2))
     print(f"Rendered directional spring heat maps and RMS curves to {output}")
+    print(f"SVG and metrics: {data_output}")
 
 
 if __name__ == "__main__":
