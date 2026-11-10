@@ -14,6 +14,8 @@ def render_force_comparison(data, metadata, output):
     from matplotlib.colors import LogNorm, Normalize
 
     output.mkdir(parents=True, exist_ok=True)
+    data_dir = output.parent / "figure_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     plt.rcParams.update({"font.family": "DejaVu Sans", "font.size": 10,
                          "pdf.fonttype": 42, "ps.fonttype": 42,
                          "svg.fonttype": "none"})
@@ -182,6 +184,6 @@ def render_force_comparison(data, metadata, output):
     metadata["plot_pair_hidden_ratio_definition"] = "median(||f_pair||_2 / ||f_global+f_local||_2)"
     metadata["plot_median_pair_global_ratio"] = global_ratio if np.isfinite(global_ratio) else None
     metadata["plot_force_convention"] = "Energy forces -grad F, without reverse-SDE factor 2 or explicit +x drift."
-    for ext in ("pdf", "png", "svg"):
-        fig.savefig(output / f"force_comparison_final.{ext}", dpi=200, facecolor="white")
+    fig.savefig(output / "force_comparison_final.pdf", dpi=200, facecolor="white")
+    fig.savefig(data_dir / "force_comparison_final.svg", dpi=200, facecolor="white")
     plt.close(fig)

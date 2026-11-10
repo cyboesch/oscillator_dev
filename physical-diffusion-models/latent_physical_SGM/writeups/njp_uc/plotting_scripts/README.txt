@@ -1,7 +1,10 @@
 Draft figures for npj Unconventional Computing
 =============================================
 
-These scripts write to ../figures. The manuscript main.tex is unchanged.
+PDFs go to ../figures; SVGs and JSON/NPZ data go to ../figure_data.
+The same sibling-directory layout applies when --output-dir is supplied.
+PNG previews are not saved. Captions are in ../figure_captions.tex.
+The manuscript main.tex is unchanged.
 No training, sampling, GPU computation or scheduler submission is performed.
 
 Rebuild from this manuscript directory (writeups/njp_uc):
@@ -14,8 +17,8 @@ The additional visible_coupling_evolution figure is rendered by
 make_visible_coupling_evolution.py with NumPy/Matplotlib (use the same container
 as the parameter script if they are not installed in your Python environment).
 
-The conceptual renderer uses Python's standard library, pdflatex and pdftoppm;
-pdftocairo also exports SVG when installed. Edit make_conceptual_figure.tex
+The conceptual renderer uses Python's standard library and pdflatex;
+pdftocairo also exports SVG to figure_data when installed. Edit make_conceptual_figure.tex
 to change the scientific diagram.
 
 The parameter wrapper uses the project's existing container/container_image.sif,
@@ -40,17 +43,18 @@ a representative run for this draft, not a claim of an optimal architecture.
 Outputs
 -------
 
-conceptual_draft.pdf / .png / .svg
+figures/conceptual_draft.pdf
     Architecture alternatives, clamped local learning and open-loop generation.
     Entirely schematic: the image sequence is a specified drawing, not research
     output. Its noise pattern and digit are defined in the editable TikZ source.
     Global Ising units and one global Potts unit are alternative architectures;
     additional per-pixel Ising units are omitted from the drawing.
 
-parameter_evolution_draft.pdf / .png / .svg
+figures/parameter_evolution_draft.pdf
     Expanded two-page diagnostic PDF with real saved coefficients at five
-    diffusion times. PNG/SVG show page 1; parameter_evolution_states.png/.svg
-    show page 2. The layout is in parameter_evolution_layout.py.
+    diffusion times. SVGs for pages 1 and 2 are retained in figure_data as
+    parameter_evolution_draft.svg and parameter_evolution_states.svg.
+    The layout is in parameter_evolution_layout.py.
 
     Page 1 shows the full-lattice spring magnitude, bare on-site linear
     stiffness k_lin, on-site Duffing coefficient k_duff, and W/Q for state 0.
@@ -73,7 +77,7 @@ parameter_evolution_draft.pdf / .png / .svg
     discarding their signs. The interval is fixed across times and states.
 
     parameter_evolution_linear.pdf is the two-page linear-scale comparison;
-    corresponding PNG/SVG previews use the same stem and _states suffix.
+    corresponding SVGs in figure_data use the same stem and _states suffix.
     In this view the positive scales begin at zero and signed scales are
     symmetric about zero. Different contrast does not indicate different data.
 
@@ -111,7 +115,7 @@ parameter_evolution_draft.pdf / .png / .svg
     images are inferred from final samples. If snapshots appear later, rerunning
     will flag their availability but keep the placeholder pending figure editing.
 
-parameter_evolution_data.npz
+figure_data/parameter_evolution_data.npz
     Small extracted dataset: all 100 times of the four selected W/Q states,
     on-site k_lin and k_duff, all 2,970 springs and per-pixel RMS maps, plus
     the original 42-spring subset, time coordinates, initial cluster labels,
@@ -121,12 +125,12 @@ parameter_evolution_data.npz
     1.8 GB hidden checkpoint. Source arrays are memory-mapped read-only, and
     extraction aborts if source metadata changes during the read.
 
-parameter_evolution_provenance.json
+figure_data/parameter_evolution_provenance.json
     Run config, source size/modification times, config and extracted-data hashes,
     selection rules, colour limits/normalizations, time ordering and placeholder
     status. parameter_evolution_linear_provenance.json records the comparison.
 
-visible_coupling_evolution.pdf / .png / .svg
+figures/visible_coupling_evolution.pdf
     Four spatial maps retain individual signed edge coefficients: horizontal,
     vertical and the two diagonal orientations. Five columns use the same
     time slices. The strength curves compare all 2,970 edges with the original
@@ -134,7 +138,7 @@ visible_coupling_evolution.pdf / .png / .svg
     in the global curve. This diagnostic separates location-specific patterns
     from whole-lattice behaviour.
 
-force_comparison_final.pdf / .png / .svg
+figures/force_comparison_final.pdf
     Force contributions measured on all 2,000 saved final generated images
     from sde_base_n2000.npy, at forward time t=0 / generation time s=5.
     This is a final-time comparison, not a force curve along trajectories.
@@ -168,7 +172,7 @@ force_comparison_final.pdf / .png / .svg
     is copied, not the full multi-GB history. Optional arguments include
     --run PATH, --samples PATH, --batch 128 and --output-dir PATH.
 
-force_comparison_final_data.npz / force_comparison_final_metrics.json
+figure_data/force_comparison_final_data.npz / force_comparison_final_metrics.json
     Per-sample norms, original sample indices, per-pixel RMS maps, alignment
     and cancellation statistics, exact input provenance and summary quantiles.
     Sample manifest's visible checkpoint hash is verified against the history.
@@ -177,7 +181,8 @@ force_comparison_final_data.npz / force_comparison_final_metrics.json
     The sum of internal pair forces was also checked to vanish.
 
 figure_captions.tex
-    Suggested LaTeX figure environments for author review. Not yet included
+    In the manuscript directory beside main.tex: suggested LaTeX figure
+    environments for author review. Not yet included
     by main.tex. Paths assume compilation from the manuscript directory.
 
 Verification and provenance

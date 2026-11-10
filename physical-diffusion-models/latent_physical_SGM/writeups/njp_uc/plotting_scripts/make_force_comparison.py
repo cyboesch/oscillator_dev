@@ -236,23 +236,26 @@ def main():
     run = args.run.resolve()
     samples = (args.samples or run / "samples/sde_base_n2000.npy").resolve()
     output = args.output_dir.resolve()
-    if output == run or run in output.parents:
-        parser.error("Write figures outside the checkpoint directory")
+    data_dir = output.parent / "figure_data"
+    for destination in (output, data_dir):
+        if destination == run or run in destination.parents:
+            parser.error("Write figures outside the checkpoint directory")
     data, metadata = measure(run, samples, args.batch)
     output.mkdir(parents=True, exist_ok=True)
-    cache = output / "force_comparison_final_data.npz"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cache = data_dir / "force_comparison_final_data.npz"
     np.savez_compressed(cache, **data)
     metadata["figure_data_sha256"] = digest_file(cache)
     from force_comparison_layout import render_force_comparison
     render_force_comparison(data, metadata, output)
-    (output / "force_comparison_final_metrics.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    (data_dir / "force_comparison_final_metrics.json").write_text(json.dumps(metadata, indent=2) + "\n")
     print(f"Final-time force comparison: {metadata['n_finite']} of {metadata['n_samples']} saved samples.")
     for key, values in metadata["summary"].items():
         print(f"  {key}: median norm {values['median']:.6g}, 10–90% {values['q10']:.6g}–{values['q90']:.6g}")
     print(f"  Median pair/hidden norm ratio: {metadata['median_pair_hidden_ratio']:.6g}")
     print(f"  Median visible/hidden cosine: {metadata['median_cosine_visible_hidden']:.6g}")
     print(f"  Derivative check maximum scaled error: {metadata['verification']['maximum_scaled_error']:.3g}")
-    print(f"Outputs: {output}; no training or sampling was run.")
+    print(f"PDFs: {output}; data and SVGs: {data_dir}; no training or sampling was run.")
 
 
 if __name__ == "__main__":

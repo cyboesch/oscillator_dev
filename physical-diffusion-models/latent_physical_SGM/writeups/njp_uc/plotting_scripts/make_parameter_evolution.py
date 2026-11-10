@@ -201,8 +201,10 @@ def main():
     parser.add_argument("--also-linear", action="store_true", help="also save a separate linear-scale comparison")
     args = parser.parse_args()
     run, output = args.run.resolve(), args.output_dir.resolve()
-    if output == run or run in output.parents:
-        raise ValueError("Figure outputs must be outside the checkpoint directory")
+    data_dir = output.parent / "figure_data"
+    for destination in (output, data_dir):
+        if destination == run or run in destination.parents:
+            raise ValueError("Figure outputs must be outside the checkpoint directory")
     indices = [int(i) for i in args.slices.split(",")]
     patch_start = tuple(int(i) for i in args.patch_start.split(","))
     if len(patch_start) != 2:
@@ -212,19 +214,20 @@ def main():
         raise ValueError("At least one state is required")
     data, metadata = extract(run, states[0], indices, patch_start, args.patch_size, states[1:])
     output.mkdir(parents=True, exist_ok=True)
-    cache = output / "parameter_evolution_data.npz"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    cache = data_dir / "parameter_evolution_data.npz"
     np.savez_compressed(cache, **data)
     metadata["figure_data_sha256"] = hashlib.sha256(cache.read_bytes()).hexdigest()
     from parameter_evolution_layout import render_expanded
     render_expanded(data, metadata, output, args.spring_view, colour_scale=args.colour_scale)
-    (output / "parameter_evolution_provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")
+    (data_dir / "parameter_evolution_provenance.json").write_text(json.dumps(metadata, indent=2) + "\n")
     if args.also_linear and args.colour_scale != "linear":
         linear_metadata = json.loads(json.dumps(metadata))
         render_expanded(data, linear_metadata, output, args.spring_view,
                         colour_scale="linear", output_stem="parameter_evolution_linear")
-        (output / "parameter_evolution_linear_provenance.json").write_text(json.dumps(linear_metadata, indent=2) + "\n")
+        (data_dir / "parameter_evolution_linear_provenance.json").write_text(json.dumps(linear_metadata, indent=2) + "\n")
     print(f"Rendered saved parameters from {run.name}; states {states}; slices {indices}.")
-    print(f"Outputs: {output}")
+    print(f"PDFs: {output}; data and SVGs: {data_dir}")
     print("Trajectory panel: placeholder. No training or sampling was run.")
 
 

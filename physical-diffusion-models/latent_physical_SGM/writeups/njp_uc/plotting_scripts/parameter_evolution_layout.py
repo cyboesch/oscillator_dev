@@ -19,6 +19,8 @@ def render_expanded(data, metadata, output, spring_view="rms", colour_scale="lin
     from matplotlib.patches import Rectangle
 
     output.mkdir(parents=True, exist_ok=True)
+    data_dir = output.parent / "figure_data"
+    data_dir.mkdir(parents=True, exist_ok=True)
     if colour_scale not in ("linear", "log"):
         raise ValueError("colour_scale must be 'linear' or 'log'")
     if not output_stem or "/" in output_stem or "\\" in output_stem:
@@ -193,8 +195,7 @@ def render_expanded(data, metadata, output, spring_view="rms", colour_scale="lin
         text_at(.45, height - .16,
                 f"Generation time s = 5 − t. Saved coefficients, not optimizer history.  |  Page {page_number}",
                 fontsize=8.2, color=muted)
-        for ext in ("png", "svg"):
-            fig.savefig(output / f"{stem}.{ext}", dpi=200, facecolor="white")
+        fig.savefig(data_dir / f"{stem}.svg", dpi=200, facecolor="white")
         return fig
 
     spring_key = "c_rms_map" if spring_view == "rms" else "c_lin"
@@ -237,9 +238,9 @@ def render_expanded(data, metadata, output, spring_view="rms", colour_scale="lin
             plt.close(fig)
     metadata["figure_pages"] = [
         {"page": 1, "rows": ["spring", "k_lin", "k_duff", f"W_{first}", f"Q_{first}"],
-         "preview_stem": output_stem},
+         "svg_file": f"{output_stem}.svg"},
     ]
     if page_two_rows:
         metadata["figure_pages"].append({
-            "page": 2, "state_ids": states[1:].tolist(), "preview_stem": states_stem,
+            "page": 2, "state_ids": states[1:].tolist(), "svg_file": f"{states_stem}.svg",
         })
