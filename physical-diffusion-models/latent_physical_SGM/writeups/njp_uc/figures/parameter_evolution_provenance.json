@@ -1,0 +1,235 @@
+{
+  "run": "mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+  "run_relative_to_project": "out/latent_physical_SGM/mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+  "config": {
+    "name": "mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+    "K": 1536,
+    "cls": "none",
+    "hidden_lr_scale": 0.0005,
+    "freeze_hidden_slices": 1,
+    "steps_scale": 1.0,
+    "max_slices": 100,
+    "temp": 0.02,
+    "batch": 512,
+    "val_seed": 7,
+    "val_n": 4096,
+    "init": "prototypes",
+    "hidden": "potts",
+    "local": true,
+    "quad": true,
+    "problem": "mnist28_d0123456789",
+    "select": "ema",
+    "ema_steps": 1000.0,
+    "visible": "quartic",
+    "seed": 1,
+    "proto_init": "pooled",
+    "hidden_fixed": false,
+    "hidden_rule": "exact",
+    "radius": 1,
+    "hidden_samples": 0,
+    "hidden_jackknife": false,
+    "hidden_replicates": 1,
+    "hidden_samples_late": 0,
+    "hidden_samples_switch": 0,
+    "hidden_floor": 0.0,
+    "hidden_norm": "element",
+    "occ_beta": 0.999,
+    "hidden_jackknife_order": 1,
+    "occ_same_draws": false,
+    "pair_terms": "lin",
+    "neighbourhood": "chebyshev",
+    "ising_reseed": false,
+    "ising_weak_boost": 1.0,
+    "jax": "0.4.33",
+    "devices": "[CudaDevice(id=0)]",
+    "git_commit": "adfa71535e8b0db35e0d53ae39b89be8888daa08",
+    "slurm_job": "4207379",
+    "sha256": {
+      "latent_model.py": "913d462e7f57ccd2ae4323db85756b4257b66c027063840261fcde7d2040698b",
+      "train_latent.py": "7c36faed20dece79977488832e0d2f57826519cc6108aa191969c3bbe1aa8a98"
+    },
+    "data_sha256": "09373b1539f99851a6805c979ba13d25fdf90bf14a6405699a3fb790ba18accf",
+    "started": "2026-11-09 22:55:17"
+  },
+  "source_file_stats": {
+    "config.json": {
+      "bytes": 1400,
+      "mtime_ns": 1794282917370596000
+    },
+    "hidden_history.npz": {
+      "bytes": 1929243830,
+      "mtime_ns": 1794332480902960000
+    },
+    "params_history.npy": {
+      "bytes": 9636928,
+      "mtime_ns": 1794332469998090000
+    },
+    "state_class.npy": {
+      "bytes": 12416,
+      "mtime_ns": 1794283260100326000
+    }
+  },
+  "config_sha256": "ead17a85d7b2e3e1aa8370a6daff012c33150762b1c91154cce5c0001cb9cb12",
+  "state_index_zero_based": 0,
+  "state_indices_zero_based": [
+    0,
+    1,
+    2,
+    4
+  ],
+  "state_initial_majority_classes": [
+    0,
+    6,
+    2,
+    9
+  ],
+  "state_selection": "Default states 0,1,2,4: retain original state 0, add first states with three different initial cluster majority labels (6,2,9). No sample-quality or occupancy selection.",
+  "state_label_caveat": "Labels describe initial clusters; they do not establish the learned states' final class assignments.",
+  "patch_selection": {
+    "row0": 12,
+    "col0": 12,
+    "size": 4,
+    "indexing": "zero based"
+  },
+  "slice_indices": [
+    0,
+    25,
+    50,
+    75,
+    99
+  ],
+  "forward_times": [
+    5.0,
+    3.737373737373738,
+    2.474747474747475,
+    1.2121212121212124,
+    0.0
+  ],
+  "generation_times": [
+    0.0,
+    1.262626262626262,
+    2.525252525252525,
+    3.7878787878787876,
+    5.0
+  ],
+  "interpretation": "Learned parameters versus diffusion time, not optimizer iteration or a physical trajectory.",
+  "time_order": "generation s=t_max-t; stored slice 0 is the noisy end",
+  "maps": "Raw saved W and Q; no Potts common-mode subtraction or per-frame normalization.",
+  "omitted_parameters": "Other Potts states, hidden biases, visible on-site linear biases and per-pixel Ising couplings/biases are not shown.",
+  "onsite_energy": "k_lin*x_i^2/2 + k_duff*x_i^4/4 + bias*x_i (sextic term is zero in this quartic run).",
+  "stiffness_caveat": "k_lin is a bare coefficient, not the full curvature of the visible energy or marginal free energy.",
+  "graph": "c_lin is the coefficient of (x_i-x_j)^2, not twice that coefficient (spring stiffness).",
+  "spring_map": "At pixel i: sqrt(mean over its existing neighbours j of c_ij squared). Magnitude only; not a single edge coefficient.",
+  "global_spring_rms_at_displayed_times": [
+    0.0012289294552276756,
+    0.0029937591600743114,
+    0.01800134149403347,
+    0.02308024378969814,
+    0.3169772507629079
+  ],
+  "patch_spring_rms_at_displayed_times": [
+    0.0015094670813941321,
+    0.0056718249986885926,
+    0.032735729685393684,
+    0.042387884930992395,
+    0.022541562797033423
+  ],
+  "snapshot_files_found": [],
+  "trajectory_panel": "Placeholder only. No training, sampling or snapshot reconstruction performed.",
+  "figure_data_sha256": "6388bf30c262a5dd6806905b8b161e5b5bb007b92b19c3328b57c32cf26c74f9",
+  "colour_scale": "log",
+  "colour_normalizations": {
+    "c_lin": {
+      "type": "symmetric_log",
+      "vmin": -0.07534764172068642,
+      "vmax": 0.07534764172068642,
+      "linthresh": 0.0007534764172068642,
+      "linscale": 1,
+      "base": 10,
+      "threshold_rule": "1% of maximum absolute displayed coefficient in this family"
+    },
+    "c_rms_map": {
+      "type": "log",
+      "vmin": 0.00015065102206116994,
+      "vmax": 0.8338117872143167,
+      "nonpositive_values": "masked grey",
+      "base": 10
+    },
+    "k_lin": {
+      "type": "symmetric_log",
+      "vmin": -3.6854054738561275,
+      "vmax": 3.6854054738561275,
+      "linthresh": 0.03685405473856128,
+      "linscale": 1,
+      "base": 10,
+      "threshold_rule": "1% of maximum absolute displayed coefficient in this family"
+    },
+    "k_duff": {
+      "type": "log",
+      "vmin": 0.010000000000000866,
+      "vmax": 3.0793073222521543,
+      "nonpositive_values": "masked grey",
+      "base": 10
+    },
+    "W": {
+      "type": "symmetric_log",
+      "vmin": -0.7881638264453035,
+      "vmax": 0.7881638264453035,
+      "linthresh": 0.007881638264453036,
+      "linscale": 1,
+      "base": 10,
+      "threshold_rule": "1% of maximum absolute displayed coefficient in this family"
+    },
+    "Q": {
+      "type": "symmetric_log",
+      "vmin": -1.5235919697624183,
+      "vmax": 1.5235919697624183,
+      "linthresh": 0.015235919697624183,
+      "linscale": 1,
+      "base": 10,
+      "threshold_rule": "1% of maximum absolute displayed coefficient in this family"
+    }
+  },
+  "colour_limits_symmetric": {
+    "c_lin": 0.07534764172068642,
+    "k_lin": 3.6854054738561275,
+    "W": 0.7881638264453035,
+    "Q": 1.5235919697624183
+  },
+  "spring_view": "rms",
+  "spring_map_colour_range": [
+    0.00015065102206116994,
+    0.8338117872143167
+  ],
+  "duffing_colour_range": [
+    0.010000000000000866,
+    3.0793073222521543
+  ],
+  "hidden_colour_scaling": "One W scale and one Q scale across every displayed state, time and page.",
+  "edge_width_points": {
+    "formula": "0.35 + 3.0 * abs(c_lin) / max_abs_c_lin",
+    "common_across_frames": true
+  },
+  "figure_pages": [
+    {
+      "page": 1,
+      "rows": [
+        "spring",
+        "k_lin",
+        "k_duff",
+        "W_0",
+        "Q_0"
+      ],
+      "preview_stem": "parameter_evolution_draft"
+    },
+    {
+      "page": 2,
+      "state_ids": [
+        1,
+        2,
+        4
+      ],
+      "preview_stem": "parameter_evolution_states"
+    }
+  ]
+}

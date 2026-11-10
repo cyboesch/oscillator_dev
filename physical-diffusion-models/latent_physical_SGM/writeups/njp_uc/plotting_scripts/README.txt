@@ -1,0 +1,150 @@
+Draft figures for npj Unconventional Computing
+=============================================
+
+These scripts write to ../figures. The manuscript main.tex is unchanged.
+No training, sampling, GPU computation or scheduler submission is performed.
+
+Rebuild from this manuscript directory (writeups/njp_uc):
+
+    python3 plotting_scripts/make_conceptual_figure.py
+    bash plotting_scripts/render_parameter_evolution.sh --also-linear
+
+The additional visible_coupling_evolution figure is rendered by
+make_visible_coupling_evolution.py with NumPy/Matplotlib (use the same container
+as the parameter script if they are not installed in your Python environment).
+
+The conceptual renderer uses Python's standard library, pdflatex and pdftoppm;
+pdftocairo also exports SVG when installed. Edit make_conceptual_figure.tex
+to change the scientific diagram.
+
+The parameter wrapper uses the project's existing container/container_image.sif,
+with one CPU thread and no GPU binding. With NumPy and Matplotlib available in
+your Python environment, the equivalent direct command is:
+
+    python3 plotting_scripts/make_parameter_evolution.py
+
+Optional arguments include --run PATH, --states 0,1,2,4, --slices 0,25,50,75,99,
+--patch-start 12,12, --patch-size 4, --spring-view rms|graph and --output-dir PATH. The layout expects
+five time slices of a completed Potts run with quadratic hidden couplings.
+--state INTEGER remains available to show a single state instead of --states.
+The default --colour-scale log uses logarithmic positive magnitudes and a
+symmetric logarithmic scale for signed coefficients. --also-linear saves
+a separate linear-scale comparison using the same extracted arrays.
+The default is the completed 28x28 all-ten-digit Potts1536 run below. It is
+a representative run for this draft, not a claim of an optimal architecture.
+
+    out/latent_physical_SGM/
+      mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled
+
+Outputs
+-------
+
+conceptual_draft.pdf / .png / .svg
+    Architecture alternatives, clamped local learning and open-loop generation.
+    Entirely schematic: the image sequence is a specified drawing, not research
+    output. Its noise pattern and digit are defined in the editable TikZ source.
+    Global Ising units and one global Potts unit are alternative architectures;
+    additional per-pixel Ising units are omitted from the drawing.
+
+parameter_evolution_draft.pdf / .png / .svg
+    Expanded two-page diagnostic PDF with real saved coefficients at five
+    diffusion times. PNG/SVG show page 1; parameter_evolution_states.png/.svg
+    show page 2. The layout is in parameter_evolution_layout.py.
+
+    Page 1 shows the full-lattice spring magnitude, bare on-site linear
+    stiffness k_lin, on-site Duffing coefficient k_duff, and W/Q for state 0.
+    Page 2 shows W/Q for three additional fixed states, j=1,2,4.
+    Their initial cluster majority labels are 6,2,9; these states were chosen
+    to add different initial digit clusters, not by sample quality or occupancy.
+    Initial cluster labels do not establish final learned-state class purity.
+
+    The spring row shows a full
+    28x28 heat map: at each pixel, sqrt(mean_j c_ij^2) over its actual neighbours.
+    This summarizes magnitude; it is not a signed single-edge coefficient.
+    Every hidden map shows all 784 pixel couplings. One W scale and one Q scale
+    are shared across all selected states AND times on both pages. Other
+    coefficient families each have their own common scale across time.
+    In the default log view, positive spring RMS and Duffing magnitudes use
+    logarithmic scales from their smallest to largest displayed positive value.
+    Signed k_lin, W and Q use symmetric logarithmic scales, with a linear
+    interval around zero extending to 1% of that family's maximum absolute
+    displayed value. This handles zero and negative coefficients without
+    discarding their signs. The interval is fixed across times and states.
+
+    parameter_evolution_linear.pdf is the two-page linear-scale comparison;
+    corresponding PNG/SVG previews use the same stem and _states suffix.
+    In this view the positive scales begin at zero and signed scales are
+    symmetric about zero. Different contrast does not indicate different data.
+
+    On-site energy convention: k_lin*x_i^2/2 + k_duff*x_i^4/4 + bias*x_i.
+    The sextic term is zero in this run. k_lin is a bare coefficient; full
+    visible local curvature is k_lin + 3*k_duff*x_i^2 + 2*sum_j c_ij, and
+    marginalizing hidden units adds further state-dependent curvature.
+    Thus a negative k_lin alone does not imply negative total curvature.
+    Spring forces vanish for any uniform x. They do not by themselves pin
+    the absolute background amplitude. Raw zero intensity corresponds to
+    approximately x=-0.425 in this run's standardized coordinates.
+
+    --spring-view graph reproduces the original 42-spring central 4x4 subgraph
+    (rows/columns 12..15, zero based). Width is
+    0.35 + 3.0 |c_ij| / max|c_ij| points; the 0.35-point floor keeps weak edges
+    visible. The graph's intermediate-time maximum is NOT representative of
+    the full lattice. Global spring RMS at the five displayed times is
+    0.00123, 0.00299, 0.01800, 0.02308, 0.31698: its maximum is at the data end.
+    For the central patch the corresponding values are
+    0.00151, 0.00567, 0.03274, 0.04239, 0.02254.
+
+    This is a generation-time schedule s=5-t, NOT optimizer-step history.
+    Stored indices 0,25,50,75,99 correspond to s=0,1.2626,2.5253,3.7879,5.
+    Coefficients are raw checkpoint values: no Potts common-mode removal and
+    no per-frame rescaling. c_ij multiplies (x_i-x_j)^2; mechanical spring
+    stiffness under the 1/2 k (x_i-x_j)^2 convention would be 2 c_ij.
+
+    This run also has 784 per-pixel Ising units. Their parameters, visible
+    linear biases, hidden biases and the remaining Potts states are not plotted.
+    The run used exact hidden statistics for training (config hidden_rule=exact).
+    These images do not establish training with a finite number of hidden reads.
+
+    Page 1 retains an explicit trajectory placeholder because no *_snapshots.npz files were
+    saved in this run's samples directory at drafting time. No intermediate
+    images are inferred from final samples. If snapshots appear later, rerunning
+    will flag their availability but keep the placeholder pending figure editing.
+
+parameter_evolution_data.npz
+    Small extracted dataset: all 100 times of the four selected W/Q states,
+    on-site k_lin and k_duff, all 2,970 springs and per-pixel RMS maps, plus
+    the original 42-spring subset, time coordinates, initial cluster labels,
+    state/edge IDs and plotted slices. W_states/Q_states have shape
+    (time, selected state, pixel); W/Q retain the first state for compatibility.
+    This keeps the exact plotted numbers with the paper without copying the
+    1.8 GB hidden checkpoint. Source arrays are memory-mapped read-only, and
+    extraction aborts if source metadata changes during the read.
+
+parameter_evolution_provenance.json
+    Run config, source size/modification times, config and extracted-data hashes,
+    selection rules, colour limits/normalizations, time ordering and placeholder
+    status. parameter_evolution_linear_provenance.json records the comparison.
+
+visible_coupling_evolution.pdf / .png / .svg
+    Four spatial maps retain individual signed edge coefficients: horizontal,
+    vertical and the two diagonal orientations. Five columns use the same
+    time slices. The strength curves compare all 2,970 edges with the original
+    42-edge central patch across all 100 saved times. Each edge is counted once
+    in the global curve. This diagnostic separates location-specific patterns
+    from whole-lattice behaviour.
+
+figure_captions.tex
+    Suggested LaTeX figure environments for author review. Not yet included
+    by main.tex. Paths assume compilation from the manuscript directory.
+
+Verification and provenance
+---------------------------
+
+Both figures were rendered and visually inspected. Independent read-only
+checks matched W/Q state 0 and all 42 displayed c_ij values against the saved
+slice_000.npz and slice_099.npz exactly. Independently enumerated connectivity
+agreed with all 2,970 radius-1 edges and with the selected patch indices.
+
+The diagram source and plotting scripts were prepared with OpenAI Codex
+assistance. All conceptual shapes are specified in code; no text-to-image
+generator was used. The quantitative figure is computed from saved coefficients.

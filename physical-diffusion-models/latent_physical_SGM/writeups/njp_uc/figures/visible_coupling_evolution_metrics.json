@@ -1,0 +1,95 @@
+{
+  "run": "mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+  "source_stats": {
+    "config.json": {
+      "bytes": 1400,
+      "mtime_ns": 1794282917370596000
+    },
+    "params_history.npy": {
+      "bytes": 9636928,
+      "mtime_ns": 1794332469998090000
+    },
+    "hidden_history.npz": {
+      "bytes": 1929243830,
+      "mtime_ns": 1794332480902960000
+    }
+  },
+  "n_edges": 2970,
+  "slices": [
+    0,
+    25,
+    50,
+    75,
+    99
+  ],
+  "generation_times": [
+    0.0,
+    1.262626262626262,
+    2.525252525252525,
+    3.7878787878787876,
+    5.0
+  ],
+  "forward_times": [
+    5.0,
+    3.737373737373738,
+    2.474747474747475,
+    1.2121212121212124,
+    0.0
+  ],
+  "shared_signed_colour_limit": 0.9862975191517753,
+  "directions_row_column": [
+    [
+      0,
+      1
+    ],
+    [
+      1,
+      0
+    ],
+    [
+      1,
+      1
+    ],
+    [
+      1,
+      -1
+    ]
+  ],
+  "orientation_edge_counts": [
+    756,
+    756,
+    729,
+    729
+  ],
+  "map_definition": "c_ij stored at row,column of first endpoint i; missing bonds masked grey",
+  "patch_definition": "Both endpoints in rows/columns 12..15, zero based",
+  "magnitude_definition": "sqrt(mean_edges(c_ij**2)) at each saved time",
+  "peaks": {
+    "all_edges": {
+      "slice": 99,
+      "forward_time": 0.0,
+      "generation_time": 5.0,
+      "rms": 0.3169772507629079,
+      "rms_at_displayed_times": [
+        0.0012289294552276756,
+        0.0029937591600743114,
+        0.01800134149403347,
+        0.02308024378969814,
+        0.3169772507629079
+      ]
+    },
+    "central_patch": {
+      "slice": 68,
+      "forward_time": 1.5656565656565657,
+      "generation_time": 3.4343434343434343,
+      "rms": 0.04434255073561437,
+      "rms_at_displayed_times": [
+        0.0015094670813941321,
+        0.0056718249986885926,
+        0.032735729685393684,
+        0.042387884930992395,
+        0.022541562797033423
+      ]
+    }
+  }
+}
