@@ -13,7 +13,7 @@ Initial states and Brownian keys: latent_model.trajectory_set ('base' = the 500 
 study; with --run paper, --set base reproduces job 4187940).
 
 Writes out/latent_physical_SGM/<run>/samples/<sampler>_<set>_n<n>.npy (+ .json). Run under Slurm
-(run_sample_latent_neuronic.sh).
+(jobs/run_sample_latent_neuronic.sh).
 """
 
 import argparse

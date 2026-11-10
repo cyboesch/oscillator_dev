@@ -15,6 +15,8 @@ The idea: give the physical diffusion model K hidden bistable oscillators. They 
 - **Hidden units** are averaged out exactly, i.e. assumed infinitely fast (Caveat 1). Three kinds:
   - **Ising unit:** one bistable unit h = ±1 coupled to all pixels, energy −h (b + W·x + Q·x²). Only one is used so
     far (K = 1).
+    (Correction from ChatGPT: The K = 1 restriction is outdated. The current code supports multiple Ising units,
+    and Result 15 reports trained models with K > 1.)
   - **Potts unit (Potts M):** one unit with M states, exactly one active; state m has its own couplings W_m, Q_m,
     b_m to all pixels, so each state acts as a prototype. "Potts 128" is one unit with 128 states, not 128 units. In
     hardware: M bistable units with winner-take-all inhibition, or one M-well oscillator.
@@ -92,11 +94,16 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
     a stored pattern of a dense associative memory, but samples sit only 5-11% closer to their state's prototype than
     held-out real images and vary within a state 90-100% as much as real members, independent of the number of
     states (32-512); a third of the samples have their nearest training image in another state, as real images do.
+    (Correction from ChatGPT: These diagnostics support substantial variation around the prototypes, but do not
+    rule out every prototype-plus-noise model. Here the real probes are excluded from centroid construction,
+    not from training the generative model.)
   - **28x28 best model trained locally:** Potts 512 + both, power 4, S = 64 with the visit-count rule, 90.5%
     against 92.3% with exact training (-1.8 [-4.3, +0.7], not significant), 31.9% for the paper.
   - **Idle Ising units are not the limit** (2026-11-10, Result 15): resetting weak units to the split-tree formula
     every slice keeps all 512 units active but gives +1.3 points on 0/1 (n.s.) and -0.1 on four digits; a 10x step
     size for weak units does not revive them. The Ising-Potts gap is in the model form, not the optimiser.
+    (Correction from ChatGPT: The tested remedies did not close the gap. This does not rule out undertraining,
+    other optimisation choices, or a combination of optimisation and model limitations.)
   - **28x28, four digits, simplest pixel model (2026-11-10, Result 15):** Potts 784 92.2% clean (real probes
     86.8%), Ising 784 66.2%, frozen Potts 784 74.6%. Grainy strokes, no copies.
   - Running (18:30): 28x28, 0/1/2/3, the simplest pixel model, Ising 784 / 1568 / 3136 and Potts 784 / 1536
@@ -152,6 +159,9 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
     - **the main comparison replicates at a second training seed** (new k-means prototypes and minibatch stream):
       S = 8 with the rule and same-draw counts against S = 16 with per-element Adam, +7.1 [+3.9, +10.1] (seed 1:
       +6.1). Between seeds the same arm moves by 1.1 and 0.2 points;
+      (Correction from ChatGPT: This replication compares S = 8 visit-count training with S = 16 Adam, giving
+      about 6-7 points. The separate 13.3-point comparison at equal eight reads has one training seed here;
+      the companion theory note incorrectly attributes second-seed replication to that equal-read result.)
     - by eye it removes most of the broken strokes of few-sample training (gallery `14x14_0-1_local_training_optimisers_Potts128/`).
     - **at full size (28x28, Potts 128 + both, 0/1) S = 16 with the rule matches exact training:** 87.1% against
       86.3% (+0.9 [-1.4, +3.2]) and against S = 64 with per-element Adam (87.6%, -0.5 [-3.1, +2.1]); the paper's
@@ -306,12 +316,14 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
 
 ## Files
 
+Folders: `jobs/` holds the Slurm job scripts (`run_*_neuronic.sh`, `submit_sample_eval.sh`); submit them from this folder, e.g. `sbatch jobs/run_cpu_neuronic.sh fid_score.py ...` (relative paths in the scripts resolve against the submit folder). Slurm logs (`latent_<kind>_<job>.out / .err`) go to `logs/`. Both since 2026-11-10. Run outputs, samples, evaluations and galleries are under `../out/latent_physical_SGM/`.
+
 | file | what |
 |---|---|
 | [DESIGN.md](DESIGN.md) | derivation: free energy and what it adds, score-matching gradient and local learning rule (including a CD-1 form), three ways to run the reverse process, conditions on physical hidden units, prototype plan |
 | `check_hidden_unit_formulas.py` | compares the formulas of DESIGN §1–§3 with JAX autodiff (Ising and double-well hidden units, up to full size) |
 | `blend_check.py` | classifies existing samples as clean 0 / clean 1 / blend / malformed / diverged |
-| `run_latent_checks_neuronic.sh` | CPU Slurm job running both scripts (~1 min of compute); submit from this folder |
+| `jobs/run_latent_checks_neuronic.sh` | CPU Slurm job running both scripts (~1 min of compute); submit from this folder |
 | `results/<check>_4190135/` | copies of the reports and metrics of job 4190135 |
 | `latent_model.py` | problems (mnist28, mnist14, gauss2_8), the paper's schedules, dense visible energy, hidden free energies (Ising, Potts, spring `Q`, per-pixel units) with analytic gradients and Laplacians, the score-matching loss, reference initialisations (Fisher, k-means prototypes, per-pixel) |
 | `train_latent.py` | the paper's training loop (jitted scan), with hidden units: `--K --hidden ising/potts --quad --local --visible sextic/quartic --radius R --neighbourhood chebyshev/von_neumann --pair-terms all/none/lin,om,duff --select best/ema --seed --proto-init perclass/pooled/random --hidden-fixed --problem`; local training: `--hidden-samples S --hidden-jackknife` (force matching with measured hidden statistics), `--hidden-jackknife-order 2` (second-order jackknife: Richardson over S, S/2 and S/4 of the same draws, also removes the O(1/S²) bias), `--hidden-samples-late --hidden-samples-switch` (another S from a given slice on), `--hidden-floor` (homeostatic revival of unvisited Potts states; diverges), `--hidden-norm group` (hidden parameters with one step size per group instead of per-element Adam: the closest tested rule to plain gradient steps), `--hidden-norm state` (one Adam gain per hidden state), `--hidden-norm occupancy --occ-beta` (a per-state step from the state's own occupation, one step scale per group), `--occ-same-draws` (its visit counts from the draws of the gradient statistics instead of fresh draws), `--hidden-replicates R` (diagnostic: R independent S-draw estimates averaged), `--hidden-rule cd1 --cd1-dt --cd1-releases --cd1-hidden-samples` (CD-1, with exact or measured hidden statistics); `--steps-scale` (multiple of the paper's steps per slice); `--val-every N` (learning curves: validation loss of the slice result every N steps on the slice's fixed validation batch, per-sample losses in `<run>/val_curves/slice_<k>.npz`, second-half gain in `train_log.jsonl`) |
@@ -321,17 +333,17 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
 | `inspect_states.py` | what the Potts states of a run represent, per slice: mean data image, class mix, W_m and Q_m of the most occupied states; effective states, class purity, commitment, states per majority class, and the states' mean occupations by decade (lost states) |
 | `fid_score.py` | FID and KID in the features of a small MNIST CNN (trained once per resolution with `--train-only --grid 14/28`, cached in `out/latent_physical_SGM/fid/`), against balanced MNIST test images; raw and clipped; real-image floor at the same n; paired bootstrap (`--pair A,B`); CNN class shares (CPU job; Result 15) |
 | `prototype_test.py` | do Potts samples just recall their state's prototype? Distance to the own prototype, within-state spread, nearest training image, posterior sharpness, against held-out real images (CPU job; Result 15) |
-| `make_gallery.py`, `run_gallery_neuronic.sh` | image gallery (Result 13): real images, unsorted samples per model, the same trajectories side by side, nearest training images; into `out/latent_physical_SGM/gallery/` (CPU job; resubmit as runs finish) |
+| `make_gallery.py`, `jobs/run_gallery_neuronic.sh` | image gallery (Result 13): real images, unsorted samples per model, the same trajectories side by side, nearest training images; into `out/latent_physical_SGM/gallery/` (CPU job; resubmit as runs finish) |
 | `make_digit_data.py`, `evaluate_multiclass.py` | other MNIST digit sets (the paper's preprocessing, verified identical for 0/1, 0/1/2, 0-3; problems `mnist14_d<digits>`, `mnist28_d<digits>`) and their evaluation for C ≥ 2 classes (identical to `evaluate_samples.py` for C = 2) |
 | `cd1_check.py` | on the slices of a trained run: the local force-matching rule against autodiff (`--local-rule`), measured-statistics gradients (`--samples`, `SxR` for R replicates, suffix `o2` for the second-order jackknife) and CD-1 short-release gradients (`--cd1-samples`: with measured hidden statistics) against the exact gradient and its minibatch noise |
 | `test_latent.py` | 53 checks, all passing in job 4195804: 47 against the paper's code, the paper-checkpoint samples of job 4187940 and autodiff, plus 6 sanity checks |
 | `summarize_training.py`, `analyze_snapshots.py` | per-sample validation-loss comparisons; hidden-unit commitment along trajectories |
-| `run_train_latent_neuronic.sh`, `run_sample_latent_neuronic.sh`, `run_pipeline_neuronic.sh`, `run_small_pipeline_neuronic.sh` | GPU Slurm jobs: training, sampling, a generic train-sample-evaluate pipeline, and the K = 0 / 1, best / EMA pipeline for mnist14 or gauss2_8; submit from this folder |
+| `jobs/run_train_latent_neuronic.sh`, `jobs/run_sample_latent_neuronic.sh`, `jobs/run_pipeline_neuronic.sh`, `jobs/run_small_pipeline_neuronic.sh` | GPU Slurm jobs: training, sampling, a generic train-sample-evaluate pipeline, and the K = 0 / 1, best / EMA pipeline for mnist14 or gauss2_8; submit from this folder |
 | `HARDWARE_NOTES.md` | how buildable hidden units coupled to all pixels are (electronics, photonics, mechanics), with checked references |
-| `run_test_latent_neuronic.sh`, `run_test{2,...,9,9b,10,...,19}_latent_neuronic.sh` | GPU Slurm jobs: the validation rounds (`test_latent.py` plus smoke trainings and regressions of the exact path; e.g. round 6, job 4197121: `--hidden-fixed`; round 10, job 4197238: the jackknife; round 11: CD-1 with measured hidden statistics; round 12, job 4199405: replicates and the S switch; round 13, job 4199443: the homeostatic floor; round 14, job 4199773: `--hidden-norm group`; round 15, job 4200507: the first `--hidden-norm occupancy`; round 16, job 4200653: `--hidden-norm state` and the redesigned occupancy; round 17, job 4202647: `--hidden-jackknife-order 2`; round 18, job 4202937: `--occ-same-draws`) |
-| `run_evaluate_neuronic.sh`, `run_summary_neuronic.sh`, `run_cpu_neuronic.sh` | CPU Slurm jobs: `evaluate_samples.py`, `summarize_training.py`, and any other script of this folder (e.g. `coverage_samples.py`) |
-| `run_gpu_neuronic.sh` | GPU Slurm job running any script of this folder (e.g. `cd1_check.py`) |
-| `submit_sample_eval.sh` | login-node helper that only calls sbatch: samples 500 `base` trajectories from finished full-size runs and evaluates them with the paper baseline |
+| `jobs/run_test_latent_neuronic.sh`, `jobs/run_test{2,...,9,9b,10,...,19}_latent_neuronic.sh` | GPU Slurm jobs: the validation rounds (`test_latent.py` plus smoke trainings and regressions of the exact path; e.g. round 6, job 4197121: `--hidden-fixed`; round 10, job 4197238: the jackknife; round 11: CD-1 with measured hidden statistics; round 12, job 4199405: replicates and the S switch; round 13, job 4199443: the homeostatic floor; round 14, job 4199773: `--hidden-norm group`; round 15, job 4200507: the first `--hidden-norm occupancy`; round 16, job 4200653: `--hidden-norm state` and the redesigned occupancy; round 17, job 4202647: `--hidden-jackknife-order 2`; round 18, job 4202937: `--occ-same-draws`) |
+| `jobs/run_evaluate_neuronic.sh`, `jobs/run_summary_neuronic.sh`, `jobs/run_cpu_neuronic.sh` | CPU Slurm jobs: `evaluate_samples.py`, `summarize_training.py`, and any other script of this folder (e.g. `coverage_samples.py`) |
+| `jobs/run_gpu_neuronic.sh` | GPU Slurm job running any script of this folder (e.g. `cd1_check.py`) |
+| `jobs/submit_sample_eval.sh` | login-node helper that only calls sbatch: samples 500 `base` trajectories from finished full-size runs and evaluates them with the paper baseline |
 
 Full outputs of job 4190135, including the figures `blend_examples.png` and `blend_scatter.png`, are in `physical-diffusion-models/out/diagnostics/{latent_checks,blend_check}/4190135/`. Runs, samples and evaluations of the prototype are in `physical-diffusion-models/out/latent_physical_SGM/{<run>,eval/<job>,coverage/<job>,summary/<job>}/`. Git ignores both.
 
@@ -929,6 +941,9 @@ Evaluations 4196913 (14x14) and 4196782 (28x28, 32 states); 128 and 256 states: 
     - So its gradient is zero in most steps and a spike in the others: unbiased with the jackknife. But Adam divides
       it by its own root-mean-square, so the state moves at most about √λ as fast as with exact statistics (about
       32 λ once visits are rarer than one per 1,000 steps, Adam's second-moment window).
+      (Correction from ChatGPT: First-order jackknife leaves O(1/S²) bias in the hidden-gradient estimator.
+      Second-order jackknife removes that remaining bias for the current cubic estimator under independent
+      draws at fixed parameters. Correlated physical time samples need additional analysis.)
     - With exact averages the gradient, however small and noisy, is present every step, and Adam turns it into
       full-size steps (CD-1, with exact averages, shows the same).
     - States below λ ≈ 1, p̄ ≲ 1/(B S) (3e-5 at S = 64), fall behind the growing couplings of the others and are lost
@@ -1896,6 +1911,9 @@ is assigned to its most likely state; a state's prototype is the mean of its tra
 - Not "prototype plus blur": samples sit only 5-11% closer to their state's prototype than real images do, and vary
   within a state about 90-100% as much as real members. The contraction does not grow with the number of states
   (0.93 at 32, 0.91 at 512).
+  (Correction from ChatGPT: These distance and spread checks give evidence against near-copy or narrowly
+  jittered prototypes, but a prototype-centred noise model can also reproduce such statistics. The probes were
+  held out from computing the centroids, not from training the model.)
 - About a third of the samples have their nearest training image in another state, as for real images: the samples
   are not confined to their state's members.
 - At t = 0 every image, real or generated, belongs decisively to one state (max posterior 0.99-1.00): the states
@@ -1935,6 +1953,9 @@ gallery 4207328). Paired against plain Ising 512 (same initial states and noise)
 - Reading: the units were weak because, with exact training, the extra units carry little score; giving them the
   formula couplings does not make them useful. The gap to Potts is in the form of the model (a product of on/off
   features against a mixture of prototypes), not in the optimiser.
+  (Correction from ChatGPT: This interpretation is not established by the tested interventions. They rule out
+  those particular remedies as sufficient fixes; the relative roles of model capacity and optimisation remain
+  unresolved, as the later convergence discussion acknowledges.)
 - Consequence (decision rule agreed 2026-11-09): no fix beat plain Ising 512 by >= 3 points, so at 28x28 on all ten
   digits only plain Ising 3136 runs, as the comparison for Potts 1536 / 3072 (job 4208054; evaluation 4208055 against
   Potts 1536 / 3072; gallery 4208056, folder `28x28_all_ten_digits_power4_springs_only_Ising_vs_Potts`).
@@ -1974,6 +1995,11 @@ Features: the 128 hidden units of a small CNN trained on all ten MNIST training 
 with the paper's 0.01 pixel noise. Raw pixel values (as the % measures); "clip" = clipped to [0, 1]. Floor = 500 real
 training images against the same reference (FID is biased upwards at n = 500, so read models against the floor, not
 against 0). Confident = the CNN assigns one of the problem's digits with max p >= 0.9. FID and KID agree throughout.
+
+(Correction from ChatGPT: `fid_score.py` excludes nonfinite samples and samples with max |x| > 15, so these scores
+describe the surviving samples. Its reference floor uses the median number of survivors across the compared
+sets, rather than a separately matched sample count for each model. It also needs a guard for fewer than two
+survivors; this edge case was not encountered in the reports checked during the review.)
 
 | problem | model | FID | FID clip | confident | clean (% measure) |
 |---|---|---|---|---|---|
@@ -2032,6 +2058,11 @@ dx/ds = -grad F(x), for s = 0.05 / 0.25 / 1 (cooling the bath at the end of the 
 --quench`); (iii) the PF-ODE sampler (no noise at all). Jobs 4209958-67; galleries `28x28_grain_test_quench_and_ODE_*`.
 If the grain were thermal, the quench would remove it and FID would drop towards the floor.
 
+(Correction from ChatGPT: The implemented quench removes visible diffusion while retaining the original
+temperature in the hidden tanh/softmax statistics: it follows -grad F_T. Cooling a shared physical bath would
+also change those statistics and therefore the effective free energy. The tested finite relaxation times do not
+guarantee that all thermal texture would disappear.)
+
 | model | FID: SDE | quench 0.05 | quench 0.25 | quench 1 | PF-ODE | real floor |
 |---|---|---|---|---|---|---|
 | Potts 784, simplest pixel model, four digits | 20.3 | 19.9 | 18.6 | **16.4** | 35.4 | 4.6 |
@@ -2043,17 +2074,46 @@ If the grain were thermal, the quench would remove it and FID would drop towards
   digits (20.3 -> 16.4 against 4.6) and about a sixth on 0/1 (8.2 -> 7.3 against 2.8). By eye the speckle on the
   strokes thins a little; the blotchy, uneven strokes remain. The remaining FID gap sits in the learned t = 0 energy
   (the pixel model and the hidden units), not in the noise of the last sampling steps.
+  (Correction from ChatGPT: The experiments establish that the tested final relaxation improves FID but leaves
+  a texture gap. They do not isolate thermal noise, errors accumulated earlier in the reverse process, and errors
+  in the final-time energy, so the attribution above is stronger than the evidence.)
 - Clean yield unchanged (four digits 92.2 -> 91.8%; 0/1 within 0.4 points). The quench pulls samples slightly
   towards the training images (copies four digits 0.0 -> 0.6%, 0/1 1.4 -> 2.2%; held-out real images 5% by
   construction) and smooths them (roughness four digits 0.171 -> 0.149, real 0.180).
 - Long quenches can leave the learned energy's basin: with the full pixel model 4 of 500 samples diverged at s = 1
   (0 at s = 0.05, 1 at s = 0.25); none with the simplest pixel model. The t = 0 energy is not confining everywhere.
+  (Correction from ChatGPT: Both saved quench models have confining energies: their positive local quartics and
+  nonnegative pair quartics dominate the lower-order terms, including the hidden contribution. The evaluation
+  label "diverged" includes finite samples with an amplitude above 15; it does not prove the energy is unbounded
+  below. FID also excludes these failures: the binary model's reported SDE / quench 0.25 / quench 1 scores use
+  500 / 499 / 496 surviving samples, respectively.)
 - The PF-ODE gives faint, speckled samples with a different class balance (more 1s); with an imperfect learned score
   the SDE is the better sampler, as is common.
 - Consequence: a short quench (s = 0.25) is a cheap, physically natural improvement (cooling at the end; about 20 s
   per 500 samples) and could be part of the sampling protocol in the paper, reported next to plain SDE sampling.
   It does not change any conclusion. Whether more hidden elements shrink the learned grain is what the ten-digit
   sweep will show; if FID levels off above the floor there, the pixel couplings are the limit.
+  (Correction from ChatGPT: A plateau alone would not identify pixel couplings as the limit. Fixed training
+  budgets, optimisation, hidden architecture, and sampling errors can also produce a plateau.)
+
+**First ten-digit results, 28x28 (2026-11-10, 15:45; simplest pixel model, % measure, FID with the full sweep
+tonight).** Evaluations 4207381, 4207682 (500 samples) and the sweep pipelines 4209941-44 (2,000 samples each).
+
+| ten digits, 28x28 | clean (std) | far (std) | blends | copies |
+|---|---|---|---|---|
+| pixels only (no units at all) | 0.0% | 100% | 0.5% | 0.0% |
+| no hidden elements (per-pixel units only, K = 0) | 4.1% | 95.8% | 0.4% | 0.0% |
+| Ising 64 | 51.4% | 46.6% | 5.0% | 0.0% |
+| Potts 64 | 64.1% | 35.2% | 0.9% | 0.0% |
+| Potts 1536, frozen | 78.6% | 21.3% | 0.2% | 0.0% |
+| **Potts 1536** | **92.2%** | 6.6% | 1.2% | 0.0% |
+| real images (probes) | 86.1% | 10.4% | 5.0% | 5.0% |
+
+- Without shared hidden elements the simplest pixel model cannot make digits at all (0-4% clean, nearly all far);
+  64 hidden elements already give 51-64%; Potts 1536 is above the real probes, with balanced class shares
+  (7-12% per digit), no copies and median nearest-image distance 4.59 (probes 4.28).
+- By eye (`28x28_all_ten_digits_power4_springs_only_Potts/Potts1536_8nb.png`): all ten digits, clearly
+  recognisable and varied, with the same grain as on four digits; a few messy 8s / 9s / 5s.
 
 **Is training converged? (2026-11-10, running)** Every slice trains a fixed number of steps (the paper's schedule,
 10,901 at t = 5 rising to 30,901 at t = 0; the paper's early stopping never triggers), with no convergence check.
@@ -2131,6 +2191,33 @@ FID level off with K for a training reason (larger models may need more steps).
 
    431 of the 784 pixels get a per-pixel unit (those with two intensity modes).
 
+## Companion writeup corrections (2026-11-10)
+
+(Correction from ChatGPT: The consistency review found agreement in the core free-energy, local-gradient and
+sampler calculations. The following corrections concern statements in
+[`theory.tex`](../latent_physical_SGM_writeup/theory.tex) and [DESIGN.md](DESIGN.md); they are recorded here for
+follow-up edits to those documents.)
+
+- **Finite hidden speed:** detailed balance establishes an equilibrium distribution for fixed parameters; it
+  does not imply that the driven joint system is in an instantaneous Boltzmann state. Fast conditional hidden
+  equilibration is the assumption behind the implemented effective drift. For frozen replica-generation
+  parameters, the visible equilibrium energy is `2F - |x|²/2`, not `F`.
+- **Reverse-time argument:** with forward-time parameters `theta(t)` and reverse time `tau = 5 - t`, the drift
+  uses `x - 2 grad F_{theta(5 - tau)}(x)`. The note currently writes `theta(tau)`; the code uses the correct reversal.
+- **Zero-weight degeneracy:** for bilinear Ising coupling with `b = 0`, `W = 0` is stationary; with nonzero bias,
+  suitable visible-optimum conditions are needed. Absorption of the leading hidden quadratic term requires the
+  corresponding visible couplings; it is not automatic for the sparse networks. The blanket stationary/degenerate claim needs these
+  qualifications.
+- **Bistability:** negative quadratic stiffness does not guarantee a double well in the presence of a learned
+  bias. For example, `-x²/2 + x⁴/4 + 2x` has one minimum. A per-pixel hidden term also permits rather than
+  guarantees bistability of the total potential.
+- **CD1:** for the release `x' = x - dt grad F/2 + sqrt(T dt) xi`, the clamped-minus-released parameter derivative
+  equals `(T² dt/2) grad J + O(dt²)`, with the released state held fixed in that derivative. The note omits the
+  remainder and release convention; the code uses this release convention and documents the small-step approximation.
+- **Results and settings:** matching the probes' clean yield does not establish matching their full distribution;
+  the FID and coverage gaps remain. Keep the two optimiser comparisons and their replication evidence distinct
+  (see Status). The note's EMA description matches the cited EMA runs, but the CLI default is still `--select best`.
+
 ## Next steps
 
 1. **Running** (Status): at 28x28, the best model (Potts 512 + both, power 4) trained locally with S = 64 and
@@ -2180,6 +2267,8 @@ FID level off with K for a training reason (larger models may need more steps).
    - the Ising failure modes (blends, faint near-empty samples) are in the model form, so the next candidates change
      the model: hidden-hidden coupling among Ising units, or a winner-take-all among groups of units (a step
      towards Potts with bistable elements);
+     (Correction from ChatGPT: These are reasonable candidate model changes, but the experiments have not
+     established that the failures are intrinsic to the model form; optimisation remains an open explanation.)
    - if Ising scales: 4 nearest neighbours, ten digits (proposed 2026-11-09, deferred until the Ising results),
      28x28, and local training with measured statistics (so far exact training only);
    - open: whether the trained pixel potentials are bistable (double wells) and whether that can be imposed.

@@ -12,7 +12,7 @@ F(x) = E_v(x) - T sum_j log Z_j(a_j(x)), a_j = b_j + W_j . x:
   5. checks 1-2 at full size (N = 784, K = 16, Ising).
 The double-well partition function is a sum over a fixed grid; the cumulant identities hold exactly for that sum.
 Read-only; CPU only. Writes out/diagnostics/latent_checks/<job id>/report.txt and checks.json.
-Run under Slurm (cd physical-diffusion-models/latent_physical_SGM && sbatch run_latent_checks_neuronic.sh).
+Run under Slurm (cd physical-diffusion-models/latent_physical_SGM && sbatch jobs/run_latent_checks_neuronic.sh).
 """
 
 import json

@@ -15,7 +15,7 @@ count as blends by construction; what matters is the excess over that rate.
 Class side: ridge-regularised Fisher discriminant between 0s and 1s, scaled so the class means sit at 0 and 1,
 fitted on the training images that are not probes.
 Read-only; CPU only. Writes out/diagnostics/blend_check/<job id>/.
-Run under Slurm (cd physical-diffusion-models/latent_physical_SGM && sbatch run_latent_checks_neuronic.sh).
+Run under Slurm (cd physical-diffusion-models/latent_physical_SGM && sbatch jobs/run_latent_checks_neuronic.sh).
 """
 
 import json

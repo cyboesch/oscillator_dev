@@ -6,7 +6,7 @@ folder and the same `out/latent_physical_SGM`. Specification: `k_ising_spec.md`,
 
 Nothing in the live folder was edited, moved or created. Nothing was executed: no Python, no JAX, no Slurm job.
 The only check that ran is `bash -n` on the test script, which parses it without running it. Everything below still
-has to be verified by test 20 (`run_test20_latent_neuronic.sh`).
+has to be verified by test 20 (`jobs/run_test20_latent_neuronic.sh`).
 
 ## Files
 
@@ -17,9 +17,9 @@ has to be verified by test 20 (`run_test20_latent_neuronic.sh`).
 | `cd1_check.py` | copy; `--local-rule` also handles Ising units |
 | `sample_latent.py` | unchanged copy (`make_drift` already handles K Ising units with Q and per-pixel units) |
 | `inspect_states.py` | unchanged copy |
-| `run_test19_latent_neuronic.sh` | unchanged copy, used as the template only (it still points at the live folder) |
+| `jobs/run_test19_latent_neuronic.sh` | unchanged copy, used as the template only (it still points at the live folder) |
 | `inspect_units.py` | new |
-| `run_test20_latent_neuronic.sh` | new |
+| `jobs/run_test20_latent_neuronic.sh` | new |
 | `CHANGES.md` | this file |
 
 ## latent_model.py
@@ -159,10 +159,10 @@ K = 1. If the run has a `split_tree.npz`, the rebuilt tree is compared with it.
 
 **Output:** `out/latent_physical_SGM/units/<job>/` (`summary.txt`, `<run>_metrics.json`, PNGs).
 
-No Slurm script: after landing, `sbatch run_cpu_neuronic.sh inspect_units.py RUN:0,25,50,99 --samples sde_base_n500`.
+No Slurm script: after landing, `sbatch jobs/run_cpu_neuronic.sh inspect_units.py RUN:0,25,50,99 --samples sde_base_n500`.
 In the staging folder, test 20 runs it inside its GPU job.
 
-## run_test20_latent_neuronic.sh (new)
+## jobs/run_test20_latent_neuronic.sh (new)
 
 **Setup.**
 - GPU job laid out like test 19, with `--time=01:30:00`. The spec says about 1 h; the margin covers the 100-slice
@@ -264,7 +264,7 @@ the error line.
     statistics.
 - **The "spurious-code rate".** The review calls it ill-defined. `inspect_units` reports the novel-code rate
   against real probes instead.
-- **No Slurm wrapper for `inspect_units.py`.** `run_cpu_neuronic.sh` already runs any script of the folder.
+- **No Slurm wrapper for `inspect_units.py`.** `jobs/run_cpu_neuronic.sh` already runs any script of the folder.
 
 ## Uncertain points (worth a look when reading test 20's output)
 

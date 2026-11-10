@@ -53,7 +53,7 @@ Every slice file also stores the per-sample losses on the fixed validation batch
 mnist28), for paired comparisons between runs.
 
 Writes out/latent_physical_SGM/<name>/ (never the paper's folder, never deletes anything); resumes from the last
-finished slice. Run under Slurm: cd physical-diffusion-models/latent_physical_SGM && sbatch run_train_latent_neuronic.sh
+finished slice. Run under Slurm: cd physical-diffusion-models/latent_physical_SGM && sbatch jobs/run_train_latent_neuronic.sh
 """
 
 import argparse
