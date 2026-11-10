@@ -315,7 +315,7 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
 | `results/<check>_4190135/` | copies of the reports and metrics of job 4190135 |
 | `latent_model.py` | problems (mnist28, mnist14, gauss2_8), the paper's schedules, dense visible energy, hidden free energies (Ising, Potts, spring `Q`, per-pixel units) with analytic gradients and Laplacians, the score-matching loss, reference initialisations (Fisher, k-means prototypes, per-pixel) |
 | `train_latent.py` | the paper's training loop (jitted scan), with hidden units: `--K --hidden ising/potts --quad --local --visible sextic/quartic --radius R --neighbourhood chebyshev/von_neumann --pair-terms all/none/lin,om,duff --select best/ema --seed --proto-init perclass/pooled/random --hidden-fixed --problem`; local training: `--hidden-samples S --hidden-jackknife` (force matching with measured hidden statistics), `--hidden-jackknife-order 2` (second-order jackknife: Richardson over S, S/2 and S/4 of the same draws, also removes the O(1/S²) bias), `--hidden-samples-late --hidden-samples-switch` (another S from a given slice on), `--hidden-floor` (homeostatic revival of unvisited Potts states; diverges), `--hidden-norm group` (hidden parameters with one step size per group instead of per-element Adam: the closest tested rule to plain gradient steps), `--hidden-norm state` (one Adam gain per hidden state), `--hidden-norm occupancy --occ-beta` (a per-state step from the state's own occupation, one step scale per group), `--occ-same-draws` (its visit counts from the draws of the gradient statistics instead of fresh draws), `--hidden-replicates R` (diagnostic: R independent S-draw estimates averaged), `--hidden-rule cd1 --cd1-dt --cd1-releases --cd1-hidden-samples` (CD-1, with exact or measured hidden statistics) |
-| `sample_latent.py` | reverse SDE (SRA1, the paper's settings) from a run or the paper checkpoint; trajectory sets `base` / `ext`; `--snapshots` |
+| `sample_latent.py` | reverse SDE (SRA1, the paper's settings) from a run or the paper checkpoint; trajectory sets `base` / `ext`; `--snapshots`; `--sampler ode` (PF-ODE); `--quench 0.05,0.25,1` (zero-temperature relaxation under the learned t = 0 energy after sampling; quenches the saved samples if they exist, writes `<stem>_q<s>.npy`) |
 | `evaluate_samples.py` | blend check, far / copy checks, class-resolved and 50/50 rates, texture, per-class pixel statistics, McNemar and paired-bootstrap tests, example grids |
 | `coverage_samples.py` | k-NN precision / recall, spread, distinct nearest images and centroid distance per class |
 | `inspect_states.py` | what the Potts states of a run represent, per slice: mean data image, class mix, W_m and Q_m of the most occupied states; effective states, class purity, commitment, states per majority class, and the states' mean occupations by decade (lost states) |
@@ -2016,6 +2016,37 @@ Reading:
 - Clipping to [0, 1] changes FID little for good models (Potts 512 14x14 1.38 -> 1.83) and slightly worsens it; it
   matters for bad ones (no hidden units, four digits: 229 raw, dominated by a few out-of-range samples, 51 clipped).
 - Pending (chained to the runs): 28x28 four digits with all runs (4209815) and ten digits (4209816).
+
+**Grain test (2026-11-10): is the 28x28 grain leftover thermal noise or learned?** The 28x28 samples are grainy
+(speckle on the strokes, stray dots), the likely reason why FID stays far above the real floor while the clean yield
+is high. Sampling only, on two finished models, with the same 500 trajectories: (i) the SDE samples as before;
+(ii) the same samples quenched, i.e. relaxed at zero temperature under the learned t = 0 free energy,
+dx/ds = -grad F(x), for s = 0.05 / 0.25 / 1 (cooling the bath at the end of the protocol; `sample_latent.py
+--quench`); (iii) the PF-ODE sampler (no noise at all). Jobs 4209958-67; galleries `28x28_grain_test_quench_and_ODE_*`.
+If the grain were thermal, the quench would remove it and FID would drop towards the floor.
+
+| model | FID: SDE | quench 0.05 | quench 0.25 | quench 1 | PF-ODE | real floor |
+|---|---|---|---|---|---|---|
+| Potts 784, simplest pixel model, four digits | 20.3 | 19.9 | 18.6 | **16.4** | 35.4 | 4.6 |
+| Potts 512, power 4, full pixel model, 0/1 | 8.17 | 7.89 | **7.25** | 7.33 | 15.4 | 2.8 |
+
+- Paired against the SDE samples: four digits quench 1 -3.9 [-4.3, -3.5]; 0/1 quench 0.25 -0.9 [-1.3, -0.7]; both
+  significant. The PF-ODE is much worse: +15.1 [+10.0, +21.7] and +7.2 [+4.3, +10.5].
+- **The grain is mostly learned, not thermal.** The best quench closes about a quarter of the gap to the floor on four
+  digits (20.3 -> 16.4 against 4.6) and about a sixth on 0/1 (8.2 -> 7.3 against 2.8). By eye the speckle on the
+  strokes thins a little; the blotchy, uneven strokes remain. The remaining FID gap sits in the learned t = 0 energy
+  (the pixel model and the hidden units), not in the noise of the last sampling steps.
+- Clean yield unchanged (four digits 92.2 -> 91.8%; 0/1 within 0.4 points). The quench pulls samples slightly
+  towards the training images (copies four digits 0.0 -> 0.6%, 0/1 1.4 -> 2.2%; held-out real images 5% by
+  construction) and smooths them (roughness four digits 0.171 -> 0.149, real 0.180).
+- Long quenches can leave the learned energy's basin: with the full pixel model 4 of 500 samples diverged at s = 1
+  (0 at s = 0.05, 1 at s = 0.25); none with the simplest pixel model. The t = 0 energy is not confining everywhere.
+- The PF-ODE gives faint, speckled samples with a different class balance (more 1s); with an imperfect learned score
+  the SDE is the better sampler, as is common.
+- Consequence: a short quench (s = 0.25) is a cheap, physically natural improvement (cooling at the end; about 20 s
+  per 500 samples) and could be part of the sampling protocol in the paper, reported next to plain SDE sampling.
+  It does not change any conclusion. Whether more hidden elements shrink the learned grain is what the ten-digit
+  sweep will show; if FID levels off above the floor there, the pixel couplings are the limit.
 
 ## Caveats
 
