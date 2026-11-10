@@ -13,6 +13,10 @@ New for K > 0:
     own Adam with lr = HIDDEN_LR_SCALE x (their reference magnitude at that slice), same decay;
   * K = 1 starts along the Gaussian-mixture (Fisher) direction W*(t = 5), b*(t = 5) (DESIGN 1.1; W = 0 is a
     degenerate stationary point); the first FREEZE slices keep W, b fixed while theta_v relaxes from its start.
+  * K > 1 Ising units (and K = 1 with --proto-init pooled or random) start from the split-tree reference
+    (latent_model.split_reference: a bisecting tree of the data, one unit per node, each the Gaussian-mixture unit that
+    separates the node's two children; label-free by default) or, with --proto-init random, from Haar-orthogonal rows;
+    their learning-rate scales come from the k-means seed 0 tree, as for Potts units.
 Option --cls 0|1 trains on one class only (idea 1), normalised with the joint data's statistics.
 Option --select ema: the slice result is an exponential moving average of the iterates (time constant --ema-steps)
 instead of the paper's luckiest-mini-batch iterate (which, in most slices, is one of the first ~100 steps).
@@ -91,7 +95,8 @@ def parse():
                     help="mnist28, mnist14, gauss2_8, or a digit subset mnist28_d<digits> / mnist14_d<digits> "
                          "(e.g. mnist14_d14; data from make_digit_data.py)")
     ap.add_argument("--hidden", choices=["ising", "potts"], default="ising",
-                    help="ising: K bistable units (K = 1 implemented); potts: one unit with K states (K even)")
+                    help="ising: K bistable units (K = 1: the Fisher unit; K > 1: one unit per node of a split tree, "
+                         "see --proto-init); potts: one unit with K states (K even)")
     ap.add_argument("--quad", action="store_true",
                     help="hidden units also couple to the squared pixels, a_j = b_j + W_j.x + Q_j.x^2 (Q starts at 0)")
     ap.add_argument("--local", action="store_true",
@@ -101,11 +106,16 @@ def parse():
     ap.add_argument("--select", choices=["best", "ema"], default="best",
                     help="slice result: the paper's luckiest-mini-batch iterate, or an EMA of the iterates")
     ap.add_argument("--ema-steps", type=float, default=1000.0)
-    ap.add_argument("--proto-init", choices=["perclass", "pooled", "random"], default="perclass",
+    ap.add_argument("--proto-init", choices=["perclass", "pooled", "random"], default=None,
                     help="Potts initial prototypes: K/2 k-means prototypes per class (uses the labels), or K prototypes "
                          "of all images together (pooled: no labels are used anywhere in training), or none (random: "
                          "W starts as Gaussian noise with the rms of the pooled reference at t = 5, b = 0; the pooled "
-                         "reference only sets the hidden learning-rate scales and the diagnostics)")
+                         "reference only sets the hidden learning-rate scales and the diagnostics). Ising units "
+                         "(latent_model.split_reference): perclass = the class tree first, then bisecting 2-means "
+                         "(needs K >= classes - 1; K = 1 is the Fisher unit of the labels), pooled = bisecting 2-means "
+                         "of all images (no labels), random = Haar-orthogonal rows with the rms row norm of the pooled "
+                         "tree reference at t = 5, b = 0. Default: pooled for Ising units with K > 1, perclass "
+                         "otherwise")
     ap.add_argument("--radius", type=int, default=None,
                     help="Chebyshev radius of the visible pair couplings instead of the problem's default (mnist28 14, "
                          "mnist14 7); grid - 1 couples all pairs")
@@ -174,10 +184,12 @@ def parse():
     ap.add_argument("--cd1-dt", type=float, default=0.0, help="cd1: a fixed release length instead (if > 0)")
     ap.add_argument("--cd1-releases", type=int, default=1, help="cd1: independent releases per sample")
     ap.add_argument("--seed", type=int, default=lm.KEY_SEED,
-                    help="training seed (>= 1 for Potts units): the optimisation key chain jr.PRNGKey(seed) and, for "
-                         "Potts units, the k-means seeds 100 (seed - 1) + class of the initial prototypes. The default "
-                         "1 is the paper's. The data, the validation batches and the hidden learning-rate scales "
-                         "(always from the seed-1 reference) do not depend on it")
+                    help="training seed (>= 1 for Potts units and for Ising units other than the K = 1 Fisher unit): "
+                         "the optimisation key chain jr.PRNGKey(seed) and, for Potts units, the k-means seeds "
+                         "100 (seed - 1) + class of the initial prototypes; for Ising split trees the k-means seeds "
+                         "100 (seed - 1) + 1000 + leaf, and with --proto-init random the start draw "
+                         "default_rng(1000 + seed). The default 1 is the paper's. The data, the validation batches and "
+                         "the hidden learning-rate scales (always from the seed-1 reference) do not depend on it")
     return ap.parse_args()
 
 
@@ -411,12 +423,25 @@ def init_carry(params, adam, key):
 
 def main():
     args = parse()
+    if args.proto_init is None:              # resolved here, so that every invocation from before keeps its value
+        args.proto_init = "pooled" if args.hidden == "ising" and args.K > 1 else "perclass"
+    fisher = args.hidden == "ising" and args.K == 1 and args.proto_init == "perclass"   # the original K = 1 path
+    tree = None                              # split tree of K Ising units (latent_model.split_tree), if any
     lm.problem_geometry(args.problem)                       # unknown problem names fail here
     n_cls = lm.problem_classes(args.problem)
-    if args.hidden == "ising" and args.K > 1:
-        raise NotImplementedError("only K = 0 or 1 Ising units have an initialisation so far (see DESIGN 5)")
-    if args.hidden == "ising" and args.K == 1 and n_cls != 2:
+    if fisher and n_cls != 2:
         raise NotImplementedError("the Fisher initialisation of one Ising unit needs two classes")
+    if args.hidden == "ising" and args.K > 0 and not fisher:          # K Ising units from the split tree
+        n_pix = lm.problem_geometry(args.problem)[0] ** 2
+        if args.seed < lm.KEY_SEED:
+            raise ValueError(f"--seed {args.seed}: Ising split-tree units need --seed >= {lm.KEY_SEED} "
+                             f"(k-means seeds 100 (seed - {lm.KEY_SEED}) + 1000 + leaf must be >= 0)")
+        if args.K > n_pix and args.proto_init == "random":     # Haar-orthogonal rows need K <= pixels; the tree does not
+            raise ValueError(f"--K {args.K}: --proto-init random allows at most {n_pix} Ising units (orthogonal rows) "
+                             f"on {args.problem}")
+        if args.proto_init == "perclass" and args.K < n_cls - 1:
+            raise ValueError(f"--proto-init perclass with Ising units needs K >= {n_cls - 1} (the class tree of the "
+                             f"{n_cls} classes), not {args.K}")
     if args.hidden == "potts" and args.K > 0 and (args.K < 2 or (args.proto_init == "perclass" and args.K % n_cls)):
         raise ValueError(f"--hidden potts needs K >= 2 states, a multiple of the {n_cls} classes with "
                          f"--proto-init perclass (K/{n_cls} prototypes per class)")
@@ -429,8 +454,9 @@ def main():
     if args.hidden_fixed and (args.quad or not (args.K > 0 or args.local)):
         raise ValueError("--hidden-fixed needs hidden units (--K > 0 or --local) and excludes --quad "
                          "(Q has no closed-form reference)")
-    if args.proto_init == "random" and (args.hidden != "potts" or args.K == 0 or args.hidden_fixed):
-        raise ValueError("--proto-init random needs --hidden potts with --K > 0 and trained couplings (not --hidden-fixed)")
+    if args.proto_init == "random" and (args.K == 0 or args.hidden_fixed):
+        raise ValueError("--proto-init random needs hidden units (--hidden potts or ising with --K > 0) and trained "
+                         "couplings (not --hidden-fixed)")
     if args.hidden_jackknife and (args.hidden_samples < 2 or args.hidden_samples % 2):
         raise ValueError("--hidden-jackknife needs --hidden-samples S >= 2, S even")
     if args.hidden_jackknife_order == 2 and (not args.hidden_jackknife or args.hidden_samples < 4
@@ -494,7 +520,8 @@ def main():
         "name": args.name, "K": args.K, "cls": args.cls, "hidden_lr_scale": args.hidden_lr_scale,
         "freeze_hidden_slices": args.freeze_hidden_slices, "steps_scale": args.steps_scale,
         "max_slices": args.max_slices, "temp": lm.TEMP, "batch": lm.BATCH_SIZE, "val_seed": VAL_SEED, "val_n": VAL_N,
-        "init": "none" if args.K == 0 else ("fisher" if args.hidden == "ising" else "prototypes"),
+        "init": "none" if args.K == 0 else ("fisher" if fisher else ("split-tree" if args.hidden == "ising"
+                                                                     else "prototypes")),
         "hidden": args.hidden, "local": args.local, "quad": args.quad,
         "problem": args.problem, "select": args.select, "ema_steps": args.ema_steps, "visible": args.visible,
         "seed": args.seed, "proto_init": args.proto_init, "hidden_fixed": args.hidden_fixed,
@@ -593,7 +620,7 @@ def main():
             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices)
 
     state_cls = None
-    if K == 1 and args.hidden == "ising":
+    if fisher:
         W_ref, b_ref = lm.fisher_reference(data, labels, taus, lm.TEMP)
         sW = np.sqrt(np.mean(W_ref**2, axis=1))                  # reference magnitudes for the hidden lr
         sb = np.maximum(np.abs(b_ref), lm.TEMP)
@@ -621,6 +648,33 @@ def main():
                   f"b {sb[0]:.3g} -> {sb[-1]:.3g}, W {sW[0]:.3g} -> {sW[-1]:.3g}"
                   + ("; initial W random (rms of W* at t = 5), b = 0" if args.proto_init == "random" else ""))
         np.save(os.path.join(out_dir, "state_class.npy"), state_cls)
+    elif K > 0 and args.hidden == "ising":       # K Ising units, one per node of a split tree (latent_model.split_reference)
+        km_seed = 100 * (args.seed - lm.KEY_SEED)
+        pooled = args.proto_init in ("pooled", "random")       # random: the reference only sets lr scales/diagnostics
+        W_ref, b_ref, tree = lm.split_reference(data, labels, taus, lm.TEMP, K, seed=km_seed, pooled=pooled,
+                                               n_min=lm.tree_n_min(len(data), K))
+        if not (np.isfinite(W_ref).all() and np.isfinite(b_ref).all()):
+            raise RuntimeError(f"split-tree reference is not finite for --seed {args.seed} (k-means seed {km_seed})")
+        # As for Potts units, the hidden learning-rate scales always come from the k-means seed 0 tree, so that --seed
+        # changes the tree, the start and the key chain but not the step sizes.
+        W_lr, b_lr = (W_ref, b_ref) if km_seed == 0 else \
+            lm.split_reference(data, labels, taus, lm.TEMP, K, seed=0, pooled=pooled,
+                               n_min=lm.tree_n_min(len(data), K))[:2]
+        sW = np.sqrt(np.mean(W_lr**2, axis=(1, 2)))
+        sb = np.maximum(np.sqrt(np.mean(b_lr**2, axis=1)), lm.TEMP)
+        ru = np.sqrt(np.mean(W_lr**2, axis=2))                 # rms per unit (slices, K)
+        rb = np.sqrt(np.mean(b_ref**2, axis=1))
+        sizes = np.bincount(tree["leaf_of"], minlength=K + 1)
+        log(logf, f"split-tree reference ({K} Ising units; " + ("bisecting 2-means of all images without labels" if pooled
+                  else f"class tree of the {n_cls} classes, then bisecting 2-means") + f", k-means seed {km_seed}; "
+                  f"depth <= {int(tree['depth'].max())}, leaf sizes {int(sizes.min())}-{int(sizes.max())}, root purity "
+                  f"{tree['unit_purity'][0]:.3f}): |W*| {np.linalg.norm(W_ref[0]):.4g} (t=5) -> "
+                  f"{np.linalg.norm(W_ref[-1]):.4g} (t=0); rms b* {rb[0]:.3g} -> {rb[-1]:.3g}; hidden lr scales "
+                  f"(k-means seed 0): b {sb[0]:.3g} -> {sb[-1]:.3g}, W {sW[0]:.3g} -> {sW[-1]:.3g}; rms W per unit "
+                  f"{ru[0].min():.3g}-{ru[0].max():.3g} (t=5), {ru[-1].min():.3g}-{ru[-1].max():.3g} (t=0)"
+                  + ("; initial W random Haar-orthogonal rows (rms row norm of W* at t = 5), b = 0"
+                     if args.proto_init == "random" else ""))
+        save_atomic(os.path.join(out_dir, "split_tree.npz"), **tree)
     else:
         W_ref, b_ref = np.zeros((lm.N_TIME_STEPS, 0, n_vis)), np.zeros((lm.N_TIME_STEPS, 0))
         sW = sb = np.zeros(lm.N_TIME_STEPS)
@@ -649,8 +703,13 @@ def main():
     if done == 0:
         if K == 0:
             W0, b0 = np.zeros((0, n_vis)), np.zeros((0,))
-        elif args.hidden == "ising":
+        elif fisher:
             W0, b0 = W_ref[0:1], b_ref[0:1]
+        elif args.hidden == "ising" and args.proto_init == "random":   # Haar-orthogonal rows of the reference's size
+            rng0 = np.random.default_rng(1000 + args.seed)
+            r0 = float(np.sqrt(np.mean(np.sum(W_ref[0] ** 2, axis=1))))   # rms row norm of the tree reference at t = 5
+            W0 = lm.random_orthogonal_rows(K, n_vis, r0, rng0)
+            b0 = np.zeros_like(b_ref[0])
         elif args.proto_init == "random":         # no prototypes: noise of the reference's size, no fields
             rng0 = np.random.default_rng(1000 + args.seed)
             W0 = rng0.normal(0.0, float(np.sqrt(np.mean(W_ref[0] ** 2))), size=W_ref[0].shape)
@@ -675,6 +734,7 @@ def main():
 
     # ---- slices -----------------------------------------------------------------------------------------------
     for k in range(done, n_slices):
+        W_prev = np.asarray(params["W"]) if tree is not None else None    # the previous slice's units (diagnostics)
         t0 = time.time()
         t_curr = float(taus[k])
         optimization_key, optimization_subkey = jr.split(optimization_key)
@@ -682,7 +742,7 @@ def main():
         if args.hidden_fixed:                    # hidden couplings = this slice's closed-form reference, not trained
             params = dict(params)
             if K > 0:
-                one = args.hidden == "ising"
+                one = fisher
                 params["W"] = jnp.asarray(W_ref[k:k + 1] if one else W_ref[k])
                 params["b"] = jnp.asarray(b_ref[k:k + 1] if one else b_ref[k])
             if args.local:
@@ -771,7 +831,7 @@ def main():
             if args.hidden_samples > 0:          # states below about one visit per step at this slice's draw count
                 s_k = args.hidden_samples_late if run_k is run_late else args.hidden_samples
                 rec["states_below_1_visit"] = int(np.sum(pbar < 1.0 / (lm.BATCH_SIZE * s_k * args.hidden_replicates)))
-        elif K > 0:
+        elif K > 0 and fisher:
             W, b = np.asarray(params["W"]), np.asarray(params["b"])
             A = np.asarray(Xv) @ W.T + b
             if "Q" in params:
@@ -786,6 +846,13 @@ def main():
                 "mean_abs_m": float(np.mean(np.abs(m[:, j]))), "mean_v": float(np.mean(1.0 - m[:, j] ** 2)),
                 "softening_over_T": float(np.mean(1.0 - m[:, j] ** 2) * np.sum(W[j] ** 2) / lm.TEMP),
             })
+        elif K > 0:                              # K Ising units of a split tree (latent_model.ising_unit_stats)
+            stats, arrays = lm.ising_unit_stats(
+                np.asarray(params["W"]), np.asarray(params["b"]), np.asarray(params["Q"]) if "Q" in params else None,
+                np.asarray(Xv), lm.TEMP, W_ref=W_ref[k], W_prev=W_prev, tree=tree, leaf=tree["leaf_of"][idx],
+                labels=yv)
+            rec.update(stats)
+            extra.update(arrays)
         if "Q" in params:
             Qn = np.asarray(params["Q"])
             rec["Q_norm"] = float(np.linalg.norm(Qn))
@@ -813,10 +880,17 @@ def main():
             msg += (f"; |W| {rec['W_norm']:.4g} (ref {rec['Wref_norm']:.4g}), cos {rec['cos_W_Wref']:.3f}, "
                     f"class acc of top state {rec['class_acc']:.3f}, <max p> {rec['mean_max_p']:.3f}, "
                     f"effective states {rec['eff_states']:.2f}")
-        elif K > 0:
+        elif K > 0 and fisher:
             msg += (f"; |W| {rec['W_norm']:.4g} (ref {rec['Wref_norm']:.4g}), cos {rec['cos_W_Wref']:.3f}, "
                     f"b {rec['b']:.4g} (ref {rec['b_ref']:.4g}), acc {rec['class_acc']:.3f}, <|m|> {rec['mean_abs_m']:.3f}, "
                     f"softening/T {rec['softening_over_T']:.3g}")
+        elif K > 0:
+            st = rec["straddle_off"]
+            msg += (f"; |W| {rec['W_norm']:.4g} (ref {rec['Wref_norm']:.4g}), overlap {rec['overlap_ref']:.3f}, "
+                    f"dead/weak/decided {rec['n_dead']}/{rec['n_weak']}/{rec['n_decided']}, max cos "
+                    f"{rec['max_pair_cos']:.3f}, unit-0 acc {rec['class_acc']:.3f}, leaf acc {rec['leaf_acc']:.3f}, "
+                    f"<|m|> {rec['mean_abs_m']:.3f}, softening/T {rec['softening_over_T']:.3g}, straddle "
+                    + ("n/a" if st is None else f"{st:.3f}"))
         if "Q_norm" in rec:
             msg += f"; |Q| {rec['Q_norm']:.4g}"
         if args.local:

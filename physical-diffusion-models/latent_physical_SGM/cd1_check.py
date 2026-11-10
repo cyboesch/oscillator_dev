@@ -68,8 +68,9 @@ def main():
     ap.add_argument("--skip-cd1", action="store_true")
     ap.add_argument("--samples-jk", action="store_true", help="--samples with the jackknife bias correction")
     ap.add_argument("--local-rule", action="store_true",
-                    help="also: the explicit local force-matching rule (latent_model.force_matching_local_grad, Potts "
-                         "units) against autodiff; agreement to rounding error verifies the derivation")
+                    help="also: the explicit local force-matching rule (latent_model.force_matching_local_grad for Potts "
+                         "units, latent_model.ising_force_matching_local_grad for Ising units) against autodiff; "
+                         "agreement to rounding error verifies the derivation")
     args = ap.parse_args()
 
     job = os.environ.get("SLURM_JOB_ID", "manual")
@@ -117,7 +118,8 @@ def main():
     def label(dt, R, s):
         return f"dt={dt:.0e} R={R}" + (f" S={s}" if s else "")
     scale = jax.jit(lambda p, X: lm.hidden_field_scale(p, X, T, K, hidden, local))
-    local_rule = jax.jit(lambda p, X: lm.force_matching_local_grad(p, X, T, vis, local))
+    rule_fn = lm.ising_force_matching_local_grad if hidden == "ising" else lm.force_matching_local_grad
+    local_rule = jax.jit(lambda p, X: rule_fn(p, X, T, vis, local))
 
     say(f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; cd1_check; job {job}; run {args.run}; "
         f"problem {cfg.get('problem', 'mnist28')}, hidden {hidden}, K {K}, quad {cfg.get('quad', False)}, local {local}, "
@@ -142,7 +144,7 @@ def main():
         say(f"slice {k} (t = {t:.4f}): field scale S = {S:.4g}; dt for kappa = 0.3 / 0.1: "
             f"{0.09 * T / S:.3g} / {0.01 * T / S:.3g}")
         sm = {"t": t, "S": S, "groups": {}, "samples": {}}
-        if args.local_rule and hidden == "potts" and K > 0:
+        if args.local_rule and K > 0:              # Potts: force_matching_local_grad; Ising: its Ising counterpart
             gl = local_rule(params, X)
             errs = {h: rel(np.asarray(gl[h]), np.asarray(g[h])) for h in gl}
             say("  local force-matching rule vs autodiff, relative difference: "

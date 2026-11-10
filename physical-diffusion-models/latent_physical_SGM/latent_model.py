@@ -906,6 +906,392 @@ def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False):
 
 
 # ---------------------------------------------------------------------------------------------------------------
+# K Ising hidden units: a split tree of the data, its Gaussian-mixture reference, the local rule and diagnostics
+# ---------------------------------------------------------------------------------------------------------------
+SPLIT_CLASS, SPLIT_KMEANS, SPLIT_MEDIAN = 0, 1, 2      # how a node of split_tree was split (its "kind")
+
+
+def split_tree(X, labels, K, seed=0, pooled=False, n_min=20, iters=50):
+    """A binary tree over the rows of X with K internal nodes (node j = Ising unit j, in creation order) and K + 1
+    leaves; split_reference makes each node the Gaussian-mixture unit that separates its two children.
+
+    perclass (pooled=False): first the class tree. A node holding c >= 2 classes is split by the bipartition of its
+    class set with the largest Ward gain n_L n_R / (n_L + n_R) |mu_L - mu_R|^2 among all 2^(c-1) - 1 (exhaustive);
+    its right child holds the node's highest class (2 classes: the right child is class 1). Multi-class leaves are
+    split largest gain first until every class is a leaf: C - 1 nodes (needs K >= C - 1).
+    pooled=True: no class tree; the root is the first 2-means split of all images. Labels are read only for
+    unit_class / unit_purity (diagnostics; labels may be None).
+    Then greedy bisecting 2-means. Every leaf with >= 2 n_min images gets one candidate split,
+    kmeans(X_leaf, 2, seed + 1000 + region) (region ids: root 0; node j's children are 2j + 1 (left) and 2j + 2
+    (right)). Balance guard: if the candidate's smaller side has fewer than max(n_min, 0.1 n_leaf) images, the leaf is
+    cut at the median of its projection on c_2 - c_1 instead. The right child is the larger side (ties: the side of
+    c_2, i.e. the upper half). The leaf with the largest Ward gain is split until there are K nodes; ValueError if no
+    leaf can be split before that. Order and sign of the units are fixed by construction, so the reference W_j(t)
+    is smooth in t and needs no gauge alignment.
+
+    Returns a dict of numpy arrays (np.savez-able): parent (K,) (-1: root), depth (K,), child_left / child_right (K,)
+    (a node id >= 0, or -(leaf + 1) for a leaf), n_left / n_right (K,) and mu_left / mu_right (K, N) (images and means
+    of the two children), leaf_of (n,) (leaves numbered by region id), leaf_means (K + 1, N), H (K + 1, K) in
+    {-1, 0, +1} (+1 / -1: the leaf lies in the right / left subtree of node j; 0: not below node j), unit_class (K, 2)
+    (majority class of the left and right child; -1 without labels), unit_purity (K,) (share of the node's images in
+    their child's majority class; nan without labels), gain (K,) (Ward gain), kind (K,) (SPLIT_CLASS, SPLIT_KMEANS or
+    SPLIT_MEDIAN), and the settings seed, pooled, n_min (0-d)."""
+    X = np.asarray(X, dtype=np.float64)
+    n, N = X.shape
+    K = int(K)
+    if K < 1:
+        raise ValueError(f"split_tree needs K >= 1 nodes, not {K}")
+    lab = None if labels is None else np.asarray(labels)
+    classes = None
+    if not pooled:
+        if lab is None:
+            raise ValueError("split_tree: the class tree (pooled=False) needs labels")
+        classes = tuple(int(c) for c in np.unique(lab))
+        if K < len(classes) - 1:
+            raise ValueError(f"split_tree: the class tree of {len(classes)} classes needs K >= {len(classes) - 1} "
+                             f"nodes, not {K}")
+    reg_idx, reg_cls, reg_up = [], [], []    # per region: rows (ascending), class set (class tree), (node, side)
+    cand = {}                                 # region -> (gain, left rows, right rows, kind, left classes, right classes)
+
+    def new_region(idx, cls, up):
+        reg_idx.append(idx)
+        reg_cls.append(cls)
+        reg_up.append(up)
+        return len(reg_idx) - 1
+
+    def class_candidate(r):
+        cls, idx = reg_cls[r], reg_idx[r]
+        if cls is None or len(cls) < 2:
+            return None
+        li = lab[idx]
+        cnt = {c: int(np.sum(li == c)) for c in cls}
+        tot = {c: X[idx[li == c]].sum(axis=0) for c in cls}
+        best = None
+        for mask in range(2 ** (len(cls) - 1) - 1):          # class cls[0] in group A; A != all classes
+            grp = (cls[0],) + tuple(c for i, c in enumerate(cls[1:]) if mask >> i & 1)
+            oth = tuple(c for c in cls if c not in grp)
+            na, nb = sum(cnt[c] for c in grp), sum(cnt[c] for c in oth)
+            d = sum(tot[c] for c in grp) / na - sum(tot[c] for c in oth) / nb
+            g = na * nb / (na + nb) * float(d @ d)
+            if best is None or g > best[0]:
+                best = (g, grp, oth)
+        g, grp, oth = best
+        right, left = (grp, oth) if cls[-1] in grp else (oth, grp)     # the right child holds the highest class
+        in_r = np.isin(li, right)
+        return g, idx[~in_r], idx[in_r], SPLIT_CLASS, tuple(sorted(left)), tuple(sorted(right))
+
+    def kmeans_candidate(r):
+        idx = reg_idx[r]
+        nl = idx.size
+        if nl < 2 * n_min:
+            return None
+        Xl = X[idx]
+        C, assign = kmeans(Xl, 2, seed + 1000 + r, iters)
+        up = assign == 1
+        kind = SPLIT_KMEANS
+        n1 = int(up.sum())
+        if min(n1, nl - n1) < max(n_min, 0.1 * nl):         # balance guard: median cut along c_2 - c_1
+            order = np.argsort(Xl @ (C[1] - C[0]), kind="stable")
+            up = np.zeros(nl, dtype=bool)
+            up[order[nl // 2:]] = True                       # the upper half (towards c_2)
+            kind = SPLIT_MEDIAN
+            n1 = int(up.sum())
+        right = up if n1 >= nl - n1 else ~up                 # the larger side (ties: c_2's side)
+        il, ir = idx[~right], idx[right]
+        d = X[ir].mean(axis=0) - X[il].mean(axis=0)
+        return il.size * ir.size / nl * float(d @ d), il, ir, kind, None, None
+
+    new_region(np.arange(n), classes, (-1, -1))
+    nodes, split_regions = [], set()           # nodes: (region, left region, right region, kind)
+    class_phase = not pooled
+    while len(nodes) < K:
+        leaves = [r for r in range(len(reg_idx)) if r not in split_regions]
+        if class_phase:
+            pool = [r for r in leaves if len(reg_cls[r]) > 1]
+            if not pool:
+                class_phase = False
+                continue
+            get = class_candidate
+        else:
+            pool, get = leaves, kmeans_candidate
+        for r in pool:
+            if r not in cand:
+                cand[r] = get(r)
+        options = [r for r in pool if cand[r] is not None]
+        if not options:
+            raise ValueError(f"split_tree: no leaf can be split after {len(nodes)} of {K} nodes (every leaf has fewer "
+                             f"than 2 n_min = {2 * n_min} images)")
+        r = max(options, key=lambda q: cand[q][0])           # largest Ward gain (ties: the lowest region id)
+        _, il, ir, kind, cl, cr = cand[r]
+        j = len(nodes)
+        rl = new_region(il, cl, (j, 0))
+        rr = new_region(ir, cr, (j, 1))
+        nodes.append((r, rl, rr, kind))
+        split_regions.add(r)
+
+    leaf_regions = [r for r in range(len(reg_idx)) if r not in split_regions]      # ascending region id
+    leaf_id = {r: i for i, r in enumerate(leaf_regions)}
+    node_of = {r: j for j, (r, _, _, _) in enumerate(nodes)}
+    parent, depth = np.zeros(K, dtype=np.int64), np.zeros(K, dtype=np.int64)
+    child_left, child_right = np.zeros(K, dtype=np.int64), np.zeros(K, dtype=np.int64)
+    n_left, n_right = np.zeros(K, dtype=np.int64), np.zeros(K, dtype=np.int64)
+    mu_left, mu_right = np.zeros((K, N)), np.zeros((K, N))
+    gain, kinds = np.zeros(K), np.zeros(K, dtype=np.int64)
+    unit_class, unit_purity = -np.ones((K, 2), dtype=np.int64), np.full(K, np.nan)
+    for j, (r, rl, rr, kind) in enumerate(nodes):
+        parent[j] = reg_up[r][0]
+        depth[j] = 0 if parent[j] < 0 else depth[parent[j]] + 1
+        child_left[j] = node_of[rl] if rl in node_of else -(leaf_id[rl] + 1)
+        child_right[j] = node_of[rr] if rr in node_of else -(leaf_id[rr] + 1)
+        il, ir = reg_idx[rl], reg_idx[rr]
+        n_left[j], n_right[j] = il.size, ir.size
+        mu_left[j], mu_right[j] = X[il].mean(axis=0), X[ir].mean(axis=0)
+        d = mu_right[j] - mu_left[j]
+        gain[j] = il.size * ir.size / (il.size + ir.size) * float(d @ d)
+        kinds[j] = kind
+        if lab is not None:
+            hit = 0
+            for side, rows in ((0, il), (1, ir)):
+                vals, cnts = np.unique(lab[rows], return_counts=True)
+                unit_class[j, side] = int(vals[np.argmax(cnts)])
+                hit += int(cnts.max())
+            unit_purity[j] = hit / (il.size + ir.size)
+    leaf_of = np.zeros(n, dtype=np.int64)
+    H = np.zeros((K + 1, K), dtype=np.int64)
+    for i, r in enumerate(leaf_regions):
+        leaf_of[reg_idx[r]] = i
+        q = r
+        while reg_up[q][0] >= 0:                              # walk up to the root
+            j, side = reg_up[q]
+            H[i, j] = 1 if side == 1 else -1
+            q = nodes[j][0]
+    leaf_means = np.stack([X[reg_idx[r]].mean(axis=0) for r in leaf_regions])
+    return {"parent": parent, "depth": depth, "child_left": child_left, "child_right": child_right,
+            "n_left": n_left, "n_right": n_right, "mu_left": mu_left, "mu_right": mu_right, "leaf_of": leaf_of,
+            "leaf_means": leaf_means, "H": H, "unit_class": unit_class, "unit_purity": unit_purity, "gain": gain,
+            "kind": kinds, "seed": np.int64(seed), "pooled": np.bool_(pooled), "n_min": np.int64(n_min)}
+
+
+def tree_n_min(n, K, n_min=20):
+    """Smallest child size of split_tree for K nodes on n images: n_min = 20, lowered for trees so large that 20 would
+    stop the splitting (K + 1 leaves of >= 2 n_min images to split need about 2 n_min (K + 1) images); never below 3
+    (5 before 2026-11-09 18:30; no run reached the floor). Equals 20 for every run before 2026-11-09 17:20."""
+    return int(min(n_min, max(3, n // (2 * (K + 1)))))
+
+
+def split_reference(data, labels, taus, T, K, seed=0, pooled=False, n_min=20):
+    """W*(tau), b*(tau) of K Ising units, one per node of split_tree(data, labels, K, seed, pooled): unit j is the
+    Gaussian-mixture unit that separates the two children of node j (h_j = +1: the right child),
+      S(tau) = e^-2tau S_w + T(1 - e^-2tau) I     (S_w: pooled within-leaf covariance of the K + 1 leaves / (n - K - 1)),
+      d_j = (mu_R - mu_L) / 2,   m_j = (mu_R + mu_L) / 2,
+      W_j = T S(tau)^-1 e^-tau d_j,   b_j = -W_j . e^-tau m_j + (T/2) log(n_R / n_L).
+    At K = 1 this is fisher_reference(data, labels) (perclass; the same n - 2 normalisation, and the prior term is
+    log(5923 / 5923) = 0 on 0/1 MNIST), or fisher_reference on the root's 2-means assignment plus the prior term
+    (pooled). Returns W (len(taus), K, N), b (len(taus), K), tree (the dict of split_tree)."""
+    X = np.asarray(data, dtype=np.float64)
+    tree = split_tree(X, labels, K, seed=seed, pooled=pooled, n_min=n_min)
+    n, N = X.shape
+    Sw = np.zeros((N, N))
+    for leaf in range(K + 1):                 # leaf by leaf (at K = 1 the sum of fisher_reference, in its order)
+        Xl = X[tree["leaf_of"] == leaf]
+        R = Xl - Xl.mean(0)
+        Sw = Sw + R.T @ R
+    Sw = Sw / (n - K - 1)
+    D = 0.5 * (tree["mu_right"] - tree["mu_left"])            # (K, N)
+    M = 0.5 * (tree["mu_right"] + tree["mu_left"])
+    prior = 0.5 * T * np.log(tree["n_right"] / tree["n_left"])
+    Ws, bs = [], []
+    for tau in np.asarray(taus, dtype=np.float64):
+        e = math.exp(-tau)
+        S = e * e * Sw + T * (1.0 - e * e) * np.eye(N)
+        W = T * np.linalg.solve(S, e * D.T).T
+        bs.append(np.array([-(W[j] @ (e * M[j])) for j in range(K)]) + prior)
+        Ws.append(W)
+    return np.stack(Ws), np.stack(bs), tree
+
+
+def random_orthogonal_rows(K, n, norm, rng):
+    """K mutually orthogonal rows of length `norm` in R^n, Haar distributed: the Q factor of the QR decomposition of
+    an n x K standard normal matrix drawn from the numpy Generator rng, with the column signs fixed by diag R.
+    W W^T = norm^2 I. Needs K <= n. Returns (K, n)."""
+    if K > n:
+        raise ValueError(f"random_orthogonal_rows: {K} orthogonal rows do not fit in dimension {n}")
+    Qm, R = np.linalg.qr(rng.standard_normal((n, K)))
+    s = np.sign(np.diag(R))
+    s[s == 0] = 1.0
+    return norm * (Qm * s).T
+
+
+def ising_force_matching_local_grad(params, X, T, vis, local=False):
+    """The force-matching (score-matching) gradient of the parameters of K Ising units with spring couplings (W, b, Q)
+    and of the per-pixel units (wl, bl), written as a local rule (the Ising counterpart of force_matching_local_grad;
+    it must equal jax.grad of make_loss, checked in cd1_check.py --local-rule and test 20). Per clamped sample x and
+    unit j:
+      a_j = b_j + W_j . x + Q_j . x^2,  m_j = tanh(a_j / T),  v_j = 1 - m_j^2,  k3_j = -2 m_j v_j,
+      G_j = W_j + 2 Q_j x (the gradient of a_j),  s_j = sum_i Q_ji,
+      psi = grad F (the clamp force, including the hidden and per-pixel units' mean forces),
+      c_j = k3_j |G_j|^2 - v_j G_j . psi + 2 T v_j s_j                       (one scalar per unit)
+      dJ/db_j  = < c_j > / T^3
+      dJ/dW_ji = < x_i c_j / T^3 + (2 v_j G_ji - m_j psi_i) / T^2 >
+      dJ/dQ_ji = < x_i^2 c_j / T^3 + 2 x_i (2 v_j G_ji - m_j psi_i) / T^2 + 2 m_j / T >
+    per-pixel units as in force_matching_local_grad. The only non-local inputs are G_j . psi (the change of unit j's
+    field when the pixels are nudged along psi) and |G_j|^2; there is no Gbar term, because Ising units do not
+    compete. Returns a dict over W, b, Q (if present), wl, bl (if local)."""
+    W, b = params["W"], params["b"]
+    Q = params.get("Q", jnp.zeros_like(W))
+    X2 = X * X
+    A = X @ W.T + X2 @ Q.T + b                                  # (B, K)
+    m = jnp.tanh(A / T)
+    v = 1.0 - m * m
+    k3 = -2.0 * m * v
+    GG = jnp.sum(W * W, axis=1) + 4.0 * X @ (W * Q).T + 4.0 * X2 @ (Q * Q).T     # |G_j|^2 (B, K)
+    s = jnp.sum(Q, axis=1)                                      # (K,)
+    psi = vis.grad_lap(params["theta"], X)[0] - (m @ W + 2.0 * X * (m @ Q))      # clamp force grad F (B, N)
+    if local:
+        Al = X * params["wl"] + params["bl"]
+        ml = jnp.tanh(Al / T)
+        psi = psi - ml * params["wl"]
+    Gpsi = psi @ W.T + 2.0 * (psi * X) @ Q.T                    # G_j . psi (B, K)
+    c = k3 * GG - v * Gpsi + 2.0 * T * v * s                    # (B, K)
+    B = X.shape[0]
+    vX = v.T @ X                                                # sum_b v_bj x_bi (K, N)
+    # sum_b (2 v_bj G_bji - m_bj psi_bi), with G_bji = W_ji + 2 Q_ji x_bi
+    pW = 2.0 * (jnp.sum(v, axis=0)[:, None] * W + 2.0 * Q * vX) - m.T @ psi
+    out = {"b": jnp.sum(c, axis=0) / (B * T ** 3),
+           "W": (c.T @ X / T ** 3 + pW / T ** 2) / B}
+    if "Q" in params:
+        pQ = 2.0 * (2.0 * (W * vX + 2.0 * Q * (v.T @ X2)) - m.T @ (psi * X))   # sum_b 2 x (2 v G - m psi)
+        out["Q"] = (c.T @ X2 / T ** 3 + pQ / T ** 2 + 2.0 * jnp.sum(m, axis=0)[:, None] / T) / B
+    if local:
+        wl = params["wl"]
+        vl = 1.0 - ml * ml
+        k3l = -2.0 * ml * vl
+        e = k3l * wl * wl - vl * wl * psi                       # (B, N)
+        out["wl"] = jnp.mean(-ml * psi + 2.0 * vl * wl + X * e / T, axis=0) / T ** 2
+        out["bl"] = jnp.mean(e, axis=0) / T ** 3
+    return out
+
+
+def ising_fields(W, b, Q, X):
+    """Input fields A = X W^T + X^2 Q^T + b (B, K) of K Ising units (Q None: no spring term), numpy float64, summed in
+    the order of hidden_terms_quad."""
+    X = np.asarray(X, dtype=np.float64)
+    A = X @ np.asarray(W, dtype=np.float64).T
+    if Q is not None:
+        A = A + (X * X) @ np.asarray(Q, dtype=np.float64).T
+    return A + np.asarray(b, dtype=np.float64)
+
+
+def _row_basis(W):
+    """Orthonormal basis (N, r) of the row space of W (rank cut at 1e-10 of the largest singular value)."""
+    U, sv, _ = np.linalg.svd(np.asarray(W, dtype=np.float64).T, full_matrices=False)
+    if sv.size == 0 or sv[0] <= 0:
+        return U[:, :0]
+    return U[:, sv > 1e-10 * sv[0]]
+
+
+def ising_unit_stats(W, b, Q, X, T, W_ref=None, W_prev=None, tree=None, leaf=None, labels=None):
+    """Diagnostics of K Ising units on a batch X (numpy): fields A = X W^T + X^2 Q^T + b (Q may be None),
+    m = tanh(A / T), v = 1 - m^2. A unit's minority share is the share of the time its spin spends in its rarer
+    state, (1 - |<m_j>|) / 2 (so a unit whose field sits at a constant 0.5 T is not dead: its spin still flips).
+    Returns (rec, arrays):
+      rec (JSON scalars): W_norm; with W_ref (K, N): Wref_norm, cos_W_Wref (Frobenius), overlap_ref
+        (|U_W^T U_ref|_F^2 / K, U orthonormal bases of the row spaces), norm_ratio_min / _median (|W_j| / |W_ref_j|);
+        max_pair_cos (max |cos| between two units); with W_prev: min_cos_prev (min_j cos(W_j, W_prev_j));
+        n_dead (minority share < 0.005), n_weak (std a_j < 0.1 T), n_decided (<|m_j|> > 0.9 and not dead);
+        mean_abs_m, mean_v; softening_over_T = sum_j <v_j |G_j|^2> / T (G_j = W_j + 2 Q_j x); n_eff_m (participation
+        ratio of cov(m)); with tree (split_tree) and leaf (the true leaf of each sample): leaf_acc (descend the tree
+        by sign a_j), straddle_off (mean over units of the share of the samples outside the unit's subtree with
+        |a_j| < 2T; None if no unit has such samples), own_balance_err (mean over units of |<(1 + m_j) / 2> on the
+        unit's own subtree - n_R / (n_L + n_R)|), and with labels as well class_acc (unit 0, mapped through the
+        majority labels of the root's children); with labels: n_gated (units with a minority share below 0.02 in one
+        class and above 0.1 in another).
+      arrays (K,): unit_norm, unit_cos_ref, unit_minority, unit_abs_m, unit_straddle (nan where not defined)."""
+    W = np.asarray(W, dtype=np.float64)
+    X = np.asarray(X, dtype=np.float64)
+    K, B = W.shape[0], X.shape[0]
+    A = ising_fields(W, b, Q, X)
+    m = np.tanh(A / T)
+    v = 1.0 - m * m
+    minority = 0.5 * (1.0 - np.abs(m.mean(axis=0)))
+    abs_m = np.abs(m).mean(axis=0)
+    dead = minority < 0.005
+    weak = A.std(axis=0) < 0.1 * T
+    decided = (abs_m > 0.9) & ~dead
+    GG = np.sum(W * W, axis=1)[None, :]
+    if Q is not None:
+        Qa = np.asarray(Q, dtype=np.float64)
+        GG = GG + 4.0 * X @ (W * Qa).T + 4.0 * (X * X) @ (Qa * Qa).T
+    norms = np.linalg.norm(W, axis=1)
+    Wn = W / np.maximum(norms, 1e-300)[:, None]
+    cosm = np.abs(Wn @ Wn.T)
+    cm = np.atleast_2d(np.cov(m, rowvar=False))
+    tr, tr2 = float(np.trace(cm)), float(np.sum(cm * cm))
+    rec = {"W_norm": float(np.linalg.norm(W))}
+    unit_cos_ref = np.full(K, np.nan)
+    if W_ref is not None:
+        Wr = np.asarray(W_ref, dtype=np.float64)
+        rn = np.linalg.norm(Wr, axis=1)
+        unit_cos_ref = np.sum(W * Wr, axis=1) / (norms * rn + 1e-300)
+        ratio = norms / np.maximum(rn, 1e-300)
+        Ua, Ub = _row_basis(W), _row_basis(Wr)
+        rec.update({"Wref_norm": float(np.linalg.norm(Wr)),
+                    "cos_W_Wref": float(np.sum(W * Wr) / (np.linalg.norm(W) * np.linalg.norm(Wr) + 1e-300)),
+                    "overlap_ref": float(np.sum((Ua.T @ Ub) ** 2) / K),
+                    "norm_ratio_min": float(ratio.min()), "norm_ratio_median": float(np.median(ratio))})
+    rec["max_pair_cos"] = float(cosm[~np.eye(K, dtype=bool)].max()) if K > 1 else 0.0
+    if W_prev is not None:
+        Wp = np.asarray(W_prev, dtype=np.float64)
+        rec["min_cos_prev"] = float(np.min(np.sum(W * Wp, axis=1) / (norms * np.linalg.norm(Wp, axis=1) + 1e-300)))
+    rec.update({"n_dead": int(dead.sum()), "n_weak": int(weak.sum()), "n_decided": int(decided.sum()),
+                "mean_abs_m": float(abs_m.mean()), "mean_v": float(v.mean()),
+                "softening_over_T": float(np.sum(np.mean(v * GG, axis=0)) / T),
+                "n_eff_m": tr * tr / tr2 if tr2 > 0 else 0.0})
+    unit_straddle = np.full(K, np.nan)
+    if tree is not None and leaf is not None:
+        leaf = np.asarray(leaf)
+        cl, cr = np.asarray(tree["child_left"]), np.asarray(tree["child_right"])
+        node, pred, rows = np.zeros(B, dtype=np.int64), np.full(B, -1, dtype=np.int64), np.arange(B)
+        for _ in range(K + 1):                                # descend from the root by the sign of a_j
+            act = rows[pred < 0]
+            if act.size == 0:
+                break
+            j = node[act]
+            nxt = np.where(A[act, j] > 0, cr[j], cl[j])
+            fin = nxt < 0
+            pred[act[fin]] = -nxt[fin] - 1
+            node[act[~fin]] = nxt[~fin]
+        on = np.asarray(tree["H"])[leaf] != 0                 # (B, K): the sample's leaf lies below node j
+        n_off, n_on = (~on).sum(axis=0), on.sum(axis=0)
+        und = np.abs(A) < 2.0 * T
+        unit_straddle = np.where(n_off > 0, (und & ~on).sum(axis=0) / np.maximum(n_off, 1), np.nan)
+        share = (0.5 * (1.0 + m) * on).sum(axis=0) / np.maximum(n_on, 1)
+        target = np.asarray(tree["n_right"]) / (np.asarray(tree["n_left"]) + np.asarray(tree["n_right"]))
+        rec.update({"leaf_acc": float(np.mean(pred == leaf)),
+                    "straddle_off": float(np.nanmean(unit_straddle)) if np.any(n_off > 0) else None,
+                    "own_balance_err": float(np.mean(np.abs(share - target)[n_on > 0])) if np.any(n_on > 0) else None})
+        if labels is not None:
+            uc = np.asarray(tree["unit_class"])[0]
+            rec["class_acc"] = float(np.mean(np.where(A[:, 0] > 0, uc[1], uc[0]) == np.asarray(labels)))
+    if labels is not None:
+        lab = np.asarray(labels)
+        mins = np.stack([0.5 * (1.0 - np.abs(m[lab == c].mean(axis=0))) for c in np.unique(lab)])     # (C, K)
+        rec["n_gated"] = int(np.sum((mins.min(axis=0) < 0.02) & (mins.max(axis=0) > 0.1)))
+    arrays = {"unit_norm": norms, "unit_cos_ref": unit_cos_ref, "unit_minority": minority, "unit_abs_m": abs_m,
+              "unit_straddle": unit_straddle}
+    return rec, arrays
+
+
+def force_misfit(X, psi, T):
+    """G = sym(X^T psi) / (B T) - I (N, N) on a batch X ~ p_t with psi = grad F(X) (numpy). By Stein's identity
+    E[x psi^T] / T = I for the exact score, so G = 0 there; for a small new unit, J ~ J0 - sum_j W_j^T G W_j / T^2
+    (a direction with a positive eigenvalue of G lowers the loss). Diagnostic only."""
+    X = np.asarray(X, dtype=np.float64)
+    M = X.T @ np.asarray(psi, dtype=np.float64) / (X.shape[0] * T)
+    return 0.5 * (M + M.T) - np.eye(X.shape[1])
+
+
+# ---------------------------------------------------------------------------------------------------------------
 # Initial states and Brownian keys of the sampler (same as the ode_vs_sde 500-trajectory runs)
 # ---------------------------------------------------------------------------------------------------------------
 def trajectory_set(name, n=None, problem="mnist28", dim=N):

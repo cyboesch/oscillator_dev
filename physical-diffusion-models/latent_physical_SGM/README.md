@@ -67,9 +67,30 @@ variety (recall of the real images' variety, `coverage_samples.py`) or copying (
 distance misses small flaws (a faint ghost, a small gap). So I also look at the images
 (`out/latent_physical_SGM/gallery/INDEX.md`; what I saw is in Result 13).
 
-**Status (2026-11-09, 10:55).**
+**Status (2026-11-09, 17:30).**
+- **Newest (afternoon, Result 15): the simplest pixel model works, if the hidden units carry the structure.** Pixels
+  with x^4 potentials coupled only to their nearest neighbours by linear springs (8 neighbours, or just the 4
+  nearest), no long-range or optomechanical pixel couplings, exact training, 14x14 0/1:
+  - Without hidden units nothing is a digit (0% clean). With one Potts unit the clean yield rises with every
+    doubling of the states: 32 / 128 / 256 / 512 states give 65.5 / 81.4 / 85.0 / **89.4%** (8 neighbours) and
+    58.2 / 74.2 / 80.4 / **87.8%** (4 neighbours); recall of the 0s rises too (0.61 -> 0.83), copies stay <= 0.4%.
+  - Hidden states replace pixel couplings: the 4-neighbour deficit shrinks from 7.2 points at 128 states to 1.6
+    (not significant) at 512. So the hardware-friendly pixel model (bistable-ready x^4 pixels, nearest-neighbour
+    springs) costs almost nothing once the hidden unit is large enough.
+  - **K Ising units do as well as K Potts states** (32: 66.7 vs 65.5%; 128: 78.7 vs 81.4%; neither difference
+    significant), from 1 unit (38.7%) up to 196 (81.1%, flattening: +2.5 over 128, p = 0.05). Ising units are the
+    easier hardware story (each is one bistable element; a Potts unit with M states is M bistable elements plus a
+    winner-take-all constraint), with the same wiring per element (each coupled to every pixel).
+  - Ising samples differ in kind: more 0/1 blends (6-7% against 1-2%), 1s 93% clean against 98%, and a failure the
+    Potts models do not have, faint dotted near-empty images (about 10 of 100 flawed at 196 units, against about 3
+    for Potts 512). A likely reading, untested: a Potts unit is a mixture (each sample picks one prototype), Ising
+    units a product of on/off features, which can combine features of both digits.
+  - Running (17:22): more than 196 Ising units (256 / 512 / 1024; the 196 cap was only needed for the random start),
+    and four digits with 196 / 256 / 512 Ising units against Potts 512, all with the simplest pixel model.
 - **Hidden units improve the samples a lot, and more hidden states help, up to about 256** (Results 7 and 8).
-  - At 14x14, 512 states do not differ from 256 on independent trajectories and overshoot towards the training set.
+  - At 14x14, 512 states do not differ from 256 on independent trajectories and overshoot towards the training set
+    (with the full, long-range power-6 pixel model; with the simplest pixel model 512 states do help, +4.3 and +7.4
+    points over 256, Result 15).
     At 28x28, 512 states with power 4 give the best samples so far: 92.3% clean yield, 1.6% blends, recall of real
     0s 0.68 (Result 9; not significantly better than 256 states on clean yield).
   - Design: Potts units (one M-state hidden unit) coupled to the pixels and to their squares (spring), plus one
@@ -134,7 +155,11 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
     - without hidden units the nearest-neighbour models produce essentially no clean samples (K = 0, radius 1:
       3.5%; 4 neighbours, springs only: 0.0%); with Potts 128 + both, 74.2%.
     - So 8 neighbours with springs only cost about 3 points; the optomechanical term is not needed; 4 neighbours
-      cost 10. Next: more Potts states at 8 and 4 neighbours, springs only.
+      cost 7. With more states the 4-neighbour gap closes (Result 15).
+  - **Simplest pixel model (power 4, nearest-neighbour springs only), number of Potts states and of Ising units
+    (Result 15):** Potts 512 reaches 89.4% (8 neighbours) and 87.8% (4 neighbours), the 4-neighbour gap closing
+    with more states; K Ising units match K Potts states at K = 32 and 128 (66.7 vs 65.5, 78.7 vs 81.4%), with
+    more 0/1 blends and faint samples; 196 Ising units 81.1%.
   - **At full size (28x28) S = 64 hidden samples with the jackknife train as well as exact statistics:** clean yield
     87.6% vs 86.3% ([-1.3, +4.0]), against 31.9% for the paper's model. S = 256 gives the same (86.9%, +0.6
     [-1.5, +2.6] against exact).
@@ -243,22 +268,21 @@ distance misses small flaws (a faint ghost, a small gap). So I also look at the 
   83.4% on 0/1/2 and 90.1% on 0/1 at 256 states: the states needed grow with the number of classes (one run per
   problem; not tested across problems). The 2s and 3s are the weak classes; by eye 7-11 of 100 samples are bad,
   nearly all 2s or 3s.
-- **Running:**
-  - at 28x28: S = 16 with the visit-count rule, and with per-element Adam as its baseline (4202038/39); the best
-    model (Potts 512 + both, power 4) trained locally with S = 64 and the visit-count rule (4202207), against its
-    exact training (92.3%);
-  - 0/1 at 14x14 (Result 10): S = 4 with same-draw visit counts (4 reads; 4203231);
-  - 0/1/2/3 at 14x14: Potts 512 + both, the visit-count rule with S = 64 (4202164), against exact training (85.0%).
-  - **A simpler visible model** (new goal, 2026-11-09: bistable, slowly evolving pixels coupled only to their
-    nearest neighbours, ideally by linear springs only, with the expressivity moved into the hidden units). 0/1 at
-    14x14, power 4, exact training, Potts 128 + both, against the existing radius-7 power-4 run:
-    - step 1: pair-coupling radius 3, 2 and 1 (3,600 / 1,950 / 702 pairs instead of 11,760), and no hidden units at
-      radius 1 (4203390-93; evaluation 4203394);
-    - step 2 (new options `--pair-terms` and `--neighbourhood von_neumann`; test 19, job 4203459, passed: the
-      default path is bit-identical at power 4 and 6, the neighbour lists match brute force, dropped pair terms stay
-      exactly zero in every slice, bad options are refused): 8 or 4 nearest
-      neighbours with springs only, or springs plus the asymmetric optomechanical term x_i² x_j; no pair couplings
-      at all; and the 4-neighbour springs-only model without hidden units (4203467-72; evaluation 4203473).
+- **Running (2026-11-09, 17:22):**
+  - at 28x28: the best model (Potts 512 + both, power 4) trained locally with S = 64 and the visit-count rule
+    (4202207, since the morning; evaluation 4202209), against its exact training (92.3%);
+  - simplest pixel model (power 4, springs only, 8 nearest neighbours, exact training), Result 15 continued:
+    - 0/1 with 256 / 512 / 1024 Ising units (4206339-41; evaluations 4206346, and 4206348 with 1024). More than 196
+      Ising units (the number of pixels) are now allowed with the split-tree start; the tree's smallest child size
+      drops below 20 images only when the tree would not fit otherwise (`latent_model.tree_n_min`: 20 for every
+      earlier run, 11 at 512 and 5 at 1024 units on 0/1). The large trees were not tested before submission.
+    - 0/1/2/3 with 196 / 256 / 512 Ising units, and Potts 512 with the same pixel model as the comparison
+      (4206342-45; evaluation 4206349, also against the full-pixel-model Potts 512 of Result 14);
+    - gallery 4206350 (new folder `14x14_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts`).
+  - Finished since the morning (reported above and in Results 10, 14 and 15): 28x28 S = 16 with and without the
+    visit-count rule, S = 4 with same-draw counts, four digits with the visit-count rule, the pair-coupling range
+    and pair-term steps (`--pair-terms`, `--neighbourhood von_neumann`; test 19 passed) and the Potts and Ising
+    sweeps with the simplest pixel model.
 - **Idealised, not yet tested** (Caveats):
   - the hidden units are averaged out exactly (infinitely fast; Potts states are exactly one-hot);
   - the nudge measurements the local rule needs are not simulated.
@@ -1753,6 +1777,49 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
   - In `compare.png` the 256- and 512-state models draw the same digit on each trajectory, as with two digits; 512
     states mostly clean up the same shape.
 
+## Result 15 (2026-11-09): the simplest pixel model, number of Potts states and of Ising units (14x14, 0/1)
+
+Pixels: power 4 (`--visible quartic`), pair couplings springs only (`--pair-terms lin`) between the 8 nearest
+neighbours (`--radius 1`) or the 4 nearest (`--neighbourhood von_neumann --radius 1`). Hidden: one Potts unit with
+K states, or K Ising units (each a bistable unit coupled to all pixels and their squares; label-free split-tree
+start for K > 1), both "+ both" (spring and per-pixel units). Exact training, seed 0. Evaluations 4205293 (Potts),
+4205473 (Ising); coverage 4205294, 4205474. Clean yield (50/50); recall/precision of the 0s (k-NN, k = 3).
+
+| hidden | clean, 8 nb | clean, 4 nb | 0s recall / precision (8 nb) | blends (8 nb) |
+|---|---|---|---|---|
+| none | | 0.0% | | |
+| Potts 32 | 65.5% | 58.2% | 0.61 / 0.91 | 3.2% |
+| Potts 128 | 81.4% | 74.2% | 0.76 / 0.94 | 1.4% |
+| Potts 256 | 85.0% | 80.4% | 0.80 / 0.95 | 1.6% |
+| Potts 512 | 89.4% | 87.8% | 0.83 / 0.95 | 2.2% |
+| Ising 1 | 38.7% | | 0.41 / 0.29 | 9.0% |
+| Ising 8 | 51.9% | | 0.53 / 0.76 | 9.0% |
+| Ising 32 | 66.7% | | 0.73 / 0.88 | 6.8% |
+| Ising 128 | 78.7% | | 0.81 / 0.89 | 7.0% |
+| Ising 196 | 81.1% | | 0.81 / 0.89 | 6.4% |
+| real images (probes) | 85.7% | | 0.89 / 0.88 | |
+
+- Potts: every doubling helps (paired, p <= 0.02); the gain is in the 0s (the 1s are ~98% clean from 32 states).
+  The 4-neighbour deficit shrinks with K: -7.2 at 128, -4.7 at 256, -1.6 ([-3.5, +0.2], p = 0.08) at 512. Copies
+  <= 0.4%, median nearest-neighbour distance 1.24-1.46 (near-copy < 0.45). 89% is above the probes' 85.7%: the
+  yield saturates for typical digits; recall (0.83-0.85 against 0.89) is the fairer comparison there.
+- Ising: K Ising units match K Potts states in clean yield (32: +1.2 [-2.9, +5.3]; 128: -2.7 [-6.6, +1.1]), with
+  higher recall of the 0s and lower precision, and more blends (6-7% against 1-2%); the 1s are 93.5% clean
+  against 98%. 128 -> 196: +2.5 ([-0.0, +5.0], p = 0.05), flattening. 196 was then the code's cap (one unit per
+  pixel); the cap is only needed for the random (orthogonal) start and was lifted for the split tree at 17:20.
+- By eye (`gallery/14x14_0-1_power4_springs_only_number_of_Ising_units/`): Ising 196 draws mostly clean 0s and 1s;
+  about 10 of 100 are flawed, a distinct Ising failure: faint, dotted, nearly empty images (e.g. trajectory 7 in
+  every Ising row of `compare.png`, where Potts draws a 0) and 1s with stray bits (an "i", an E-like shape).
+  Potts 512 (4 neighbours) has about 3 of 100 flawed (a serifed 1, lumpy 0s).
+- Reading: a Potts unit is a mixture (one prototype per sample), Ising units a product of features; per hidden
+  element the two are equal up to 128, the product mixes 0 and 1 features more often. Untested.
+- Hardware reading: per hidden element the two cost the same wiring (each element coupled to every pixel and its
+  square), but an Ising unit is one bistable element, while a Potts unit with M states is M bistable elements that
+  must also inhibit each other (exactly one on; HARDWARE_NOTES.md). Ising units matching Potts states one for one
+  therefore makes Ising the preferred design, if it keeps scaling.
+- Running (17:22, Status): 256 / 512 / 1024 Ising units on 0/1; 196 / 256 / 512 Ising units and Potts 512 on
+  0/1/2/3, all with this pixel model and 8 neighbours.
+
 ## Caveats
 
 1. **The hidden units are idealised.**
@@ -1766,8 +1833,10 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
    - Trained end to end at 14x14 (Result 10): force matching with measured hidden statistics (S samples, with and
      without the jackknife; on 0/1/2 also, Result 12), with per-element Adam, plain steps or the per-state rules,
      and CD-1 with exact hidden averages. At 28x28 (Potts 128 + both only), S = 64 and S = 256 with the jackknife
-     are indistinguishable from exact training (Result 10); S = 16 with and without the visit-count rule, and the
-     best model (Potts 512 + both, power 4) with S = 64 and the visit-count rule, are running. Four digits: running.
+     are indistinguishable from exact training (Result 10); S = 16 with the visit-count rule matches exact training too (87.1%;
+     per-element Adam 85.3%); the best model (Potts 512 + both, power 4) with S = 64 and the visit-count rule is
+     running. Four digits (S = 64, visit-count rule) fall short: 74.7% against 85.0% exact (Result 14). The
+     simplest-pixel-model runs of Result 15 (Potts and Ising sweeps) were trained with exact statistics only.
    - CD-1 with sampled hidden states was only gradient-checked: matching the noise of exact-average CD-1 would take
      about 4·10³-9·10⁷ hidden reads per configuration (Result 10, point 3); training with fewer reads was not tried.
    - One training seed per measured-statistics run; training-seed noise is about 2 points (Caveat 4).
@@ -1815,10 +1884,9 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
 
 ## Next steps
 
-1. **Running** (Status): at 28x28, S = 16 with the visit-count rule against per-element Adam, and the best model
-   (Potts 512 + both, power 4) trained locally with S = 64 and the visit-count rule; at 14x14 0/1, the visit-count
-   rule with its visit counts from the same draws (S = 16); on 0/1/2/3, Potts 512 with the visit-count rule and
-   S = 64.
+1. **Running** (Status): at 28x28, the best model (Potts 512 + both, power 4) trained locally with S = 64 and
+   the visit-count rule; with the simplest pixel model, 256 / 512 / 1024 Ising units on 0/1, and 196 / 256 / 512
+   Ising units against Potts 512 on 0/1/2/3.
 2. **A device-compatible optimiser for the hidden units** (Result 10, "The role of Adam"): steps with one step size
    per group (the closest tested rule to plain gradient steps) lose the states even with exact statistics; a
    per-state step size brings them back. The visit-count rule also keeps most of them with few measured samples
@@ -1826,13 +1894,14 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
    S = 16; S = 2 breaks), and on 0/1/2 it is indistinguishable from exact training with S = 64 (Result 12). Its
    visit counts can come from the same S draws as the statistics at no measurable cost (S = 8), so it reads no
    more than per-element Adam.
-   - Test it at 28x28 (S = 16, and Potts 512 + both with S = 64, running) and on four digits (S = 64 running).
+   - Tested at 28x28 (S = 16 matches exact training; Potts 512 + both with S = 64 running) and on four digits
+     (S = 64: 74.7% against 85.0% exact, the open four-digit gap, Result 14).
    - Why at S = 2 the states recovered after the consolidation go mostly to the 1s (0s / 1s 23 / 22 at slice 20,
      29 / 73 at t = 0), whether that is why its 0s fail, and why S = 4 does not break; whether a minimum step (or
      a label-free balance of the visit counts) keeps the allocation balanced at S = 2.
    - Visit counts from the draws of the statistics (half the reads, `--occ-same-draws`, test 18 passed): S = 8 as
-     good as fresh counts (81.7% vs 81.6%); S = 16 running (4202939). Next: same-draw counts in the 28x28 and
-     multi-digit runs, and S = 4 with same-draw counts (4 reads).
+     good as fresh counts (81.7% vs 81.6%); S = 16 83.0% and S = 4 81.5% (4 reads), as good as
+     fresh counts. Next: same-draw counts in the 28x28 and multi-digit runs.
    - The states it still loses (34-41 of 128 at S = 8-16; 17 at S = 4, 26 at S = 2): a longer visit window does
      not help (it loses more), and S = 4 and 2 lose fewer than S = 8-16.
      Untested: many reads only during consolidation (with per-element Adam, S = 256 up to slice 29 and then 16
@@ -1848,11 +1917,22 @@ for K = 0's precision of 0s and 1s). Copy rates: 0% / 0% / 0.6% (real 5% by cons
    - The per-pixel units already train with one step size per group in the visit-count runs (only the Potts
      couplings get the per-state rule), and those runs match per-element Adam. Still to check: no Adam-like global
      scale at all (a fixed learning-rate schedule), and the visible couplings (per-element Adam in every run).
-3. **A simpler visible model, with the expressivity in the hidden units** (running, Status): power 4 (already
-   shown to work with 128+ states, Result 9), pixel pairs coupled only to their nearest neighbours, springs only or
-   springs plus the optomechanical term. Then, one step at a time: more Potts states (256, 512) at the smallest
-   coupling range that holds up, watching near-copies; whether the trained pixel potentials are bistable (double
-   wells) and whether that can be imposed; 28x28; local training with the visit-count rule.
+3. **The simplest pixel model, with the expressivity in the hidden units: Ising scaling** (the strategy since
+   2026-11-09: 14x14, power 4, linear springs between nearest neighbours only; quality as a function of the number
+   of hidden units). Done (Result 15): Potts 32-512 at 8 and 4 neighbours (512: 89.4 / 87.8%), Ising 1-196 at 8
+   neighbours (196: 81.1%, matching Potts at equal K up to 128). The optomechanical pixel term is not needed (Status).
+   Ising units are the preferred hardware story (one bistable element each, no winner-take-all), so the next steps
+   follow the Ising units:
+   - more than 196 Ising units on 0/1 (256 / 512 / 1024, running): does Ising keep up with Potts 512 (89.4%), or
+     does it flatten near 81%?
+   - four digits (196 / 256 / 512 Ising units against Potts 512 with the same pixel model, running): does the
+     product of features scale better with the number of classes than the Potts mixture?
+   - the Ising failure modes (blends, faint near-empty samples): what the hidden units do on those trajectories
+     (`inspect_units.py`), and whether a few Ising units with hidden-hidden coupling or a winner-take-all among
+     groups of units fixes them;
+   - if Ising scales: 4 nearest neighbours, ten digits (proposed 2026-11-09, deferred until the Ising results),
+     28x28, and local training with measured statistics (so far exact training only);
+   - open: whether the trained pixel potentials are bistable (double wells) and whether that can be imposed.
 4. **Hardware realism, at 14x14 first:**
    - replace the M-state Potts unit by M bistable units with finite lateral inhibition, and find how strong it must be;
    - simulate the hidden dynamics explicitly, at finite speed (now they are averaged out exactly);

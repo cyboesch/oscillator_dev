@@ -124,6 +124,31 @@ done; done
 run --problem mnist14 --out ${G}/14x14_0-1_power4_springs_only_number_of_Potts_states --title "14x14, digits 0/1, power 4, nearest-neighbour springs only: number of Potts states" \
     "${SETS[@]}" --nearest Potts512_8nb,Potts512_4nb || rc=1
 
+# number of Ising units (each a bistable unit coupled to all pixels, + spring and per-pixel units) with the simplest
+# pixel model: power 4, springs only, 8 nearest neighbours; Potts 128 for comparison
+SETS=()
+for K in 1 8 32 128 196 256 512 1024; do add Ising${K}_8nb mnist14_K${K}_ema_ising_quad_local_quartic_r1_lin; done
+add Potts128_8nb mnist14_K128_ema_potts_quad_local_quartic_r1_lin
+add Potts512_8nb mnist14_K512_ema_potts_quad_local_quartic_r1_lin
+run --problem mnist14 --out ${G}/14x14_0-1_power4_springs_only_number_of_Ising_units --title "14x14, digits 0/1, power 4, nearest-neighbour springs only: number of Ising units" \
+    "${SETS[@]}" --nearest Ising128_8nb || rc=1
+
+# four digits with the simplest pixel model (power 4, springs only, 8 neighbours): Ising units against Potts 512
+SETS=()
+for K in 196 256 512; do add Ising${K}_8nb mnist14_d0123_K${K}_ema_ising_quad_local_quartic_r1_lin; done
+add Potts512_8nb mnist14_d0123_K512_ema_potts_quad_local_quartic_r1_lin_pooled
+add Potts512_full_pixel_model mnist14_d0123_K512_ema_potts_quad_local_pooled
+run --problem mnist14_d0123 --out ${G}/14x14_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts --title "14x14, digits 0/1/2/3, power 4, nearest-neighbour springs only: Ising units against Potts" \
+    "${SETS[@]}" || rc=1
+
+# 28x28, four digits, the simplest pixel model (power 4, springs only, 8 neighbours): 784 / 1568 / 3136 Ising units
+# and 784 / 1536 Potts states
+SETS=()
+for K in 784 1568 3136; do add Ising${K}_8nb mnist28_d0123_K${K}_ema_ising_quad_local_quartic_r1_lin; done
+for K in 784 1536; do add Potts${K}_8nb mnist28_d0123_K${K}_ema_potts_quad_local_quartic_r1_lin_pooled; done
+run --problem mnist28_d0123 --out ${G}/28x28_0-1-2-3_four_digits_power4_springs_only_Ising_vs_Potts --title "28x28, digits 0/1/2/3, power 4, nearest-neighbour springs only: Ising units and Potts states" \
+    "${SETS[@]}" || rc=1
+
 SETS=()
 add K0_no_hidden mnist14_d012_K0_ema
 add Potts128_both mnist14_d012_K128_ema_potts_quad_local_pooled
