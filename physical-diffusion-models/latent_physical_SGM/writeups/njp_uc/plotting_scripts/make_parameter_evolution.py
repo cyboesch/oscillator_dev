@@ -81,6 +81,108 @@ def signature(path):
     return {"bytes": stat.st_size, "mtime_ns": stat.st_mtime_ns}
 
 
+def file_digest(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1 << 20), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def default_trajectory(run):
+    """Use the selected digit-2 replay; do not substitute a different digit."""
+    path = HERE.parent / "figure_data/parameter_potts2/trajectory_021.npz"
+    if not path.is_file():
+        raise FileNotFoundError(
+            "The selected digit-2 trajectory is missing; run "
+            "run_parameter_trajectory_cpu.sh first or pass --trajectory PATH"
+        )
+    return path.resolve()
+
+
+def attach_trajectory(run, data, metadata, path):
+    """Attach actual recorded states at the exact displayed parameter times.
+
+    Pixel normalization is shared across every frame. This function only reads
+    a saved trajectory; it never samples, interpolates images or changes data.
+    """
+    path = path.resolve()
+    info_path = path.with_suffix(".json")
+    before = {p: signature(p) for p in (path, info_path)}
+    info = json.loads(info_path.read_text())
+    if info.get("status") != "complete" or info.get("run") != run.name:
+        raise ValueError("Trajectory must be complete and come from the plotted run")
+    if info.get("config") != metadata["config"]:
+        raise ValueError("Trajectory configuration differs from the plotted checkpoint")
+    trajectory_hash = file_digest(path)
+    if info.get("trajectory_sha256") != trajectory_hash:
+        raise ValueError("Trajectory checksum differs from its sampling manifest")
+    params_hash = file_digest(run / "params_history.npy")
+    if info.get("params_history_sha256") != params_hash:
+        raise ValueError("Trajectory used a different visible parameter history")
+    # The sampler records the hidden-history file identity without re-reading
+    # the multi-GB checkpoint for a hash. Retain that check alongside the visible
+    # parameter hash and exact saved run configuration.
+    hidden_signature = info.get("source_file_stats", {}).get("hidden_history.npz")
+    if hidden_signature != signature(run / "hidden_history.npz"):
+        raise ValueError("Trajectory used a different hidden parameter history")
+    with np.load(path, allow_pickle=False) as archive:
+        times = np.asarray(archive["generation_time"], dtype=float)
+        states = np.asarray(archive["states"], dtype=float)
+        mean = float(archive["normalization_mean"])
+        std = float(archive["normalization_std"])
+    grid = int(data["grid"])
+    if (times.ndim != 1 or len(times) < 2 or not np.isfinite(times).all()
+            or np.any(np.diff(times) <= 0)
+            or states.shape != (len(times), grid * grid)
+            or not np.isfinite(states).all()
+            or not np.isfinite(mean) or not np.isfinite(std) or std <= 0):
+        raise ValueError("Invalid trajectory states, times or image normalization")
+    if not (np.isclose(mean, info.get("normalization_mean", np.nan), rtol=0, atol=1e-12)
+            and np.isclose(std, info.get("normalization_std", np.nan), rtol=0, atol=1e-12)):
+        raise ValueError("Trajectory normalization differs from its sampling manifest")
+    targets = np.asarray(data["generation_time"])[np.asarray(data["slices"], dtype=int)]
+    indices = np.asarray([int(np.argmin(np.abs(times - t))) for t in targets])
+    if not np.allclose(times[indices], targets, rtol=0, atol=1e-8):
+        raise ValueError("Saved trajectory has no exact frames at the displayed parameter times")
+    if len(np.unique(indices)) != len(indices):
+        raise ValueError("Displayed parameter times must select distinct trajectory frames")
+    data["trajectory_states"] = states[indices].copy()
+    data["trajectory_images"] = np.clip(states[indices] * std + mean, 0, 1).reshape(-1, grid, grid)
+    data["trajectory_times"] = times[indices].copy()
+    data["trajectory_frame_indices"] = indices
+    selection_path = path.parent / "selection.json"
+    selection = (json.loads(selection_path.read_text()) if selection_path.is_file() else
+                 {"description": "Existing saved trajectory; no new sample-quality selection by the renderer"})
+    metadata["trajectory_panel"] = {
+        "source": os.path.relpath(path, PROJECT),
+        "manifest": os.path.relpath(info_path, PROJECT),
+        "trajectory_sha256": trajectory_hash,
+        "manifest_sha256": file_digest(info_path),
+        "run": info["run"],
+        "params_history_sha256": params_hash,
+        "hidden_history_signature": hidden_signature,
+        "trajectory_index": info["trajectory_index"],
+        "initial_set": info.get("initial_set"),
+        "initial_set_size": info.get("initial_set_size"),
+        "initial_seed": info.get("initial_seed"),
+        "selection": selection,
+        "frame_indices": indices.tolist(),
+        "generation_times": times[indices].tolist(),
+        "forward_times": np.asarray(data["forward_time"])[data["slices"]].tolist(),
+        "normalization_mean": mean,
+        "normalization_std": std,
+        "display": "clip(x * std + mean, 0, 1); shared grayscale limits, 0 black and 1 white",
+        "image_interpolation": "none; recorded states at exact parameter times, original pixel grid",
+        "solver": info.get("solver"),
+        "solver_restart": info.get("solver_restart"),
+        "final_reference_max_abs_difference": info.get("final_reference_max_abs_difference"),
+    }
+    for source, original in before.items():
+        if signature(source) != original:
+            raise RuntimeError(f"Trajectory source changed during figure extraction: {source}")
+
+
 def extract(run, state, indices, patch_start, patch_size, extra_states=()):
     if not (run / "DONE").is_file():
         raise ValueError(f"No DONE marker: {run}")
@@ -163,7 +265,14 @@ def extract(run, state, indices, patch_start, patch_size, extra_states=()):
         "state_index_zero_based": state,
         "state_indices_zero_based": selected_states,
         "state_initial_majority_classes": initial_classes.tolist(),
-        "state_selection": "Default states 0,1,2,4: retain original state 0, add first states with three different initial cluster majority labels (6,2,9). No sample-quality or occupancy selection.",
+        "state_selection": (
+            "Default states 2,0,1,4: promote state 2 (initial cluster majority digit 2) "
+            "to the first-page coupling rows as requested; retain fixed states 0,1,4 "
+            "for comparison. The shown state is not asserted to control the selected trajectory."
+            if selected_states == [2, 0, 1, 4] else
+            "Explicit fixed state indices selected by the figure command; "
+            "no state reassignment across time or assertion of control over the selected trajectory."
+        ),
         "state_label_caveat": "Labels describe initial clusters; they do not establish the learned states' final class assignments.",
         "patch_selection": {"row0": row0, "col0": col0, "size": patch_size, "indexing": "zero based"},
         "slice_indices": indices,
@@ -180,7 +289,7 @@ def extract(run, state, indices, patch_start, patch_size, extra_states=()):
         "global_spring_rms_at_displayed_times": np.sqrt(np.mean(all_c[indices] ** 2, axis=1)).tolist(),
         "patch_spring_rms_at_displayed_times": np.sqrt(np.mean(all_c[indices][:, edge_ids] ** 2, axis=1)).tolist(),
         "snapshot_files_found": snapshots,
-        "trajectory_panel": "Placeholder only. No training, sampling or snapshot reconstruction performed.",
+        "trajectory_panel": "No trajectory attached by extract(); the figure command loads a verified saved replay.",
     }
     return data, metadata
 
@@ -189,7 +298,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--run", type=Path, default=DEFAULT_RUN)
     parser.add_argument("--output-dir", type=Path, default=DEFAULT_OUTPUT)
-    parser.add_argument("--states", default="0,1,2,4", help="comma-separated fixed state indices")
+    parser.add_argument("--trajectory", type=Path, default=None,
+                        help="saved trajectory NPZ with adjacent sampling JSON; must match --run")
+    parser.add_argument("--states", default="2,0,1,4", help="comma-separated fixed state indices")
     parser.add_argument("--state", type=int, default=None, help="plot a single state; overrides --states")
     parser.add_argument("--slices", default="0,25,50,75,99")
     parser.add_argument("--patch-start", default="12,12", help="zero-based row,column")
@@ -213,6 +324,8 @@ def main():
     if not states:
         raise ValueError("At least one state is required")
     data, metadata = extract(run, states[0], indices, patch_start, args.patch_size, states[1:])
+    trajectory = args.trajectory.resolve() if args.trajectory is not None else default_trajectory(run)
+    attach_trajectory(run, data, metadata, trajectory)
     output.mkdir(parents=True, exist_ok=True)
     data_dir.mkdir(parents=True, exist_ok=True)
     cache = data_dir / "parameter_evolution_data.npz"
@@ -228,7 +341,7 @@ def main():
         (data_dir / "parameter_evolution_linear_provenance.json").write_text(json.dumps(linear_metadata, indent=2) + "\n")
     print(f"Rendered saved parameters from {run.name}; states {states}; slices {indices}.")
     print(f"PDFs: {output}; data and SVGs: {data_dir}")
-    print("Trajectory panel: placeholder. No training or sampling was run.")
+    print(f"Trajectory panel: recorded frames from {trajectory}; no training or sampling was run.")
 
 
 if __name__ == "__main__":

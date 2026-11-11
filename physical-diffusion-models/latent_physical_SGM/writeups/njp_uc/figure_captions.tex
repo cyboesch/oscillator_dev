@@ -1,7 +1,7 @@
 % Draft figure environments for author review; main.tex does not include them yet.
 % Compile with the manuscript directory as the working directory.
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
   \includegraphics[width=\textwidth]{figures/conceptual_draft.pdf}
   \caption{\textbf{Local learning and open-loop generation with hidden degrees of freedom.}
@@ -11,59 +11,66 @@
   are omitted. (b) At each noise time, visible units are clamped to noisy data.
   Mean clamp forces, conditional hidden statistics, node-level aggregate
   signals and current couplings determine local parameter updates.
-  (c) Generation replays the learned schedule $\theta(5-s)$ while the visible
-  state evolves from noise toward the data distribution. The displayed
-  stochastic equation describes effective dynamics in the limit of fast hidden
-  equilibration. The image sequence is an illustrative drawing, not simulation
-  output.}
+  (c) The timeline indicates progression through the learned parameter
+  schedule, represented by the same schematic curve icon as in (b).
+  Frame spacing is schematic. The prescribed schedule is shared across samples.
+  Images show one real reverse-SDE trajectory from the trained
+  $28\times28$ four-digit (0, 1, 2, 3) model, with 784 states in the global
+  Potts unit and 784 per-pixel Ising units. Trajectory index 0 of the original
+  500-sample base set (seed 2026) was fixed before viewing. The displayed
+  five states are recorded near generation times $s=0,2.5,4,4.5,5$; they are not blended
+  images. All frames use the same pixel-intensity scale, clipped to $[0,1]$
+  and shown as white digits on black. Sampling uses the effective visible
+  dynamics in the fast-hidden-equilibration limit. Panels (a,b) and the
+  schedule icon are schematic; the full sampling and frame provenance are
+  retained with the figure data.}
   \label{fig:latent_conceptual_draft}
-\end{figure}
+\end{figure*}
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
   \includegraphics[page=1,width=\textwidth]{figures/parameter_evolution_draft.pdf}
-  \caption{\textbf{A learned parameter schedule for generation.}
-  Saved coefficients from the all-ten-digit MNIST model with one global Potts
-  unit containing $1536$ states and $784$ per-pixel Ising units. Training used
-  exact conditional hidden statistics. Columns follow generation time $s=5-t$,
-  from the noisy end to the data end; this is not a record of optimizer steps.
-  (a) Full-lattice maps of local spring magnitude. Each pixel $i$ shows
-  $\sqrt{d_i^{-1}\sum_{j\in\mathcal{N}(i)}c_{ij}^2}$, where
-  $d_i=|\mathcal{N}(i)|$ and $c_{ij}$ multiplies $(x_i-x_j)^2$.
-  This quantity summarizes incident edges and does not retain their signs.
-  (b,c) Bare on-site linear stiffness $k_i$ and Duffing coefficient $u_i$,
-  defined by $E_i^{\mathrm{on}}=k_i x_i^2/2+u_i x_i^4/4+\ell_i x_i$.
-  These coefficients are not the full effective curvature after including
-  visible and hidden couplings. (d,e) Linear and quadratic
-  coupling maps for the same Potts state (zero-based index $m=0$), entering
-  $a_m(\mathbf{x})=b_m+\sum_i W_{mi}x_i+\sum_i Q_{mi}x_i^2$.
-  The state index was fixed without selecting for sample quality or state
-  occupancy. Positive spring magnitudes and Duffing coefficients use logarithmic
-  colour scales. Signed coefficients use symmetric logarithmic scales with
-  a linear interval around zero extending to $1\%$ of the maximum absolute
-  displayed value for that parameter family. Each family has a common scale
-  across all columns and, for $W,Q$, all four displayed states on both pages;
-  raw coefficients are shown without removing the Potts common mode.
-  Per-pixel hidden parameters, visible linear biases, hidden biases and
-  the remaining Potts states are omitted. The trajectory panel is a placeholder:
-  intermediate sample
-  trajectories were not saved for this run.}
+  \caption{\textbf{Parameter evolution and generation of a digit.}
+  Saved parameters of the all-ten-digit MNIST model with one global
+  1536-state Potts unit and 784 per-pixel Ising units. Columns follow decreasing
+  forward diffusion time $t$, from the noisy end to the data end.
+  (a) Per-pixel root-mean-square magnitude of incident spring coefficients,
+  $\sqrt{d_i^{-1}\sum_{j\in\mathcal{N}(i)}c_{ij}^2}$; $c_{ij}$ multiplies
+  $(x_i-x_j)^2$. (b,c) Bare on-site linear stiffness $k_i$ and quartic
+  coefficient $u_i$, entering the energy as $k_i x_i^2/2+u_i x_i^4/4$.
+  These are bare parameters; hidden couplings also affect the effective curvature.
+  (d,e) Linear and quadratic hidden couplings $W_{2i}$ and $Q_{2i}$ for fixed
+  Potts state 2 (zero-based index), whose initialization cluster had majority
+  digit label 2. This association describes initialization.
+  Every parameter row uses the same blue--white--red palette, with its own
+  numerical range. Positive spring magnitudes and quartic coefficients use
+  logarithmic scales; signed coefficients use symmetric logarithmic scales
+  with a linear interval around zero extending to 1\% of the largest absolute
+  displayed value. Colours indicate low to high values within each row;
+  blue also represents small positive values in (a,c). Limits are fixed across
+  times and, for each of $W$ and $Q$, all states on both pages.
+  (f) Recorded image evolution under the full trained model at the same times,
+  shown in white on black with common pixel-intensity limits $[0,1]$.
+  Trajectory 21 of the original 2000-sample base set (seed 2026) was replayed
+  and selected visually from final samples 0--99 as an illustrative clear 2.
+  Images are recorded states, with no image interpolation. Sampling uses
+  conditional mean hidden forces. Other parameters are omitted; displayed
+  coefficients retain their raw saved values.}
   \label{fig:parameter_evolution_draft}
-\end{figure}
+\end{figure*}
 
-\begin{figure}[t]
+\begin{figure*}[t]
   \centering
   \includegraphics[page=2,width=\textwidth]{figures/parameter_evolution_draft.pdf}
-  \caption{\textbf{Three additional fixed Potts states.}
-  Linear and quadratic coupling maps for state indices $j=1,2,4$, with the
-  same time points and $W,Q$ colour scales as state $j=0$ on the preceding
-  page. These three states were selected to include different initial cluster
-  majority labels, respectively $6,2,9$. Initialization labels are diagnostic
-  annotations, not measurements of final learned-state class purity.
-  The patterns show raw saved coefficients, without common-mode removal or
-  normalization of individual states or frames.}
+  \caption{\textbf{Additional fixed Potts states.}
+  Linear and quadratic coupling maps for state indices 0, 1 and 4, with the
+  same forward times and shared $W$ and $Q$ colour scales as state 2 on the
+  preceding page. Their initialization clusters had majority digit labels
+  0, 6 and 9, respectively. These labels describe initialization rather than
+  measured final-state class purity. Maps retain raw saved coefficients,
+  with no common-mode subtraction or per-frame normalization.}
   \label{fig:additional_potts_states_draft}
-\end{figure}
+\end{figure*}
 
 \begin{figure}[t]
   \centering

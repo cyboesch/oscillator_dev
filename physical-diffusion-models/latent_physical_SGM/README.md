@@ -2116,6 +2116,38 @@ tonight).** Evaluations 4207381, 4207682 (500 samples) and the sweep pipelines 4
 - By eye (`28x28_all_ten_digits_power4_springs_only_Potts/Potts1536_8nb.png`): all ten digits, clearly
   recognisable and varied, with the same grain as on four digits; a few messy 8s / 9s / 5s.
 
+**The main result: FID against the number of hidden elements, ten digits, 28x28 (2026-11-11, 04:35).** All runs at
+2,000 samples, same trajectories (FID 4209955, eval 4209956, gallery 4209957 in
+`gallery/28x28_all_ten_digits_sweep_number_of_hidden_elements/`). FID in our CNN's features (not comparable to
+Inception FIDs); floor = real training images at the same n: **1.69** (sd 0.18). Clean % against the real probes'
+83.7% (this table; 86.1% above was the 500-sample evaluation). Paired bootstrap on the same trajectories.
+
+| K | Potts FID | Potts clean | Ising FID | Ising clean | frozen Potts FID / clean |
+|---|---|---|---|---|---|
+| 0 (per-pixel units only) | 197.5 | 4.1% | | | |
+| pixels only, no units | 199.1 | 0.0% | | | |
+| 64 | 67.6 | 64.1% | 87.5 | 51.4% | |
+| 256 | 41.7 | 81.2% | 63.7 | 64.9% | |
+| 784 | 31.1 | 87.0% | 53.2 | 68.3% | |
+| 1536 (Ising 1568) | 26.0 | 92.0% | 51.2 | 70.3% | 66.0 / 78.0% |
+| 3072 (Ising 3136) | **22.5** | 94.6% | 52.3 | 74.1% | 56.1 / 89.5% |
+
+- **Potts keeps improving, with diminishing returns.** Each step is significant (p < 0.005): -26.0 (64 -> 256), -10.6
+  (-> 784), -5.1 (-> 1536), -3.5 (-> 3072). Per doubling the gain shrinks by about 0.7x, which crudely
+  extrapolates to a plateau in the mid-teens, far above the floor (the grain). Potts 6144 (job 4214805) tests this;
+  the extrapolation predicts about 20.
+- **Ising saturates at 784.** 1568 is 2.0 better than 784; 3136 is 1.1 *worse* than 1568 (p < 0.005). Ising stays
+  22-30 FID above Potts at matched K. Its clean % still creeps up, but its class shares are skewed (3: 21%, 5: 17%,
+  0 and 6: 4%; Potts 8-12% for every digit), which FID penalises. No larger Ising runs.
+- **Learned couplings matter:** frozen formula couplings are 34-40 FID worse than trained ones at the same K.
+- **No memorisation:** copy rate 0.0-0.5% for every model (probes against training: 5%).
+- **By eye (compare.png, Potts3072_8nb.png, Ising3136_8nb.png).** Potts 3072: all ten digits, recognisable and
+  varied, with the usual grain and a few malformed 2s / 8s. Ising 784-3136: smoother strokes, less grain, but many
+  digits fragmented or incomplete (stroke pieces, missing loops). The Ising rows for 784, 1568 and 3136 are nearly
+  identical trajectory by trajectory, which is the saturation seen directly. The Potts rows sharpen with K, and the
+  same trajectory keeps its digit from 256 up. Frozen Potts: recognisable but speckled. K = 0 and pixels only:
+  blobs.
+
 **Is training converged? (2026-11-10, running)** Every slice trains a fixed number of steps (the paper's schedule,
 10,901 at t = 5 rising to 30,901 at t = 0; the paper's early stopping never triggers), with no convergence check.
 Crude test from the logs: if a slice had converged, its best mini-batch would fall anywhere in the slice (about 10%

@@ -1,9 +1,12 @@
 Draft figures for npj Unconventional Computing
 =============================================
 
+Submission typography, dimensions and export settings: ../figures/README.md.
+That guide distinguishes journal requirements from the current draft styling.
+
 PDFs go to ../figures; SVGs and JSON/NPZ data go to ../figure_data.
 The same sibling-directory layout applies when --output-dir is supplied.
-PNG previews are not saved. Captions are in ../figure_captions.tex.
+The conceptual and parameter renderers also save PNG previews. Captions are in ../figure_captions.tex.
 The manuscript main.tex is unchanged.
 Static figure scripts only read completed results. The optional video pipeline
 below generates one isolated CPU trajectory; it does not train or request a GPU.
@@ -18,9 +21,18 @@ The additional visible_coupling_evolution figure is rendered by
 make_visible_coupling_evolution.py with NumPy/Matplotlib (use the same container
 as the parameter script if they are not installed in your Python environment).
 
-The conceptual renderer uses Python's standard library and pdflatex;
-pdftocairo also exports SVG to figure_data when installed. Edit make_conceptual_figure.tex
-to change the scientific diagram.
+The conceptual renderer uses NumPy and pdflatex. Its 183 x 98 mm artwork has
+7 pt Helvetica-style labels and 8 pt panel letters. pdftocairo also exports SVG
+to figure_data; pdftoppm writes a PNG preview beside the PDF. Edit
+make_conceptual_figure.tex to change the diagram. Panel c uses the small saved
+figure_data/conceptual_potts4/trajectory_000.npz archive, never a synthetic blend.
+Use --times 0 2.5 4 4.5 5 to select the nearest recorded generation-time frames.
+To reproduce that archive from the completed four-digit Potts784 checkpoint,
+submit run_conceptual_trajectory_cpu.sh with the absolute workspace as its sole
+argument (2 CPU cores, 8 GB, no training). It uses the existing validated
+sample_potts_video.py, base-size 500 and trajectory index 0. Existing trajectory
+files are protected against accidental overwrite. The figure rebuild reads
+only the archive and manifest; it does not run sampling.
 
 The parameter wrapper uses the project's existing container/container_image.sif,
 with one CPU thread and no GPU binding. With NumPy and Matplotlib available in
@@ -28,7 +40,8 @@ your Python environment, the equivalent direct command is:
 
     python3 plotting_scripts/make_parameter_evolution.py
 
-Optional arguments include --run PATH, --states 0,1,2,4, --slices 0,25,50,75,99,
+Optional arguments include --run PATH, --states 2,0,1,4, --slices 0,25,50,75,99,
+--trajectory PATH,
 --patch-start 12,12, --patch-size 4, --spring-view rms|graph and --output-dir PATH. The layout expects
 five time slices of a completed Potts run with quadratic hidden couplings.
 --state INTEGER remains available to show a single state instead of --states.
@@ -46,23 +59,51 @@ Outputs
 
 figures/conceptual_draft.pdf
     Architecture alternatives, clamped local learning and open-loop generation.
-    Entirely schematic: the image sequence is a specified drawing, not research
-    output. Its noise pattern and digit are defined in the editable TikZ source.
+    Panels a/b are schematic. Panel c places real frames below a qualitative
+    tick-free timeline with a compact inline badge reusing panel b's schedule icon. Frame spacing
+    indicates order, not proportional time intervals; arrows do not feed images.
+    Panel c is a real reverse-SDE evolution from
+    mnist28_d0123_K784_ema_potts_quad_local_quartic_r1_lin_pooled.
+    Trajectory 0 was fixed before viewing, with seed 2026 and the original
+    base-set size 500. Five recorded frames near s=0,2.5,4,4.5,5 share the training
+    normalization and [0,1] display range (white digits on black). No image
+    interpolation, smoothing or per-frame contrast changes are applied.
     Global Ising units and one global Potts unit are alternative architectures;
-    additional per-pixel Ising units are omitted from the drawing.
+    additional per-pixel Ising units are omitted from the schematic.
+    conceptual_provenance.json records exact frame indices, times and hashes.
+    conceptual_potts4/trajectory_000.json records checkpoint and solver provenance.
+    The sampling solver restarts at trained parameter knots with the same
+    Brownian path; its endpoint need not be bitwise identical to the original
+    production sample (the difference is recorded in the sampling manifest).
 
 figures/parameter_evolution_draft.pdf
-    Expanded two-page diagnostic PDF with real saved coefficients at five
-    diffusion times. SVGs for pages 1 and 2 are retained in figure_data as
-    parameter_evolution_draft.svg and parameter_evolution_states.svg.
-    The layout is in parameter_evolution_layout.py.
+    Compact two-page PDF, each page 180 x 183 mm, with 8 pt embedded
+    Liberation Sans (Arial-compatible) text and strokes of at least 1 pt.
+    Only forward time t appears above the columns; the figure has no title,
+    equation block, repeated row notes or footer. SVGs for pages 1 and 2 are
+    retained in figure_data as parameter_evolution_draft.svg and
+    parameter_evolution_states.svg. PNG previews sit beside the PDF as
+    parameter_evolution_draft_page1.png and _page2.png. The shell wrapper
+    calls export_parameter_previews.py on the host to rasterize the finished
+    PDFs using pdftoppm; this avoids missing glyphs in direct Agg previews.
+    A direct make_parameter_evolution.py call exports only PDFs/SVGs/data.
+    The layout is in parameter_evolution_layout.py; bundled fonts and their
+    SIL Open Font License are in fonts/.
 
     Page 1 shows the full-lattice spring magnitude, bare on-site linear
-    stiffness k_lin, on-site Duffing coefficient k_duff, and W/Q for state 0.
-    Page 2 shows W/Q for three additional fixed states, j=1,2,4.
-    Their initial cluster majority labels are 6,2,9; these states were chosen
-    to add different initial digit clusters, not by sample quality or occupancy.
-    Initial cluster labels do not establish final learned-state class purity.
+    stiffness k_lin, on-site Duffing coefficient k_duff, and W/Q for state 2.
+    Rows d/e show fixed Potts state 2, associated with digit 2 at initialization.
+    Row f shows a real generated image trajectory at exactly the same five times.
+    Page 2 shows W/Q for fixed states 0,1,4, whose initial majority labels are
+    0,6,9. Initialization labels do not establish final learned-state class purity.
+    The image trajectory evolves under the full model; state 2 alone does not
+    determine it.
+
+    All parameter rows use the identical RdBu_r colour ramp, including
+    positive-only rows. Each family retains its own numerical scale. Blue is
+    the low end of that row's range, not a universal negative sign; white is
+    zero for signed rows and the geometric midpoint for positive log rows.
+    Generated images retain white-on-black grayscale with fixed [0,1] limits.
 
     The spring row shows a full
     28x28 heat map: at each pixel, sqrt(mean_j c_ij^2) over its actual neighbours.
@@ -111,10 +152,18 @@ figures/parameter_evolution_draft.pdf
     The run used exact hidden statistics for training (config hidden_rule=exact).
     These images do not establish training with a finite number of hidden reads.
 
-    Page 1 retains an explicit trajectory placeholder because no *_snapshots.npz files were
-    saved in this run's samples directory at drafting time. No intermediate
-    images are inferred from final samples. If snapshots appear later, rerunning
-    will flag their availability but keep the placeholder pending figure editing.
+    Real trajectory: figure_data/parameter_potts2/trajectory_021.npz, replayed
+    from this same ten-digit checkpoint with base-size 2000, seed 2026, index 21.
+    The sample was selected visually from final indices 0-99 for a clear digit 2
+    at the user's request; it is an illustrative example, not a quality statistic.
+    Frames 0,100,200,300,396 match the saved parameter times exactly. There is
+    no image blending/interpolation, smoothing or per-frame contrast change.
+    The renderer verifies trajectory, config and checkpoint provenance.
+    selection.json records the visual selection; trajectory_021.json records
+    sampling provenance. Reproduce via run_parameter_trajectory_cpu.sh (2 CPU
+    cores, 8 GB, no training), which protects existing output against overwrite.
+    The adaptive solver restarts at parameter knots on the same Brownian path;
+    its endpoint differs from the original sample by at most 1.59e-4.
 
 figure_data/parameter_evolution_data.npz
     Small extracted dataset: all 100 times of the four selected W/Q states,
@@ -128,8 +177,8 @@ figure_data/parameter_evolution_data.npz
 
 figure_data/parameter_evolution_provenance.json
     Run config, source size/modification times, config and extracted-data hashes,
-    selection rules, colour limits/normalizations, time ordering and placeholder
-    status. parameter_evolution_linear_provenance.json records the comparison.
+    selection rules, colour limits/normalizations, time ordering and real-trajectory
+    provenance. parameter_evolution_linear_provenance.json records the comparison.
 
 figures/visible_coupling_evolution.pdf
     Four spatial maps retain individual signed edge coefficients: horizontal,
@@ -231,7 +280,7 @@ figure_data/potts_video/
 Verification and provenance
 ---------------------------
 
-Both figures were rendered and visually inspected. Independent read-only
+The original figures were rendered and visually inspected. Original read-only
 checks matched W/Q state 0 and all 42 displayed c_ij values against the saved
 slice_000.npz and slice_099.npz exactly. Independently enumerated connectivity
 agreed with all 2,970 radius-1 edges and with the selected patch indices.

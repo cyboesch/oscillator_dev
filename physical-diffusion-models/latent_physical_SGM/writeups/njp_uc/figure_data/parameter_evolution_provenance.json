@@ -70,20 +70,20 @@
     }
   },
   "config_sha256": "ead17a85d7b2e3e1aa8370a6daff012c33150762b1c91154cce5c0001cb9cb12",
-  "state_index_zero_based": 0,
+  "state_index_zero_based": 2,
   "state_indices_zero_based": [
+    2,
     0,
     1,
-    2,
     4
   ],
   "state_initial_majority_classes": [
+    2,
     0,
     6,
-    2,
     9
   ],
-  "state_selection": "Default states 0,1,2,4: retain original state 0, add first states with three different initial cluster majority labels (6,2,9). No sample-quality or occupancy selection.",
+  "state_selection": "Default states 2,0,1,4: promote state 2 (initial cluster majority digit 2) to the first-page coupling rows as requested; retain fixed states 0,1,4 for comparison. The shown state is not asserted to control the selected trajectory.",
   "state_label_caveat": "Labels describe initial clusters; they do not establish the learned states' final class assignments.",
   "patch_selection": {
     "row0": 12,
@@ -135,8 +135,66 @@
     0.022541562797033423
   ],
   "snapshot_files_found": [],
-  "trajectory_panel": "Placeholder only. No training, sampling or snapshot reconstruction performed.",
-  "figure_data_sha256": "6388bf30c262a5dd6806905b8b161e5b5bb007b92b19c3328b57c32cf26c74f9",
+  "trajectory_panel": {
+    "source": "latent_physical_SGM/writeups/njp_uc/figure_data/parameter_potts2/trajectory_021.npz",
+    "manifest": "latent_physical_SGM/writeups/njp_uc/figure_data/parameter_potts2/trajectory_021.json",
+    "trajectory_sha256": "6a36d59096faa957cd063133b62e3939212ab795c90e1910d831f7a74cad6f80",
+    "manifest_sha256": "c313d0d256a11abb3a4b2981fa5efd091d4171391c711b80f89bf93648955b36",
+    "run": "mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+    "params_history_sha256": "acd3df2a88149a1cc07e232fa1930e5bf89e1bc443f0cf8d92c696f2ceab9e9c",
+    "hidden_history_signature": {
+      "bytes": 1929243830,
+      "mtime_ns": 1794332480902960000
+    },
+    "trajectory_index": 21,
+    "initial_set": "base",
+    "initial_set_size": 2000,
+    "initial_seed": 2026,
+    "selection": {
+      "purpose": "Illustrative trajectory ending in a clear digit 2, as explicitly requested by the user.",
+      "run": "mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+      "problem": "mnist28_d0123456789",
+      "trajectory_index": 21,
+      "initial_set": "base",
+      "initial_set_size": 2000,
+      "seed": 2026,
+      "selection_method": "Visually inspected a contact sheet of saved final samples 0 through 99. Index 21 was the first clearly recognizable digit 2; selected for illustration before reproducing its intermediate frames.",
+      "interpretation": "A visually selected example, not an unbiased sample or evidence of overall model quality.",
+      "reference_file": "samples/sde_base_n2000.npy",
+      "reference_file_sha256": "ac89e91eb70568d97914a33ef3e28ac53e64703a170594aba3d524ce19b983bf",
+      "display": "Training-log normalization (mean 0.13142, standard deviation 0.30896), fixed [0,1] grayscale, white digits on black.",
+      "state_map_caveat": "A digit-2-shaped Potts state and this trajectory are both from the same model. This selection does not establish that one displayed state alone generates the sample."
+    },
+    "frame_indices": [
+      0,
+      100,
+      200,
+      300,
+      396
+    ],
+    "generation_times": [
+      0.0,
+      1.262626262626262,
+      2.525252525252525,
+      3.7878787878787876,
+      5.0
+    ],
+    "forward_times": [
+      5.0,
+      3.737373737373738,
+      2.474747474747475,
+      1.2121212121212124,
+      0.0
+    ],
+    "normalization_mean": 0.13142,
+    "normalization_std": 0.30896,
+    "display": "clip(x * std + mean, 0, 1); shared grayscale limits, 0 black and 1 white",
+    "image_interpolation": "none; recorded states at exact parameter times, original pixel grid",
+    "solver": "Diffrax SRA1",
+    "solver_restart": "Adaptive solver restarted at every trained parameter knot. Same SDE, Brownian path, tolerances and linear parameter schedule; numerical endpoint need not be bitwise identical to the production solve.",
+    "final_reference_max_abs_difference": 0.00015866293091271189
+  },
+  "figure_data_sha256": "97305dc1fab16f00e30e7508a6b6d6e02bd825ca4e5617e86a1c9010917de718",
   "colour_scale": "log",
   "colour_normalizations": {
     "c_lin": {
@@ -205,10 +263,21 @@
     0.010000000000000866,
     3.0793073222521543
   ],
-  "hidden_colour_scaling": "One W scale and one Q scale across every displayed state, time and page.",
+  "hidden_colour_scaling": "One W scale and one Q scale across all displayed states, times and pages.",
+  "parameter_colormap": "RdBu_r for every parameter family, including positive-only rows",
+  "colour_interpretation": "Blue to red means low to high within each row's numerical range; blue is not a universal negative-value marker. White is zero for symmetric signed rows, but the geometric midpoint for positive log rows.",
   "edge_width_points": {
-    "formula": "0.35 + 3.0 * abs(c_lin) / max_abs_c_lin",
+    "formula": "1.0 + 2.0 * abs(c_lin) / max_abs_c_lin",
     "common_across_frames": true
+  },
+  "artwork": {
+    "width_mm": 180,
+    "font_family": "Liberation Sans",
+    "font_size_pt": 8,
+    "minimum_stroke_pt": 1,
+    "displayed_time": "forward time t only; decreases left to right",
+    "title": null,
+    "figure_notes": "In caption and provenance, not on the artwork"
   },
   "figure_pages": [
     {
@@ -217,19 +286,28 @@
         "spring",
         "k_lin",
         "k_duff",
-        "W_0",
-        "Q_0"
+        "W_2",
+        "Q_2",
+        "image"
       ],
-      "preview_stem": "parameter_evolution_draft"
+      "svg_file": "parameter_evolution_draft.svg",
+      "size_mm": [
+        180.0,
+        183.0
+      ]
     },
     {
       "page": 2,
       "state_ids": [
+        0,
         1,
-        2,
         4
       ],
-      "preview_stem": "parameter_evolution_states"
+      "svg_file": "parameter_evolution_states.svg",
+      "size_mm": [
+        180.0,
+        183.0
+      ]
     }
   ]
 }

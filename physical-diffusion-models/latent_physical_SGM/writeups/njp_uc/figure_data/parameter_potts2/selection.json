@@ -1,0 +1,15 @@
+{
+  "purpose": "Illustrative trajectory ending in a clear digit 2, as explicitly requested by the user.",
+  "run": "mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+  "problem": "mnist28_d0123456789",
+  "trajectory_index": 21,
+  "initial_set": "base",
+  "initial_set_size": 2000,
+  "seed": 2026,
+  "selection_method": "Visually inspected a contact sheet of saved final samples 0 through 99. Index 21 was the first clearly recognizable digit 2; selected for illustration before reproducing its intermediate frames.",
+  "interpretation": "A visually selected example, not an unbiased sample or evidence of overall model quality.",
+  "reference_file": "samples/sde_base_n2000.npy",
+  "reference_file_sha256": "ac89e91eb70568d97914a33ef3e28ac53e64703a170594aba3d524ce19b983bf",
+  "display": "Training-log normalization (mean 0.13142, standard deviation 0.30896), fixed [0,1] grayscale, white digits on black.",
+  "state_map_caveat": "A digit-2-shaped Potts state and this trajectory are both from the same model. This selection does not establish that one displayed state alone generates the sample."
+}

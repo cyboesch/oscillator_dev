@@ -1,0 +1,52 @@
+{
+  "run": "mnist28_d0123_K784_ema_potts_quad_local_quartic_r1_lin_pooled",
+  "trajectory_file": "/n/fs/cyrills-part/oscillator_dev/physical-diffusion-models/latent_physical_SGM/writeups/njp_uc/figure_data/conceptual_potts4/trajectory_000.npz",
+  "trajectory_sha256": "d4d2b3b3b9117777d032c959fbf6f13e3652d1c6aadb2ff65fbdd357a35445db",
+  "trajectory_index": 0,
+  "initial_set_size": 500,
+  "initial_seed": 2026,
+  "requested_generation_times": [
+    0.0,
+    2.5,
+    4.0,
+    4.5,
+    5.0
+  ],
+  "frame_indices": [
+    0,
+    198,
+    317,
+    356,
+    396
+  ],
+  "generation_times": [
+    0.0,
+    2.5,
+    4.002525252525253,
+    4.494949494949495,
+    5.0
+  ],
+  "forward_times": [
+    5.0,
+    2.5,
+    0.9974747474747474,
+    0.5050505050505052,
+    0.0
+  ],
+  "normalization_mean": 0.13504,
+  "normalization_std": 0.3137,
+  "display": "clip(x * std + mean, 0, 1); 0 = black, 1 = white; identical scale in all frames",
+  "image_interpolation": "none; original 28 x 28 pixels drawn as vector rectangles",
+  "selection": "Trajectory index 0 fixed before viewing; five recorded states from noise to the final sample",
+  "sampling": "Real reverse-SDE replay from the trained checkpoint; see adjacent trajectory_000.json",
+  "artwork_mm": [
+    183,
+    98
+  ],
+  "label_font_pt": 7,
+  "panel_letter_font_pt": 8,
+  "timeline": "Tick-free qualitative timeline with compact inline schedule badge; five frames with schematic spacing",
+  "image_tile_size_mm": 22,
+  "renderer_sha256": "63f3f9a8a995eb0693c3581313b86acdf6c6ce87bfc270ce1db9883dbc9abc61",
+  "tikz_source_sha256": "7d316e6ff5396e27042b79ed19b5ce84057c9ee6595108dddc896205525e3e98"
+}
