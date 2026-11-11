@@ -153,7 +153,8 @@ def drift_checks(aliases):
         K = W.shape[1]
         drift_old, _ = sample_latent.make_drift(th, W, b, "sde", kw["problem"], kw["hidden"], kw["local"], kw["quad"],
                                                kw["radius"], kw["neighbourhood"])
-        old_batch = jax.jit(jax.vmap(drift_old, in_axes=(None, 0, None)))
+        # eager vmap: a jit of drift_old would embed its interpolation table (3.9 GB at K = 3072) as a constant
+        old_batch = jax.vmap(drift_old, in_axes=(None, 0, None))
         fs = sf.FastSampler(th, W, b, **kw)
         fs_mixed = sf.FastSampler(th, W, b, precision="mixed", **kw) if K else None
         log(f"K {K}, hidden {kw['hidden']}, quad {kw['quad'] is not None}, local {kw['local'] is not None}, "
@@ -274,7 +275,7 @@ def micro_costs(fs, x0, keys, reps=40):
     f = jax.vmap(fs.drift, in_axes=(None, 0, None))
 
     @jax.jit
-    def drift_loop(X):
+    def drift_loop(X, a):
         def body(i, acc):
             return acc + f(tt[i], X + 1e-9 * acc[:, None], a).sum(1)
         return jax.lax.fori_loop(0, reps, body, jnp.zeros(B))
@@ -290,10 +291,10 @@ def micro_costs(fs, x0, keys, reps=40):
     bm_loop = jax.jit(jax.vmap(one_bm))
     X = jnp.asarray(x0)
     K = jnp.asarray(keys)
-    jax.block_until_ready(drift_loop(X))
+    jax.block_until_ready(drift_loop(X, a))
     jax.block_until_ready(bm_loop(K))
     t0 = time.time()
-    jax.block_until_ready(drift_loop(X))
+    jax.block_until_ready(drift_loop(X, a))
     t_drift = (time.time() - t0) / reps * 1e3
     t0 = time.time()
     jax.block_until_ready(bm_loop(K))

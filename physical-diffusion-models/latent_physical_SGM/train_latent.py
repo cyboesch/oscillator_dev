@@ -149,10 +149,13 @@ def parse():
                          "hidden statistics only (not with --hidden-samples, --hidden-rule cd1, --hidden-norm "
                          "occupancy or --hidden-floor)")
     ap.add_argument("--step-impl", choices=["default", "lean"], default="default",
-                    help="lean: the same training steps with less overhead: each chunk's 100 batches drawn before the "
-                         "scan from the same keys, the theta projection and k_6 gradient zeroing as constant masks "
-                         "(build_runner chunk_batches, theta_masks). Bit-identical to default (speed_check.py "
-                         "section 6). (--select ema skips the unused best_params update in either case)")
+                    help="lean: the same training steps with less overhead (build_runner track_best, theta_masks, "
+                         "chunk_batches): under --select ema best_params is not updated (it is never read there); "
+                         "each chunk's 100 batches are drawn before the scan from the same keys; the theta "
+                         "projection and k_6 gradient zeroing are constant masks. The same arithmetic, but with "
+                         "hidden units XLA compiles the changed step with other fusions (fused multiply-adds), so "
+                         "results differ from default at rounding level (bitwise equal for pixels-only models; "
+                         "speed_check.py section 6). 2-11%% faster per step (K 784-6144)")
     ap.add_argument("--steps-schedule", default="",
                     help="step factors per slice range, 'k0:f0,k1:f1,...': slice k >= k_i (the last such entry) runs "
                          "paper_steps(k) x --steps-scale x f_i steps, rounded to the nearest 100 m + 1 (no "
@@ -430,15 +433,17 @@ class OccupancyTransform:
 def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sextic", n_pairs=None,
                  cd1_grad=None, cd1_releases=1, loss_key=False, floor=0.0, floor_samples=0, hidden_norm="element",
                  occ_beta=0.999, occ_same_draws=False, zero_slices=(), track_best=True, theta_masks=False,
-                 chunk_batches=False):
+                 chunk_batches=False, scan_unroll=1):
     """Jitted scan of n training steps, identical in effect to the paper's training_step loop.
-    track_best (default True): best_params follows the paper's slice result at every step. False (--select ema, whose
-    slice result is the EMA): best_params keeps its value from init_carry, which saves reading and writing one copy of
-    every parameter per step; best_loss and best_epoch are still tracked and the carry keeps its structure.
-    theta_masks, chunk_batches (--step-impl lean; both False by default, which leaves every step as before): the
-    projection of theta and the zeroing of the k_6 gradient as elementwise selects with constant masks instead of
-    indexed updates; the n steps' batches drawn before the scan, from the same keys (the per-step split of the key
-    chain, then one vmapped sample_forward_process). Both give the same numbers (speed_check.py section 6).
+    track_best, theta_masks, chunk_batches (--step-impl lean; the defaults True, False, False leave every step as
+    before): track_best False (lean with --select ema, whose slice result is the EMA): best_params keeps its value
+    from init_carry, which saves reading and writing one copy of every parameter per step; best_loss and best_epoch
+    are still tracked and the carry keeps its structure. theta_masks: the projection of theta and the zeroing of the
+    k_6 gradient as elementwise selects with constant masks instead of indexed updates. chunk_batches: the n steps'
+    batches drawn before the scan from the same keys (the per-step split of the key chain, then one vmapped
+    sample_forward_process). The arithmetic is the same, but XLA compiles a changed graph with other fusions and
+    fused multiply-adds: with hidden units (GEMMs) the results differ at rounding level, without them they are
+    bitwise equal (speed_check.py section 6).
     zero_slices (--pair-terms): slices of the flat visible parameters set to exactly zero after every step (dropped
     pair-coupling groups); empty by default, which leaves every step unchanged.
 
@@ -565,8 +570,10 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
 
     @partial(jax.jit, static_argnums=3)
     def run(carry, t_curr, lrs, n, dt=0.0):
-        if not chunk_batches:
+        if not chunk_batches and scan_unroll == 1:
             return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt), carry, None, length=n)
+        if not chunk_batches:             # scan_unroll (timing experiments, speed_check.py): steps per loop iteration
+            return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt), carry, None, length=n, unroll=scan_unroll)
 
         def keys(key, _):                 # one_step's per-step split of the key chain, ahead of the scan
             key, k_epoch, k_release = jr.split(key, 3)
@@ -576,7 +583,7 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         Xs = jax.vmap(lambda k: sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train,
                                                        k, beta=1))(k_epochs)
         return jax.lax.scan(lambda c, xs: one_step(c, t_curr, lrs, dt, xs), carry[:2] + (key,) + carry[3:],
-                            (Xs, k_releases))
+                            (Xs, k_releases), unroll=scan_unroll)
 
     return run, adam
 
@@ -797,12 +804,13 @@ def main():
     if args.hidden_rule == "cd1":
         cd1_grad = lm.make_cd1_hidden_grad(vis, lm.TEMP, K, args.hidden, args.local, samples=args.cd1_hidden_samples)
         field_scale = jax.jit(lambda p, X: lm.hidden_field_scale(p, X, lm.TEMP, K, args.hidden, args.local))
-    lean = {"theta_masks": True, "chunk_batches": True} if args.step_impl == "lean" else {}
+    lean = {"theta_masks": True, "chunk_batches": True, "track_best": args.select == "best"} \
+        if args.step_impl == "lean" else {}       # default: build_runner's defaults, every step as before
     run, adam = build_runner(loss_fn, data_train, n_vis, args.ema_steps, args.visible, vis.P,
                              cd1_grad=cd1_grad, cd1_releases=args.cd1_releases, loss_key=args.hidden_samples > 0,
                              floor=args.hidden_floor, floor_samples=args.hidden_samples, hidden_norm=args.hidden_norm,
                              occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
-                             track_best=args.select == "best", **lean)
+                             **lean)
     run_late = None
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
         run_late, _ = build_runner(
@@ -810,8 +818,7 @@ def main():
                          jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt),
             data_train, n_vis, args.ema_steps, args.visible, vis.P, loss_key=True,
             floor=args.hidden_floor, floor_samples=args.hidden_samples_late, hidden_norm=args.hidden_norm,
-            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
-            track_best=args.select == "best", **lean)
+            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices, **lean)
 
     state_cls = None
     if fisher:

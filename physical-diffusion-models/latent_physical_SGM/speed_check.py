@@ -46,7 +46,7 @@ import train_latent  # noqa: E402
 
 T = lm.TEMP
 JOB = os.environ.get("SLURM_JOB_ID", "manual")
-OUT = os.path.join(lm.OUT_ROOT, "speed_check", JOB)
+OUT = os.path.join(lm.OUT_ROOT, "speed_check", JOB + os.environ.get("SPEED_CHECK_SUFFIX", ""))
 os.makedirs(OUT, exist_ok=True)
 REPORT = os.path.join(OUT, "report.txt")
 RESULTS = {"job": JOB, "checks": {}, "sections": {}}
@@ -454,7 +454,8 @@ def bench_setup():
 TRIMS = {"base": {}, "nobest": {"track_best": False},
          "nobest+masks": {"track_best": False, "theta_masks": True},
          "nobest+chunk": {"track_best": False, "chunk_batches": True},
-         "lean": {"track_best": False, "theta_masks": True, "chunk_batches": True}}
+         "lean": {"track_best": False, "theta_masks": True, "chunk_batches": True},
+         "lean+unroll4": {"track_best": False, "theta_masks": True, "chunk_batches": True, "scan_unroll": 4}}
 
 
 def speed():
@@ -480,7 +481,7 @@ def speed():
     variants = [("dense", "f64", "base"), ("dense_skip", "f64", "base"), ("stencil", "f64", "base"),
                 ("dense", "mixed", "base"), ("stencil", "mixed", "base"), ("stencil", "mixed", "nobest"),
                 ("stencil", "mixed", "nobest+masks"), ("stencil", "mixed", "nobest+chunk"),
-                ("stencil", "mixed", "lean")]
+                ("stencil", "mixed", "lean"), ("stencil", "mixed", "lean+unroll4")]
     out = {}
     log("  ms per step (full training step: sampling, loss + gradient, Adam, update, EMA, best) | loss + gradient "
         "+ a plain update only | first call (compile + 100 steps)")
@@ -581,12 +582,15 @@ def hlo_bodies(text):
             if " while(" in s and "body=" in s:
                 bodies.add(s.split("body=")[1].split(",")[0].split()[0].lstrip("%"))
     skip = ("parameter", "get-tuple-element", "tuple", "bitcast", "constant", "after-all", "partition-id")
-    out = {}
-    for b in sorted(bodies):
-        cnt = {}
-        for s in comps.get(b, []):
+
+    def count(comp, cnt, depth=0):
+        for s in comps.get(comp, []):
             op = hlo_opcode(s.split("=", 1)[1])
             if op in skip:
+                continue
+            if op == "call" and "to_apply=" in s and depth < 4:      # command buffers (CUDA graphs) are calls
+                cnt["command_buffers"] = cnt.get("command_buffers", 0) + 1
+                count(s.split("to_apply=")[1].split(",")[0].split()[0].lstrip("%"), cnt, depth + 1)
                 continue
             if op == "fusion":
                 op = "fusion:" + (s.split("kind=")[1].split(",")[0].split()[0] if "kind=" in s else "?")
@@ -594,27 +598,41 @@ def hlo_bodies(text):
                 tgt = s.split('custom_call_target="')[1].split('"')[0] if 'custom_call_target="' in s else "?"
                 op = "custom-call:" + tgt
             cnt[op] = cnt.get(op, 0) + 1
-        out[b] = {"total": sum(cnt.values()), **dict(sorted(cnt.items()))}
+
+    out = {}
+    for b in sorted(bodies):
+        cnt = {}
+        count(b, cnt)
+        out[b] = {"kernels": sum(v for k, v in cnt.items() if k != "command_buffers"), **dict(sorted(cnt.items()))}
     return out
 
 
+CARRY_GROUPS = ("params", "adam", "key", "step", "best_params", "best_loss", "best_epoch", "ema")
+
+
 def trims():
-    """Section 6: every trim of TRIMS against the default runner from the same carry, 3 chunks of 100 steps and a
-    remainder chunk of 1 (both compiled lengths). Carries and per-step losses must be bitwise equal; with
-    track_best=False, best_params is exempt (it keeps its initial value by design)."""
+    """Section 6: every trim of TRIMS, and a second, separately built and compiled default runner ('base2'), from
+    the same carry: 3 chunks of 100 steps and a remainder chunk of 1 (both compiled lengths). Variants are grouped
+    into classes with bitwise-equal carries and per-step losses (best_params is left out of every comparison
+    with a variant that does not track it). For each class that differs from base: the first step whose loss
+    differs, the relative loss difference there, and per carry group the relative difference
+    |a - b| / |b| (Frobenius) after the 301 steps. Bitwise equality with base is checked for the pixels-only
+    model (no GEMMs); with hidden units the result is informational: a changed graph is compiled with other
+    fusions, and with them other fused multiply-adds."""
     conn, n, data, P, terms, zero_slices, t_bench, make_params = bench_setup()
     out = {}
-    for K, impl, prec in ((784, "stencil", "mixed"), (784, "dense", "f64"), (0, "stencil", "mixed"),
+    variants = dict(TRIMS, base2={})
+    for K, impl, prec in ((0, "stencil", "mixed"), (784, "stencil", "mixed"), (784, "dense", "f64"),
                           (3072, "stencil", "mixed")):
         vis = lm.make_visible(conn, n, impl, terms, sextic=False)
         loss = lm.make_loss(vis, T, K, "potts", K > 0, compute_dtype=jnp.float32 if prec == "mixed" else None)
         params = make_params(K)
         lrs = {g: (1e-3 if g == "theta" else 3e-5) for g in params}      # large enough to move every group
-        ref = None
-        for trim, kw in TRIMS.items():
-            if impl == "dense" and trim not in ("base", "nobest", "lean"):
+        cfg = f"K{K} {impl} {prec}"
+        res = {}
+        for trim, kw in variants.items():
+            if impl == "dense" and trim not in ("base", "base2", "nobest", "lean"):
                 continue
-            name = f"K{K} {impl} {prec} {trim}"
             try:
                 run, adam = train_latent.build_runner(loss, data, n, 1000.0, "quartic", P, zero_slices=zero_slices, **kw)
                 carry = train_latent.init_carry(params, adam, jr.PRNGKey(3))
@@ -622,41 +640,67 @@ def trims():
                 for nsteps in (100, 100, 100, 1):
                     carry, l = run(carry, t_bench, lrs, nsteps)
                     ls.append(np.asarray(l))
-                leaves = [np.asarray(x) for x in jax.tree_util.tree_leaves(carry)]
-                best_leaves = len(jax.tree_util.tree_leaves(carry[4]))
-                start = len(jax.tree_util.tree_leaves(carry[:4]))
-                res = {"carry": leaves, "best_range": (start, start + best_leaves), "losses": np.concatenate(ls)}
-                if trim == "base":
-                    ref = res
-                    r = {"finite": bool(np.all(np.isfinite(res["losses"])))}
-                else:
-                    lo, hi = res["best_range"]
-                    exempt = set(range(lo, hi)) if kw.get("track_best", True) is False else set()
-                    diff = [i for i, (a, b) in enumerate(zip(res["carry"], ref["carry"]))
-                            if i not in exempt and not (a.shape == b.shape and a.dtype == b.dtype
-                                                        and np.array_equal(a, b, equal_nan=True))]
-                    same_loss = bool(np.array_equal(res["losses"], ref["losses"]))
-                    maxdiff = max([float(np.max(np.abs(res["carry"][i].astype(np.float64)
-                                                       - ref["carry"][i].astype(np.float64))))
-                                   for i in diff if res["carry"][i].size] or [0.0])
-                    r = {"leaves_differing": diff, "losses_equal": same_loss, "max_abs_diff": maxdiff,
-                         "best_params_exempt": bool(exempt)}
-                    check(f"trim bitwise: {name} vs base", not diff and same_loss,
-                          f"{len(res['carry'])} carry leaves, differing {diff} (max |diff| {maxdiff:.2e}); per-step "
-                          f"losses equal: {same_loss}; best_params exempt: {bool(exempt)}")
-                if K == 784:
+                res[trim] = {"groups": [[np.asarray(x) for x in jax.tree_util.tree_leaves(c)] for c in carry],
+                             "losses": np.concatenate(ls), "track_best": kw.get("track_best", True)}
+                if K in (0, 784) and trim != "base2":
                     comp = run.lower(carry, t_bench, lrs, 100).compile().as_text()
-                    with open(os.path.join(OUT, f"hlo_{impl}_{prec}_{trim.replace('+', '_')}_K784.txt"), "w") as f:
+                    with open(os.path.join(OUT, f"hlo_{impl}_{prec}_{trim.replace('+', '_')}_K{K}.txt"), "w") as f:
                         f.write(comp)
-                    r["kernels_per_body"] = hlo_bodies(comp)
-                    log(f"  (info) {name}: kernels per scan body {json.dumps(r['kernels_per_body'])}")
-                out[name] = r
+                    log(f"  (info) {cfg} {trim}: kernels per scan body {json.dumps(hlo_bodies(comp))}")
                 del run, adam, carry
             except Exception:
                 tb = traceback.format_exc()
-                log(f"  {name}: crashed\n{tb}")
-                out[name] = {"crashed": tb}
-                FAILED.append(f"trims {name} crashed")
+                log(f"  {cfg} {trim}: crashed\n{tb}")
+                FAILED.append(f"trims {cfg} {trim} crashed")
+
+        def equal(a, b):
+            skip_best = not (res[a]["track_best"] and res[b]["track_best"])
+            return np.array_equal(res[a]["losses"], res[b]["losses"]) and all(
+                x.shape == y.shape and x.dtype == y.dtype and np.array_equal(x, y, equal_nan=True)
+                for gi, (ga, gb) in enumerate(zip(res[a]["groups"], res[b]["groups"]))
+                if not (skip_best and CARRY_GROUPS[gi] == "best_params") for x, y in zip(ga, gb))
+
+        classes = []
+        for v in res:
+            for cl in classes:
+                if equal(cl[0], v):
+                    cl.append(v)
+                    break
+            else:
+                classes.append([v])
+        r = {"classes": classes, "finite": bool(np.all(np.isfinite(res["base"]["losses"])))}
+        log(f"  {cfg}: classes of bitwise-equal variants {classes}")
+        for cl in classes:
+            if "base" in cl:
+                continue
+            a, b = res[cl[0]], res["base"]
+            dl = np.flatnonzero(a["losses"] != b["losses"])
+            first = int(dl[0]) if dl.size else None
+            rel_g = {}
+            for gi, name in enumerate(CARRY_GROUPS):
+                if name in ("key", "step", "best_params", "best_epoch"):
+                    continue
+                num = np.sqrt(sum(float(np.sum((x.astype(np.float64) - y.astype(np.float64)) ** 2))
+                                  for x, y in zip(a["groups"][gi], b["groups"][gi])))
+                den = np.sqrt(sum(float(np.sum(y.astype(np.float64) ** 2)) for y in b["groups"][gi]))
+                rel_g[name] = num / max(den, 1e-300)
+            r[" / ".join(cl)] = {"first_loss_step_differing": first,
+                                 "loss_rel_diff_there": (float(abs(a["losses"][first] - b["losses"][first])
+                                                               / abs(b["losses"][first])) if first is not None else 0.0),
+                                 "loss_rel_diff_max": float(np.max(np.abs(a["losses"] - b["losses"])
+                                                                   / np.abs(b["losses"]))),
+                                 "rel_diff_after_301_steps": rel_g}
+            log(f"    {cl} vs base: first differing loss at step {first} (relative "
+                f"{r[' / '.join(cl)]['loss_rel_diff_there']:.1e}; max over the steps "
+                f"{r[' / '.join(cl)]['loss_rel_diff_max']:.1e}); relative differences after 301 steps "
+                + ", ".join(f"{g} {e:.1e}" for g, e in rel_g.items()))
+        same_base = any("base" in cl and "base2" in cl for cl in classes)
+        check(f"trims {cfg}: a second compilation of the default runner is bitwise equal to the first", same_base,
+              f"classes {classes}")
+        if K == 0:
+            check(f"trims {cfg}: every trim bitwise equal to the default runner (no GEMMs)", len(classes) == 1,
+                  f"classes {classes}")
+        out[cfg] = r
     return out
 
 

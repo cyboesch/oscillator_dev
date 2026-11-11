@@ -152,15 +152,17 @@ class FastSampler:
                     else lm.DenseVisible(conn, n, terms=terms, sextic=sextic))
         self.visible = {"impl": impl, "pair_terms": list(terms), "sextic": sextic, "offsets": n_off, "pairs": int(P)}
 
-        # knot histories on the device, in the run's own slice order; interval_args picks the two knots
-        th_lin = np.asarray(lm.theta_lin(n_theta, n))
-        self._th = jnp.asarray(theta_hist)
-        self._th_lin = jnp.asarray(th_lin)
-        self._W = jnp.asarray(np.asarray(W_hist, dtype=np.float64)) if K else None
-        self._b = jnp.asarray(np.asarray(b_hist, dtype=np.float64)) if K else None
-        self._Q = jnp.asarray(np.asarray(quad, dtype=np.float64)) if (K and self.quad) else None
-        self._wl = jnp.asarray(np.asarray(local[0], dtype=np.float64)) if self.local else None
-        self._bl = jnp.asarray(np.asarray(local[1], dtype=np.float64)) if self.local else None
+        # knot histories on the device, in the run's own slice order; interval_args picks the two knots. They are
+        # passed to the jitted functions as arguments: a jitted function that closes over a device array embeds it
+        # in the compiled program as a constant (gigabytes at K = 3072)
+        hist = {"th": theta_hist, "th_lin": np.asarray(lm.theta_lin(n_theta, n))}
+        if K:
+            hist["W"], hist["b"] = W_hist, b_hist
+            if self.quad:
+                hist["Q"] = quad
+        if self.local:
+            hist["wl"], hist["bl"] = local[0], local[1]
+        self._hist = {k: jnp.asarray(np.asarray(v, dtype=np.float64)) for k, v in hist.items()}
         self._sig = jnp.full((n,), jnp.sqrt(2.0 * lm.TEMP))       # sample_latent: jnp.sqrt(2.0 * lm.TEMP) * eye(n)
 
         self._args_jit = jax.jit(self._interval_args)
@@ -181,27 +183,27 @@ class FastSampler:
     def interval_args(self, j):
         """Device arrays of reverse-time interval j (the two knots it lies between), the `args` of the drift."""
         lo = interval_lo(j)
-        return self._args_jit(jnp.int32(self.order[lo]), jnp.int32(self.order[lo + 1]),
+        return self._args_jit(self._hist, jnp.int32(self.order[lo]), jnp.int32(self.order[lo + 1]),
                               jnp.asarray(self.xp[lo]), jnp.asarray(self.xp[lo + 1]))
 
-    def _interval_args(self, k_lo, k_hi, xp_lo, xp_hi):
+    def _interval_args(self, h, k_lo, k_hi, xp_lo, xp_hi):
         f64 = jnp.float64
         a = {"xp_lo": xp_lo.astype(f64), "dxp": (xp_hi - xp_lo).astype(f64)}       # jnp.interp: delta / dx
-        th_lo, th_hi = self._th[k_lo], self._th[k_hi]
-        a["th_lo"] = self.scale * th_lo - self._th_lin                                 # s th(t) - th_lin, at l = 0
+        th_lo, th_hi = h["th"][k_lo], h["th"][k_hi]
+        a["th_lo"] = self.scale * th_lo - h["th_lin"]                                  # s th(t) - th_lin, at l = 0
         a["dth"] = self.scale * (th_hi - th_lo)
         if self.K:
-            W_lo, dW = self._W[k_lo], self._W[k_hi] - self._W[k_lo]
+            W_lo, dW = h["W"][k_lo], h["W"][k_hi] - h["W"][k_lo]
             cols = [jnp.concatenate([W_lo.T, dW.T], axis=1)]                           # (N, 2K)
             if self.quad:
-                Q_lo, dQ = self._Q[k_lo], self._Q[k_hi] - self._Q[k_lo]
+                Q_lo, dQ = h["Q"][k_lo], h["Q"][k_hi] - h["Q"][k_lo]
                 cols.append(jnp.concatenate([Q_lo.T, dQ.T], axis=1))
             M = jnp.concatenate(cols, axis=0)                                          # (2N or N, 2K)
             a["M"] = M.astype(jnp.float32) if self.precision == "mixed" else M
-            a["b_lo"], a["db"] = self._b[k_lo], self._b[k_hi] - self._b[k_lo]
+            a["b_lo"], a["db"] = h["b"][k_lo], h["b"][k_hi] - h["b"][k_lo]
         if self.local:
-            a["wl_lo"], a["dwl"] = self._wl[k_lo], self._wl[k_hi] - self._wl[k_lo]
-            a["bl_lo"], a["dbl"] = self._bl[k_lo], self._bl[k_hi] - self._bl[k_lo]
+            a["wl_lo"], a["dwl"] = h["wl"][k_lo], h["wl"][k_hi] - h["wl"][k_lo]
+            a["bl_lo"], a["dbl"] = h["bl"][k_lo], h["bl"][k_hi] - h["bl"][k_lo]
         return a
 
     def _dot(self, v, M):

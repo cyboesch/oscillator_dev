@@ -2,12 +2,13 @@
 """End-to-end checks of the training changes of 2026-11-11 against a run made with the code before them; a GPU job.
 
 Reference: bench_mixst_K784 (job 4222240, 2 slices of four-digit Potts 784, stencil + mixed, --select ema), made
-with the code before best_params was skipped under --select ema. Each case trains 2 slices with the reference's
-flags (plus the case's own) under a new name, in a subprocess (train_latent.py as the pipelines run it):
-  1. 'nobest': no extra flags (best_params is now skipped under --select ema): slice files bitwise equal to the
-     reference (theta, W, b, Q, wl, bl, key, loss trace, validation per-sample losses and indices, and the record
-     except timings and code hashes)
-  2. 'lean': --step-impl lean: bitwise equal as well
+with the code before the changes of this check. Each case trains 2 slices with the reference's flags (plus the
+case's own) under a new name, in a subprocess (train_latent.py as the pipelines run it):
+  1. 'repeat': no extra flags (today's default path): slice files bitwise equal to the reference (theta, W, b, Q,
+     wl, bl, key, loss trace, validation per-sample losses and indices, and the record except timings and code
+     hashes): the default path is unchanged and a run is reproducible across jobs
+  2. 'lean': --step-impl lean (best_params skipped under --select ema, masks, batches per chunk): equal up to
+     rounding (relative differences and the logged numbers)
   3. 'fast': --step-impl lean --ref-kmeans gpu (the reference changes at rounding level or more): start-up time and
      the per-slice records against the reference's
 Wall times of every case from the process start to its end (2 slices, start-up included).
@@ -33,7 +34,7 @@ REF = "bench_mixst_K784"
 BASE = ["--problem", "mnist28_d0123", "--K", "784", "--select", "ema", "--hidden", "potts", "--quad", "--local",
         "--visible", "quartic", "--radius", "1", "--pair-terms", "lin", "--proto-init", "pooled", "--max-slices", "2",
         "--visible-impl", "stencil", "--precision", "mixed"]
-CASES = {"nobest": ([], True), "lean": (["--step-impl", "lean"], True),
+CASES = {"repeat": ([], True), "lean": (["--step-impl", "lean"], False),
          "fast": (["--step-impl", "lean", "--ref-kmeans", "gpu"], False)}
 VOLATILE = {"seconds", "steps_per_s", "job", "code_sha256"}       # record fields that may differ
 FAILED = []
