@@ -165,7 +165,7 @@ run --problem mnist28_d0123456789 --out ${G}/28x28_all_ten_digits_power4_springs
 SETS=()
 add no_hidden_elements_K0 mnist28_d0123456789_K0_ema_potts_quad_local_quartic_r1_lin_pooled 2000
 add pixels_only_no_units mnist28_d0123456789_K0_ema_quartic_r1_lin 2000
-for K in 64 256 784 1536 3072; do add Potts${K}_8nb mnist28_d0123456789_K${K}_ema_potts_quad_local_quartic_r1_lin_pooled 2000; done
+for K in 64 256 784 1536 3072 6144; do add Potts${K}_8nb mnist28_d0123456789_K${K}_ema_potts_quad_local_quartic_r1_lin_pooled 2000; done
 for K in 64 256 784 1568 3136; do add Ising${K}_8nb mnist28_d0123456789_K${K}_ema_ising_quad_local_quartic_r1_lin 2000; done
 for K in 1536 3072; do add Potts${K}_frozen_8nb mnist28_d0123456789_K${K}_ema_potts_local_quartic_r1_lin_pooled_fixed 2000; done
 run --problem mnist28_d0123456789 --out ${G}/28x28_all_ten_digits_sweep_number_of_hidden_elements --title "28x28, digits 0-9, power 4, nearest-neighbour springs only: number of Ising units and Potts states" \
