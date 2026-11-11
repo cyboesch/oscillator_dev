@@ -46,6 +46,7 @@ NOISE = 0.01
 N_BOOT = 200
 N_FLOOR = 10
 KID_REF_MAX = 2000
+PR_K, N_PR = 3, 5          # k-NN precision / recall: k, number of reference draws
 _lines = []
 
 
@@ -192,6 +193,20 @@ def kid_from_kernels(Kxx, Kxy, kyy_mean):
     return float(kxx + kyy_mean - 2.0 * Kxy.mean())
 
 
+def sqdist(A, B):
+    return np.maximum(np.sum(A * A, 1)[:, None] + np.sum(B * B, 1)[None, :] - 2.0 * A @ B.T, 0.0)
+
+
+def prec_rec(S, R, k=PR_K):
+    """k-NN precision and recall (Kynkaanniemi et al. 2019) of samples S against real images R (rows)."""
+    def radii(Y):
+        D = sqdist(Y, Y)
+        np.fill_diagonal(D, np.inf)
+        return np.sqrt(np.partition(D, k - 1, axis=1)[:, k - 1])
+    D = np.sqrt(sqdist(S, R))
+    return float(np.mean((D <= radii(R)[None, :]).any(1))), float(np.mean((D <= radii(S)[:, None]).any(0)))
+
+
 class Scorer:
     def __init__(self, Fref):
         self.mr, self.Cr = stats(Fref)
@@ -258,7 +273,7 @@ def main():
         P = np.where(ok[:, None], np.nan_to_num(x) * std + mean, 0.0)
         F_raw, Pr_raw = feats(P)
         F_clip, _ = feats(np.clip(P, 0.0, 1.0))
-        sets[label] = dict(ok=ok, raw=F_raw, clip=F_clip, prob=Pr_raw)
+        sets[label] = dict(ok=ok, raw=F_raw, clip=F_clip, prob=Pr_raw, px=np.clip(P, 0.0, 1.0))
     report("")
     report(f"{'set':<34}{'n':>5}{'div':>5}{'FID':>9}{'(sd)':>7}{'KIDx1e3':>9}{'FID clip':>10}{'KID clip':>10}"
            f"{'confident':>11}  class shares (classifier, among non-diverged)")
@@ -292,6 +307,37 @@ def main():
                           "class_shares": {int(d): float(np.mean(cls == d)) for d in range(10)}}
     report("(FID in the classifier's 128 features, raw pixel values unless 'clip'; KID x 1000, unbiased, can be < 0 by "
            "chance; confident = classified as one of the problem's digits with max p >= 0.9)")
+    # k-NN precision / recall against held-out test images (the FID reference), at matched n
+    Rpx = np.clip(Xref, 0.0, 1.0)
+    Ptr_px = np.clip(Ptr, 0.0, 1.0)
+
+    def pr_row(F, X, n):
+        out = []
+        for r in range(N_PR):                                    # same reference draws for every set
+            g = np.random.default_rng(500 + r)
+            jr = g.choice(Fref.shape[0], n, replace=False)
+            js = g.choice(F.shape[0], n, replace=False) if F.shape[0] > n else np.arange(F.shape[0])
+            out.append(prec_rec(F[js], Fref[jr]) + prec_rec(X[js], Rpx[jr]))
+        return np.mean(out, 0)
+    n_cap = Fref.shape[0] // 2
+    report("")
+    report(f"k-NN precision / recall (k = {PR_K}, Kynkaanniemi et al. 2019) against n held-out MNIST test images (the FID "
+           f"reference), n = the set's size (at most {n_cap}), mean over {N_PR} draws; in the classifier's features (F) "
+           f"and in pixel space clipped to [0, 1] (px). Recall = share of held-out real images inside the samples' k-NN "
+           f"balls: it drops if the samples cover fewer shapes than real digits have (e.g. K prototypes plus noise).")
+    report(f"{'set':<34}{'n':>5}{'prec F':>9}{'rec F':>8}{'prec px':>9}{'rec px':>8}")
+    n_fl = min(n_typ, n_cap)
+    v = pr_row(Ftr, Ptr_px, n_fl) if Ftr.shape[0] > n_fl else None
+    if v is not None:
+        report(f"{'real training images (target)':<34}{n_fl:>5}{v[0]:>9.3f}{v[1]:>8.3f}{v[2]:>9.3f}{v[3]:>8.3f}")
+        metrics["floor"].update(prec_feat=v[0], rec_feat=v[1], prec_px=v[2], rec_px=v[3], pr_n=n_fl)
+    for label, s in sets.items():
+        ok = s["ok"]
+        n = min(int(ok.sum()), n_cap)
+        v = pr_row(s["raw"][ok], s["px"][ok], n)
+        report(f"{label:<34}{n:>5}{v[0]:>9.3f}{v[1]:>8.3f}{v[2]:>9.3f}{v[3]:>8.3f}")
+        metrics[label].update(prec_feat=float(v[0]), rec_feat=float(v[1]), prec_px=float(v[2]), rec_px=float(v[3]), pr_n=n)
+    report("(compare rows at the same n: recall rises with n)")
     for pr in args.pair:
         a, b = pr.split(",")
         if a not in sets or b not in sets:

@@ -104,12 +104,40 @@ $\bm W=0$ is a degenerate stationary point (Section~\ref{sec:training}).
 \subsection{Potts units}
 A Potts unit is \emph{one} hidden unit with $M$ mutually exclusive states $m=1\dots M$ (exactly one active). State
 $m$ has its own couplings to all pixels and its own field. At a fixed diffusion time, suppressing the time
-dependence of the parameters, the joint energy is
+dependence of the parameters, we can explicitly separate an intrinsic state energy $u_m=U(y=m)$ from the
+input field $\widetilde a_m(\vx)=\widetilde b_m+\bm W_m\cdot\vx$:
+\begin{equation*}
+  E(\vx,y)=\Ev(\vx)+U(y)-\widetilde a_y(\vx)
+  =\Ev(\vx)+\sum_{m=1}^M\delta_{ym}\big[u_m-\widetilde a_m(\vx)\big].
+\end{equation*}
+The Kronecker indicator $\delta_{ym}$ selects the occupied state. There is no unweighted sum of the energies
+of all $M$ states in a single configuration: the Potts unit occupies only one of them. Since $u_m$ is independent
+of $\vx$, it can be absorbed into the state bias, $b_m=\widetilde b_m-u_m$. This is the convention used in the
+code and in the following equations:
 \begin{equation*}
   E(\vx,y=m)\equiv E_m(\vx)=\Ev(\vx)-a_m(\vx),\qquad a_m(\vx)=b_m+\bm W_m\cdot\vx.
 \end{equation*}
 Here $y$ is a state label: $y=m$ selects the parameters of state $m$, rather than multiplying them by the number
-$m$. Summing the joint Boltzmann weight over this label gives
+$m$. In particular, the uncoupled state's total energy offset is already $-b_m$; adding a separate $u_m$ to
+this last expression without redefining $b_m$ would change the model.
+
+\paragraph{An explicit potential for the discrete constraint.} Equivalently encode the label by binary
+occupations $\bm z\in\{0,1\}^M$, with $z_m=\delta_{ym}$. The ideal Potts constraint can be written as
+\begin{equation*}
+  U_{\rm P}(\bm z)=
+  \begin{cases}
+    0,&\displaystyle\sum_m z_m=1,\\
+    +\infty,&\text{otherwise},
+  \end{cases}
+  \qquad
+  E(\vx,\bm z)=\Ev(\vx)+U_{\rm P}(\bm z)-\sum_m z_m a_m(\vx).
+\end{equation*}
+The state-dependent offsets are in $a_m$, so $U_{\rm P}$ only enforces exclusivity. This representation uses a
+\emph{discrete sum over binary configurations}, not a continuous integral over isolated allowed points. It is
+equivalent to the categorical model implemented by the code. It does not specify a smooth multiwell potential,
+barrier heights or transition rates for a physical device; those would require an additional dynamical model.
+
+Summing the joint Boltzmann weight over the allowed label gives
 \begin{equation*}
   e^{-F(\vx)/T}=\sum_m e^{-E_m(\vx)/T}
   =e^{-\Ev(\vx)/T}\sum_m e^{a_m(\vx)/T}.

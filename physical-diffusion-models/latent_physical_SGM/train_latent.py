@@ -90,6 +90,13 @@ def parse():
     ap.add_argument("--freeze-hidden-slices", type=int, default=1)
     ap.add_argument("--steps-scale", type=float, default=1.0, help="fraction of the paper's steps (smoke tests)")
     ap.add_argument("--max-slices", type=int, default=lm.N_TIME_STEPS)
+    ap.add_argument("--init-from", default=None,
+                    help="start from another run's slices: with --init-slices N, slices 0..N-1 of that run (a folder "
+                         "under --out-root with the same model config) are linked into this run, and training resumes "
+                         "at slice N with this run's --steps-scale / --lr-scale (late-slice convergence)")
+    ap.add_argument("--init-slices", type=int, default=0)
+    ap.add_argument("--lr-scale", type=float, default=1.0,
+                    help="multiplies every learning rate (pixel couplings and hidden units) of the trained slices")
     ap.add_argument("--out-root", default=lm.OUT_ROOT)
     ap.add_argument("--problem", default="mnist28",
                     help="mnist28, mnist14, gauss2_8, or a digit subset mnist28_d<digits> / mnist14_d<digits> "
@@ -550,6 +557,7 @@ def main():
         "hidden_jackknife_order": args.hidden_jackknife_order, "occ_same_draws": args.occ_same_draws,
         "pair_terms": ",".join(pair_terms) if pair_terms else "none", "neighbourhood": args.neighbourhood,
         "ising_reseed": args.ising_reseed, "ising_weak_boost": args.ising_weak_boost, "val_every": args.val_every,
+        "init_from": args.init_from, "init_slices": args.init_slices, "lr_scale": args.lr_scale,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -564,7 +572,8 @@ def main():
                 "hidden_floor": 0.0, "hidden_norm": "element", "occ_beta": 0.999,
                 "hidden_jackknife_order": 1, "occ_same_draws": False,
                 "pair_terms": "duff,lin,om", "neighbourhood": "chebyshev",
-                "ising_reseed": False, "ising_weak_boost": 1.0, "val_every": 0}   # runs started before these options existed
+                "ising_reseed": False, "ising_weak_boost": 1.0, "val_every": 0,
+                "init_from": None, "init_slices": 0, "lr_scale": 1.0}   # runs started before these options existed
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -715,6 +724,40 @@ def main():
         if paper.shape[1] != vis.n_theta:                    # another coupling radius: no per-slice comparison
             paper = None
 
+    # ---- --init-from: link the first slices of another run (same model), then resume after them ---------------
+    if args.init_from and args.init_slices > 0 and not os.path.exists(os.path.join(slice_dir, "slice_000.npz")):
+        src = os.path.join(args.out_root, args.init_from)
+        with open(os.path.join(src, "config.json")) as f:
+            scfg = json.load(f)
+        free = {"name", "steps_scale", "val_every", "lr_scale", "init_from", "init_slices", "max_slices"}
+        bad = {k: (scfg.get(k, defaults.get(k)), v) for k, v in config.items()
+               if k not in free and k in defaults and scfg.get(k, defaults.get(k)) != v}
+        bad.update({k: (scfg.get(k), config[k]) for k in ("K", "cls", "hidden_lr_scale", "freeze_hidden_slices")
+                    if scfg.get(k) != config[k]})
+        if bad:
+            raise RuntimeError(f"--init-from {src}: different model config {bad}")
+        if scfg.get("init_from"):
+            raise RuntimeError(f"--init-from {src}: that run is itself initialised from another; use the original")
+        recs = {}
+        with open(os.path.join(src, "train_log.jsonl")) as f:
+            for line in f:
+                if line.strip():
+                    r = json.loads(line)
+                    if "slice" in r:
+                        recs[int(r["slice"])] = r
+        for k in range(args.init_slices):
+            s_src = os.path.join(src, "slices", f"slice_{k:03d}.npz")
+            if not os.path.exists(s_src) or k not in recs:
+                raise RuntimeError(f"--init-from {src}: slice {k} missing")
+        for k in range(args.init_slices):             # relative links: valid on the host and in the container
+            os.symlink(os.path.relpath(os.path.join(src, "slices", f"slice_{k:03d}.npz"), slice_dir),
+                       os.path.join(slice_dir, f"slice_{k:03d}.npz"))
+        with open(os.path.join(out_dir, "train_log.jsonl"), "a") as f:
+            for k in range(args.init_slices):
+                f.write(json.dumps(dict(recs[k], copied_from=args.init_from)) + "\n")
+        log(logf, f"--init-from: linked slices 0-{args.init_slices - 1} of {src}; training resumes at slice "
+                  f"{args.init_slices}")
+
     # ---- resume -----------------------------------------------------------------------------------------------
     done = 0
     while os.path.exists(os.path.join(slice_dir, f"slice_{done:03d}.npz")):
@@ -777,6 +820,7 @@ def main():
             on = k >= args.freeze_hidden_slices and not args.hidden_fixed
             lrs.update(wl=float(args.hidden_lr_scale * swl[k]) if on else 0.0,
                        bl=float(args.hidden_lr_scale * sbl[k]) if on else 0.0)
+        lrs = {g: v * args.lr_scale for g, v in lrs.items()}
         lr_log = {"W": lrs["W"], "b": lrs["b"]}       # scalars for the log (--ising-weak-boost makes lrs per unit)
         n_boost = None
         if tree is not None and train_hidden and (args.ising_reseed or args.ising_weak_boost != 1.0):

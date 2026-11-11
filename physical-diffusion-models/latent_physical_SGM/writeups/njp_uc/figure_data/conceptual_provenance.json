@@ -47,6 +47,9 @@
   "panel_letter_font_pt": 8,
   "timeline": "Tick-free qualitative timeline with compact inline schedule badge; five frames with schematic spacing",
   "image_tile_size_mm": 22,
-  "renderer_sha256": "63f3f9a8a995eb0693c3581313b86acdf6c6ce87bfc270ce1db9883dbc9abc61",
-  "tikz_source_sha256": "7d316e6ff5396e27042b79ed19b5ce84057c9ee6595108dddc896205525e3e98"
+  "timescale_cues": "Schematic rapid discrete switching for fast hidden equilibration and smooth slow visible motion; no measured rates or trajectories",
+  "thermal_enclosures": "One unfilled red box labelled T around both complete network alternatives, including visible and hidden units at the same temperature; annotation, not additional coupling",
+  "thermal_enclosure_colour": "#C43B36",
+  "renderer_sha256": "4a24fbecbf9485045db6e33a5e887bd153c038038b5e5855ddd6114a2e98b9f7",
+  "tikz_source_sha256": "2689584095054d098988c38a3ffc495c361e631ec79625d4a0782c84836957b2"
 }

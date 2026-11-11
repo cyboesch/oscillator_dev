@@ -64,6 +64,9 @@ when the exported page must retain an exact size: it changes the canvas bounds.
 - Use colour for meaning: blue `#007FA8` for Ising/visible elements, violet
   `#7559B5` for Potts elements and orange `#D56A30` for learned control. Maintain
   labels, shapes or line patterns so colour is not the only distinction.
+- A red `#C43B36` enclosure labelled `T` surrounds both complete network
+  alternatives in the conceptual figure: visible and hidden units share
+  temperature `T`. This boundary is an annotation, not an additional coupling.
 - Use 1 pt axes, ticks and secondary edges; start with 1.2 pt data curves and
   arrows. Remove decorative frames or repeated labels when space is tight.
 
@@ -109,13 +112,13 @@ mpl.rcParams.update({
 fig, ax = plt.subplots(figsize=(180 / 25.4, 100 / 25.4), layout="constrained")
 # Add the plotted data here. Set annotation/arrow widths explicitly as needed.
 fig.savefig("figure.pdf")
-fig.savefig("figure_preview.png", dpi=450)
 ```
 
 Explicit `fontsize` or `linewidth` arguments override these defaults. Inspect
 those overrides, colour-bar ticks and inset labels as well. The PDF/SVG font
 settings follow Nature's [editable-text export advice](https://research-figure-guide.nature.com/figures/preparing-figures-our-specifications/).
-Keep the vector PDF as the submission master; PNG is a convenient preview.
+Keep the vector PDF as the submission master. This project retains PDF figure
+outputs and does not generate PNG previews.
 
 For TikZ, use `\fontsize{8bp}{9.6bp}\selectfont` for ordinary labels, add
 `\bfseries` for panel letters, and use `line width=1bp` or greater. A `bp` is
@@ -146,7 +149,7 @@ Rebuild commands and data provenance are in
 
 Inspect the complete figure at its intended physical size in the manuscript:
 labels should fit, legends should remain readable, and every panel should
-have the same font treatment. Check the PDF rather than only the PNG preview.
+have the same font treatment. Check the exported PDF at its intended display size.
 
 ```bash
 pdfinfo conceptual_draft.pdf      # page dimensions; PDF points × 25.4 / 72 = mm

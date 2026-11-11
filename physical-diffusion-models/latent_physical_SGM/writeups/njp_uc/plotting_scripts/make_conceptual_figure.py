@@ -88,6 +88,9 @@ def prepare_frames(path: Path, work: Path, requested_times: list[float]) -> dict
         "panel_letter_font_pt": 8,
         "timeline": "Tick-free qualitative timeline with compact inline schedule badge; five frames with schematic spacing",
         "image_tile_size_mm": 22,
+        "timescale_cues": "Schematic rapid discrete switching for fast hidden equilibration and smooth slow visible motion; no measured rates or trajectories",
+        "thermal_enclosures": "One unfilled red box labelled T around both complete network alternatives, including visible and hidden units at the same temperature; annotation, not additional coupling",
+        "thermal_enclosure_colour": "#C43B36",
     }
 
 
@@ -131,10 +134,6 @@ def main() -> None:
         svg = data_output / "conceptual_draft.svg"
         subprocess.run(["pdftocairo", "-svg", str(pdf), str(svg)], check=True)
         print(svg)
-    if shutil.which("pdftoppm"):
-        preview = output_dir / "conceptual_draft"
-        subprocess.run(["pdftoppm", "-r", "220", "-png", "-singlefile", str(pdf), str(preview)], check=True)
-        print(preview.with_suffix(".png"))
 
 
 if __name__ == "__main__":

@@ -2148,6 +2148,32 @@ Inception FIDs); floor = real training images at the same n: **1.69** (sd 0.18).
   same trajectory keeps its digit from 256 up. Frozen Potts: recognisable but speckled. K = 0 and pixels only:
   blobs.
 
+**Recall: do the Potts states just store prototypes? (2026-11-11, 11:30)** New in `fid_score.py`: k-NN precision /
+recall (k = 3) against held-out MNIST test images at matched n, in the classifier's features and in pixels; new
+`prototype_test.py --heldout` (the baseline is MNIST test images, never trained on; the old probes were training
+images). Jobs 4221031 (four digits, n 500), 4221032 (ten digits, n 2000), 4221033 (prototype test).
+
+| recall in features (pixels) | real | Potts 64 / 256 / 784 / 1536 / 3072 | Ising 64 / 256 / 784 / 1568 / 3136 | frozen Potts 1536 / 3072 |
+|---|---|---|---|---|
+| ten digits | 0.88 (0.88) | 0.09 / 0.19 / 0.30 / 0.34 / 0.38 (0.25 ... 0.61) | 0.27 / 0.59 / 0.75 / 0.78 / 0.77 (0.45 ... 0.73) | 0.11 / 0.15 |
+| precision | 0.87 | 0.85 / 0.89 / 0.90 / 0.91 / 0.92 | 0.79 / 0.76 / 0.73 / 0.72 / 0.72 | 0.88 / 0.88 |
+
+- Four digits (n 500, real 0.89 / 0.88): Potts 784 recall 0.42, with 2x steps 0.47, Potts 1536 0.53, precision
+  0.93-0.95; Ising 784-3136 recall 0.80-0.81, precision 0.74; frozen Potts 0.19 / 0.26.
+- **Potts = high fidelity, low coverage.** Its precision is above that of real images and its recall is less than
+  half the real value; recall grows slowly with K (+0.04 per doubling at ten digits). **Ising is the opposite**:
+  recall close to real (0.78 vs 0.88) but lower precision (fragmented digits). FID mixes both and hides this.
+- **No memorisation of training images:** samples are as far from their nearest training image as held-out test
+  images are (ratio 0.99-1.02 at four digits; copy rate <= 0.5%).
+- **But the samples hug their state's prototype** (prototype test, four digits): 25-27% closer to the mean image of
+  their state than held-out images (ratio 0.73-0.75 for Potts 784, 784 with 2x steps, 1536; at 14x14 with probes it
+  was 0.89-0.95), and within-state spread 81-91% of the training members'. Ten-digit Potts 256: ratio 0.83.
+  (State-usage numbers are not at matched n, so they say nothing here.)
+- Reading: each Potts state contributes one shape plus local (pixel-scale) variation; the springs and per-pixel units
+  cannot make the global variation (slant, width, stroke shape) inside a state, so coverage needs more states. A
+  hybrid (Potts states for the shape family, Ising units for the style within it) is the obvious candidate to get
+  both precision and recall.
+
 **Is training converged? (2026-11-10, running)** Every slice trains a fixed number of steps (the paper's schedule,
 10,901 at t = 5 rising to 30,901 at t = 0; the paper's early stopping never triggers), with no convergence check.
 Crude test from the logs: if a slice had converged, its best mini-batch would fall anywhere in the slice (about 10%
@@ -2161,6 +2187,20 @@ FID level off with K for a training reason (larger models may need more steps).
   steps, paired per-sample losses). If FID barely moves, keep the fixed schedule and report the check; if it improves
   clearly, choose a convergence criterion from the curves (e.g. stop when the validation loss improved by less than
   one standard error over the last few thousand steps, capped at about 3x) and rerun the sweep, largest K first.
+- **Result (2026-11-11; FID 4211742, gallery 4211744, curves `learning_curves/4220274/` and `4220273/` from
+  `plot_learning_curves.py`).** Twice the steps: FID 20.3 -> **17.7** (-2.6 [-4.0, -1.3], p < 0.005; doubling K
+  784 -> 1536 gave -3.5), same digit per trajectory, slightly less speckle, grain still there.
+  - Where: slices 0-79 (t > 1) are essentially converged. Their validation curves are flat within a few loss units
+    and noisy, and the final validation loss of the two runs differs by -1 to -4 units. Slices 80-99 (t < 1) are
+    not converged even at twice the steps: the validation curves of slices 90 and 95 fall in a straight line to the
+    end, and slice 99 (t = 0) falls steeply (the 2x run ends 17,000 units below the 1x run, 120 SE). Over the slices
+    with t < 1, the validation gain N/2 -> N (-648) is almost as large as N/4 -> N/2 (-834) in half the steps.
+  - Odd detail: around t = 1.2-1.8 the 2x run is slightly worse on validation (up to +19 SE, a few loss units).
+  - Ten-digit sweep (training-loss curves, `potts10_*`, `ising10_*`): the same picture for every K. Slices 10-70 are
+    flat (their wiggles are shared by all K: the same mini-batches); 80-95 drift down slowly; 99 falls steeply. The
+    curves for different K are parallel and the late-slope z-scores similar (slices 80-99, median -1.9 to -2.6 for
+    every Potts and Ising K), so larger K are not more under-trained than small K: the K comparison is fair at a
+    fixed budget, while the absolute FIDs would all improve with longer late slices.
 
 ## Caveats
 

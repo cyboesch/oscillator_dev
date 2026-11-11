@@ -6,7 +6,8 @@ That guide distinguishes journal requirements from the current draft styling.
 
 PDFs go to ../figures; SVGs and JSON/NPZ data go to ../figure_data.
 The same sibling-directory layout applies when --output-dir is supplied.
-The conceptual and parameter renderers also save PNG previews. Captions are in ../figure_captions.tex.
+Figure outputs in ../figures are PDF-only; PNG previews are not generated.
+Captions are in ../figure_captions.tex.
 The manuscript main.tex is unchanged.
 Static figure scripts only read completed results. The optional video pipeline
 below generates one isolated CPU trajectory; it does not train or request a GPU.
@@ -23,7 +24,7 @@ as the parameter script if they are not installed in your Python environment).
 
 The conceptual renderer uses NumPy and pdflatex. Its 183 x 98 mm artwork has
 7 pt Helvetica-style labels and 8 pt panel letters. pdftocairo also exports SVG
-to figure_data; pdftoppm writes a PNG preview beside the PDF. Edit
+to figure_data as a vector companion. Edit
 make_conceptual_figure.tex to change the diagram. Panel c uses the small saved
 figure_data/conceptual_potts4/trajectory_000.npz archive, never a synthetic blend.
 Use --times 0 2.5 4 4.5 5 to select the nearest recorded generation-time frames.
@@ -59,7 +60,10 @@ Outputs
 
 figures/conceptual_draft.pdf
     Architecture alternatives, clamped local learning and open-loop generation.
-    Panels a/b are schematic. Panel c places real frames below a qualitative
+    Panels a/b are schematic. Panel a's Fast/Slow trace icons express the
+    assumed fast hidden equilibration relative to visible motion; they do not
+    show measured trajectories, numerical rates or a specific relaxation law.
+    Panel c places real frames below a qualitative
     tick-free timeline with a compact inline badge reusing panel b's schedule icon. Frame spacing
     indicates order, not proportional time intervals; arrows do not feed images.
     Panel c is a real reverse-SDE evolution from
@@ -82,11 +86,8 @@ figures/parameter_evolution_draft.pdf
     Only forward time t appears above the columns; the figure has no title,
     equation block, repeated row notes or footer. SVGs for pages 1 and 2 are
     retained in figure_data as parameter_evolution_draft.svg and
-    parameter_evolution_states.svg. PNG previews sit beside the PDF as
-    parameter_evolution_draft_page1.png and _page2.png. The shell wrapper
-    calls export_parameter_previews.py on the host to rasterize the finished
-    PDFs using pdftoppm; this avoids missing glyphs in direct Agg previews.
-    A direct make_parameter_evolution.py call exports only PDFs/SVGs/data.
+    parameter_evolution_states.svg. Both the shell wrapper and direct Python
+    command export PDFs/SVGs/data, without PNG previews.
     The layout is in parameter_evolution_layout.py; bundled fonts and their
     SIL Open Font License are in fonts/.
 

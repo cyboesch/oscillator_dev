@@ -7,10 +7,18 @@
   \caption{\textbf{Local learning and open-loop generation with hidden degrees of freedom.}
   (a) Continuous visible oscillators with neighbour springs couple globally to
   either $K$ Ising units or one Potts unit with $M$ mutually exclusive states.
+  A single red enclosure marked $T$ indicates that both visible and hidden
+  units are at temperature $T$ in either architecture.
+  Schematic switching and smooth-motion traces indicate fast hidden
+  equilibration relative to slow visible dynamics; they do not specify
+  numerical rates or measured trajectories.
   Representative network subsets are shown; optional per-pixel Ising units
   are omitted. (b) At each noise time, visible units are clamped to noisy data.
+  The switching icon represents fast conditional sampling of hidden units
+  while the visible state is clamped.
   Mean clamp forces, conditional hidden statistics, node-level aggregate
   signals and current couplings determine local parameter updates.
+  Orange links highlight updates to visible springs and hidden--visible couplings.
   (c) The timeline indicates progression through the learned parameter
   schedule, represented by the same schematic curve icon as in (b).
   Frame spacing is schematic. The prescribed schedule is shared across samples.

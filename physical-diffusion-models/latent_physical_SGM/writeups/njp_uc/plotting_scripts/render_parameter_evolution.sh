@@ -12,6 +12,3 @@ apptainer exec \
     --pwd "${figure_workspace_dir}" \
     "${figure_workspace_dir}/container/container_image.sif" \
     python3 "${figure_script_dir}/make_parameter_evolution.py" "$@"
-
-# Rasterize the finished PDF on the host so previews match the submission file.
-python3 "${figure_script_dir}/export_parameter_previews.py" "$@"

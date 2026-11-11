@@ -69,7 +69,7 @@ def eff(assign, K):
     return float(np.exp(-np.sum(p * np.log(p))))
 
 
-def one_run(name, stem, rng, lines):
+def one_run(name, stem, rng, lines, heldout=False):
     rdir = os.path.join(lm.OUT_ROOT, name)
     cfg = json.load(open(os.path.join(rdir, "config.json")))
     if cfg.get("hidden") != "potts":
@@ -86,11 +86,21 @@ def one_run(name, stem, rng, lines):
     K = p["W"].shape[0]
     S = np.load(os.path.join(rdir, "samples", f"{stem}.npy")).astype(np.float64)
     S = S[np.all(np.isfinite(S), 1)]
-    prng = np.random.default_rng(bc.PROBE_SEED)                 # the evaluation's probes
-    probe = np.sort(prng.choice(n, size=bc.N_PROBE, replace=False))
-    is_probe = np.zeros(n, bool)
-    is_probe[probe] = True
-    Xtr, Xpr = X[~is_probe], X[is_probe]
+    if heldout:
+        # baseline: MNIST test images of the problem's digits (never seen in training), with the paper's pixel noise;
+        # all training images define the clusters
+        import fid_score as fs
+        Pte, yte = fs.load_mnist("test", g)
+        Pte = Pte[np.isin(yte, prob["digits"])].astype(np.float64)
+        Pte = Pte + fs.NOISE * np.random.default_rng(0).standard_normal(Pte.shape)
+        Xtr, Xpr = X, (Pte - mean_px) / std_px
+    else:
+        prng = np.random.default_rng(bc.PROBE_SEED)             # the evaluation's probes
+        probe = np.sort(prng.choice(n, size=bc.N_PROBE, replace=False))
+        is_probe = np.zeros(n, bool)
+        is_probe[probe] = True
+        Xtr, Xpr = X[~is_probe], X[is_probe]
+    base = "held-out" if heldout else "probes"
     T = lm.TEMP
     a_tr, a_pr, a_s = fields(p, Xtr), fields(p, Xpr), fields(p, S)
     m_tr, m_pr, m_s = a_tr.argmax(1), a_pr.argmax(1), a_s.argmax(1)
@@ -126,26 +136,37 @@ def one_run(name, stem, rng, lines):
             D2 = tr_n2[None, :] - 2.0 * Q_ @ Ptr.T
             out.append(m_tr[D2.argmin(1)] == mq[i0:i0 + 256])
         return float(np.concatenate(out).mean())
+
+    def nn_dist(Pq):
+        out = []
+        for i0 in range(0, Pq.shape[0], 256):
+            Q_ = Pq[i0:i0 + 256]
+            D2 = tr_n2[None, :] - 2.0 * Q_ @ Ptr.T + np.sum(Q_ * Q_, 1)[:, None]
+            out.append(np.sqrt(np.maximum(D2.min(1), 0.0)))
+        return np.concatenate(out)
     mp_s, H_s = posterior_stats(a_s, T)
     mp_p, H_p = posterior_stats(a_pr, T)
     L = [f"{name} ({cfg['problem']}, Potts {K}, visible {cfg.get('visible')}, pair terms {cfg.get('pair_terms', 'all')}, "
          f"neighbourhood {cfg.get('neighbourhood', 'chebyshev')}, radius {cfg.get('radius')})",
-         f"  states with >= 5 training members: {int(ok.sum())} of {K}; samples {S.shape[0]}, probes {Xpr.shape[0]}, "
+         f"  states with >= 5 training members: {int(ok.sum())} of {K}; samples {S.shape[0]}, {base} {Xpr.shape[0]}, "
          f"training images {Xtr.shape[0]}",
-         f"  distance to own state's prototype, median: samples {np.median(d_s):.3f}, probes {np.median(d_p):.3f}, "
-         f"training members {np.median(d_t):.3f}; samples / probes {np.median(d_s) / np.median(d_p):.3f}",
-         f"    quartiles samples {np.percentile(d_s, 25):.3f} / {np.percentile(d_s, 75):.3f}, probes "
+         f"  distance to own state's prototype, median: samples {np.median(d_s):.3f}, {base} {np.median(d_p):.3f}, "
+         f"training members {np.median(d_t):.3f}; samples / {base} {np.median(d_s) / np.median(d_p):.3f}",
+         f"    quartiles samples {np.percentile(d_s, 25):.3f} / {np.percentile(d_s, 75):.3f}, {base} "
          f"{np.percentile(d_p, 25):.3f} / {np.percentile(d_p, 75):.3f}",
          f"  within-state spread (mean pairwise distance, {len(w)} states with >= 3 samples, weighted by size): "
          f"samples {np.sum(w * np.asarray(sp_s)) / w.sum():.3f}, training members (same counts) "
          f"{np.sum(w * np.asarray(sp_t)) / w.sum():.3f}; ratio {np.sum(w * np.asarray(sp_s)) / np.sum(w * np.asarray(sp_t)):.3f}",
-         f"  nearest training image in the own state: samples {nn_same(Ps, m_s):.3f}, probes {nn_same(Ppr, m_pr):.3f}",
-         f"  posterior at t = 0: mean max p samples {mp_s.mean():.3f}, probes {mp_p.mean():.3f}; mean entropy "
-         f"samples {H_s.mean():.3f}, probes {H_p.mean():.3f} nats; share with max p < 0.5: samples "
-         f"{np.mean(mp_s < 0.5):.3f}, probes {np.mean(mp_p < 0.5):.3f}",
-         f"  state usage exp(H): samples {eff(m_s, K):.1f}, probes {eff(m_pr, K):.1f}, training images "
+         f"  nearest training image in the own state: samples {nn_same(Ps, m_s):.3f}, {base} {nn_same(Ppr, m_pr):.3f}",
+         f"  posterior at t = 0: mean max p samples {mp_s.mean():.3f}, {base} {mp_p.mean():.3f}; mean entropy "
+         f"samples {H_s.mean():.3f}, {base} {H_p.mean():.3f} nats; share with max p < 0.5: samples "
+         f"{np.mean(mp_s < 0.5):.3f}, {base} {np.mean(mp_p < 0.5):.3f}",
+         f"  state usage exp(H): samples {eff(m_s, K):.1f}, {base} {eff(m_pr, K):.1f}, training images "
          f"{eff(m_tr, K):.1f}; states used by samples {np.unique(m_s).size}, by training images "
-         f"{np.unique(m_tr).size}"]
+         f"{np.unique(m_tr).size}",
+         f"  nearest-image distance (pixel units, median): samples to training {np.median(nn_dist(Ps)):.3f}, "
+         f"{base} to training {np.median(nn_dist(Ppr)):.3f}; samples / {base} {np.median(nn_dist(Ps)) / np.median(nn_dist(Ppr)):.3f} "
+         f"(well below 1 = samples sit on training images: memorisation)"]
     lines += L
     print("\n".join(L), flush=True)
     # figure: 8 most used states (by samples): prototype | 6 members | up to 6 samples
@@ -175,13 +196,16 @@ def one_run(name, stem, rng, lines):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
-    ap.add_argument("--samples", default="sde_base_n500")
+    ap.add_argument("--samples", default="sde_base_n500", help="sample stem; RUN:STEM overrides it per run")
+    ap.add_argument("--heldout", action="store_true",
+                    help="baseline = MNIST test images (never trained on) instead of the probes (training images)")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     rng = np.random.default_rng(0)
     lines = []
     for r in args.runs:
-        one_run(r, args.samples, rng, lines)
+        name, stem = (r.split(":", 1) + [args.samples])[:2]
+        one_run(name, stem, rng, lines, heldout=args.heldout)
     with open(os.path.join(OUT, "summary.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
     print(f"wrote {OUT}")
