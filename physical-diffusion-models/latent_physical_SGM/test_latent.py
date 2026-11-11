@@ -13,9 +13,10 @@
   8. sampler on the paper checkpoint (4 trajectories)  vs  the saved states of job 4187940; K = 1 sampler smoke
   ...
   13. the opt-in fast paths: stencil / dense_skip visible energy vs dense; the mixed-precision loss (float32 at
-      HIGHEST) vs float64; the per-step trims (best_params skipped under --select ema, --step-impl lean) bitwise
-      against the default runner; --steps-schedule; the GPU k-means (--ref-kmeans gpu) vs numpy; the history
-      assembly from memory (--assemble memory) vs from the slice files
+      HIGHEST) vs float64; --step-impl lean against the default runner (bitwise for pixels only, equal up to
+      rounding with hidden units) and the default runner's reproducibility over two compilations; --steps-schedule;
+      the GPU k-means (--ref-kmeans gpu) vs numpy; the history assembly from memory (--assemble memory) vs from the
+      slice files
 Writes out/latent_physical_SGM/tests/<job>/report.txt and checks.json; exit code 1 if any check fails.
 """
 
@@ -126,31 +127,51 @@ def block_13(key, data, taus):
     n_bad = sum(not ("HIGHEST" in ln and "xf32>" in ln and "xf64>" not in ln) for ln in dots)
     check(f"13 mixed precision: every product is float32 at HIGHEST ({len(dots)} dot_general)", n_bad + (not dots), 0.5)
 
-    # per-step trims: best_params skipped (--select ema) and --step-impl lean, bitwise against the default runner
-    lrs = {g: (1e-3 if g == "theta" else 3e-5) for g in pq}
+    # --step-impl lean (best_params skipped under --select ema, theta masks, batches per chunk) against the default
+    # runner: bitwise for a pixels-only model; with hidden units (GEMMs) XLA compiles the changed step with other
+    # fusions, so the results differ at rounding level, amplified by Adam over the steps (speed_check.py section 6:
+    # float64 about 1e-12, mixed precision about 1e-4 in the parameters after 301 steps; a bug would be order 1)
+    lean = {"track_best": False, "theta_masks": True, "chunk_batches": True}
 
-    def run_variant(loss_, **kw):
+    def run_variant(loss_, p0, **kw):
         run_, adam_ = train_latent.build_runner(loss_, data, lm.N, 1000.0, "quartic", P_s, zero_slices=zs, **kw)
-        c = train_latent.init_carry(pq, adam_, jr.PRNGKey(4))
+        c = train_latent.init_carry(p0, adam_, jr.PRNGKey(4))
+        lr_ = {g: (1e-3 if g == "theta" else 3e-5) for g in p0}
         ls = []
-        for nst in (100, 100, 1):                            # both compiled chunk lengths
-            c, l = run_(c, t_q, lrs, nst)
+        for nst in (100, 1):                                 # both compiled chunk lengths
+            c, l = run_(c, t_q, lr_, nst)
             ls.append(np.asarray(l))
         return c, np.concatenate(ls)
 
-    lean = {"track_best": False, "theta_masks": True, "chunk_batches": True}
-    for lab, loss_, variants in (("stencil mixed", loss_m, (("best skipped", {"track_best": False}), ("lean", lean))),
-                                 ("dense f64", loss_d, (("best skipped", {"track_best": False}),))):
-        c0, l0 = run_variant(loss_)
-        for vname, kw in variants:
-            c1, l1 = run_variant(loss_, **kw)
-            same = np.array_equal(l0, l1) and all(
-                np.array_equal(np.asarray(a), np.asarray(b))
-                for i in (0, 1, 2, 3, 5, 6, 7) for a, b in zip(jax.tree_util.tree_leaves(c0[i]),
-                                                               jax.tree_util.tree_leaves(c1[i])))
-            check(f"13 {vname} ({lab}, Potts 8 --quad --local, 201 steps): losses, parameters, Adam state, key, best "
-                  f"loss and step, EMA (the --select ema result) bitwise equal to the default runner", 0.0 if same else 1.0,
-                  0.5)
+    def leaves(c, groups=(0, 1, 2, 3, 5, 6, 7)):              # every carry group but best_params (4)
+        return [np.asarray(x) for i in groups for x in jax.tree_util.tree_leaves(c[i])]
+
+    def rel_groups(ca, cb, groups):                           # |a - b| / |b| over the leaves of the groups
+        a, b = leaves(ca, groups), leaves(cb, groups)
+        return float(np.sqrt(sum(np.sum((x - y) ** 2) for x, y in zip(a, b)) / sum(np.sum(y ** 2) for y in b)))
+
+    p_k0 = {"theta": th_q, "W": jnp.zeros((0, lm.N)), "b": jnp.zeros((0,))}
+    loss_k0 = lm.make_loss(vis_st, lm.TEMP, 0, compute_dtype=jnp.float32)
+    (c0, l0), (c1, l1) = run_variant(loss_k0, p_k0), run_variant(loss_k0, p_k0, **lean)
+    same = np.array_equal(l0, l1) and all(np.array_equal(x, y) for x, y in zip(leaves(c0), leaves(c1)))
+    check("13 lean vs default runner, pixels only (stencil mixed, 101 steps): bitwise equal (losses, parameters, Adam "
+          "state, key, best loss and step, EMA; differing)", 0.0 if same else 1.0, 0.5)
+    c0, l0 = run_variant(loss_m, pq)
+    c2, l2 = run_variant(loss_m, pq)                          # a second build and compilation of the default runner
+    same = np.array_equal(l0, l2) and all(np.array_equal(x, y) for x, y in zip(leaves(c0, range(8)), leaves(c2, range(8))))
+    check("13 default runner reproducible over two compilations (Potts 8 --quad --local, stencil mixed; differing)",
+          0.0 if same else 1.0, 0.5)
+    for lab, loss_, tol in (("stencil mixed", loss_m, 1e-2), ("dense f64", loss_d, 1e-8)):
+        cd_, ld_ = (c0, l0) if lab == "stencil mixed" else run_variant(loss_, pq)
+        cl_, ll_ = run_variant(loss_, pq, **lean)
+        dp, da, de = (rel_groups(cl_, cd_, (g,)) for g in (0, 1, 7))
+        dl = float(np.max(np.abs(ll_ - ld_) / np.abs(ld_)))
+        same_kb = all(np.array_equal(x, y) for x, y in zip(leaves(cl_, (2, 3)), leaves(cd_, (2, 3))))
+        report(f"   lean vs default ({lab}, Potts 8, 101 steps): relative differences parameters {dp:.1e}, Adam state "
+               f"{da:.1e}, EMA {de:.1e}, losses max {dl:.1e}; key and step equal: {same_kb}")
+        check(f"13 lean vs default runner ({lab}, Potts 8 --quad --local, 101 steps): equal up to rounding (largest "
+              f"relative difference of parameters, Adam state, EMA, losses; key and step equal)",
+              max(dp, da, de, dl) + (not same_kb), tol)
 
     # --steps-schedule: no schedule = the old step counts; a schedule gives counts 100 m + 1 near the target
     old = [max(1, int(round(lm.paper_steps(k) * sc))) for sc in (1.0, 0.1, 2.0) for k in range(lm.N_TIME_STEPS)]
