@@ -5,7 +5,8 @@ PDFs go to ../figures; SVGs and JSON/NPZ data go to ../figure_data.
 The same sibling-directory layout applies when --output-dir is supplied.
 PNG previews are not saved. Captions are in ../figure_captions.tex.
 The manuscript main.tex is unchanged.
-No training, sampling, GPU computation or scheduler submission is performed.
+Static figure scripts only read completed results. The optional video pipeline
+below generates one isolated CPU trajectory; it does not train or request a GPU.
 
 Rebuild from this manuscript directory (writeups/njp_uc):
 
@@ -184,6 +185,48 @@ figure_captions.tex
     In the manuscript directory beside main.tex: suggested LaTeX figure
     environments for author review. Not yet included
     by main.tex. Paths assume compilation from the manuscript directory.
+
+videos/potts_state_probabilities.mp4
+    Animation of a real reverse-SDE trajectory: the visible image, conditional
+    probabilities of Potts states, mass by initial digit group, and the
+    decomposition of posterior entropy into between-group and within-group
+    uncertainty. These are conditional probabilities of the averaged model,
+    not a simulated sequence of discrete hidden-state switching events.
+    Initial cluster labels are approximate digit associations, not independently
+    measured final-state labels. Twelve states are selected once by their
+    maximum probability over the recorded trajectory; all omitted probability
+    is explicitly included as "all other states".
+
+    sample_potts_video.py streams adjacent parameter knots and uses Diffrax
+    SRA1 with the production tolerances (rtol=1e-4, atol=1e-6, Brownian tolerance
+    1e-12), matching the base-2000 trajectory's initial state and Brownian key.
+    One global Brownian tree is shared across all 99 intervals. The adaptive
+    solver restarts at parameter knots; the numerical endpoint need not be
+    bitwise identical to the production solve. Final differences are recorded.
+    Five saves per interval produce 397 distinct frames over generation s=0..5.
+
+    run_potts_video_cpu.sh requests a separate Slurm allocation (2 CPU cores,
+    8 GB, no GPU) and runs both sampling and encoding. Pass the absolute
+    oscillator_dev workspace directory as its first argument; supply a Slurm
+    --output path under figure_data/potts_video when submitting. It leaves
+    existing training runs, checkpoints and sample folders unchanged and
+    refuses to overwrite an existing final video.
+
+    render_potts_video.py also works independently from the saved trajectory.
+    Since the container lacks ffmpeg, --raw-video streams 1280x800 RGBA frames
+    directly to host ffmpeg; no PNG frames are saved. At 20 fps the default
+    video is about 20 seconds. --summary emits figures/potts_video_summary.pdf.
+
+figure_data/potts_video/
+    trajectory_000.npz contains generation_time, states, posterior,
+    state_initial_classes, normalization_mean and normalization_std.
+    trajectory_000.json records source provenance, initial/Brownian keys,
+    solver settings, per-interval step counts, independent NumPy/JAX drift
+    checks and final discrepancy against the saved reference sample.
+    Rounded normalization values from the training log are used for display
+    only, not integration. Partial files record progress while sampling and
+    are removed after successful completion. Scheduler logs and video_info.json
+    remain here for reproducibility and troubleshooting.
 
 Verification and provenance
 ---------------------------

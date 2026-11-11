@@ -83,8 +83,10 @@ variance and third cumulant of $y_j$ given $\vx$,
   T\partial_a\log Z_j=m_j,\qquad\partial_a m_j=v_j/T,\qquad\partial_a v_j=k_{3,j}/T .
 \end{equation}
 
-\paragraph{Idealisation.} We always integrate the hidden units out exactly. Physically this is the limit of
-hidden units that equilibrate infinitely fast compared with the pixels (Section~\ref{sec:physical}).
+\paragraph{Idealisation.} Integrating out the hidden units defines the equilibrium marginal exactly, without
+an assumption about their speed. Generation uses the resulting conditional mean force directly; interpreting
+this dynamics as a physical device requires the hidden units to equilibrate much faster than the pixels move
+and the imposed parameters change (Section~\ref{sec:physical}).
 
 \subsection{Ising units}
 For a deep double well with minima at $\pm y_0$, $y_j\to y_0h_j$ with $h_j=\pm1$ ($y_0$ absorbed into $\bm W,b$):
@@ -101,13 +103,76 @@ $\bm W=0$ is a degenerate stationary point (Section~\ref{sec:training}).
 
 \subsection{Potts units}
 A Potts unit is \emph{one} hidden unit with $M$ mutually exclusive states $m=1\dots M$ (exactly one active). State
-$m$ has its own couplings to all pixels and its own field:
+$m$ has its own couplings to all pixels and its own field. At a fixed diffusion time, suppressing the time
+dependence of the parameters, the joint energy is
+\begin{equation*}
+  E(\vx,y=m)\equiv E_m(\vx)=\Ev(\vx)-a_m(\vx),\qquad a_m(\vx)=b_m+\bm W_m\cdot\vx.
+\end{equation*}
+Here $y$ is a state label: $y=m$ selects the parameters of state $m$, rather than multiplying them by the number
+$m$. Summing the joint Boltzmann weight over this label gives
+\begin{equation*}
+  e^{-F(\vx)/T}=\sum_m e^{-E_m(\vx)/T}
+  =e^{-\Ev(\vx)/T}\sum_m e^{a_m(\vx)/T}.
+\end{equation*}
+Taking $-T$ times the logarithm gives the free energy; conditioning on a clamped visible configuration cancels
+the common factor $e^{-\Ev/T}$ and gives the occupation probabilities:
 \begin{equation}
   F(\vx)=\Ev(\vx)-T\log\sum_{m=1}^Me^{a_m(\vx)/T},\qquad p_m(\vx)=\frac{e^{a_m/T}}{\sum_ke^{a_k/T}} .
+  \label{eq:potts-marginal}
 \end{equation}
 The model is a mixture of $M$ tilted copies of the visible model; each state acts as a prototype. ``Potts 128'' is
 one unit with 128 states, not 128 units. In hardware a Potts unit is an $M$-well oscillator, or $M$ bistable units
-with strong lateral inhibition (winner-take-all); the code idealises it as exactly one-hot.
+with strong lateral inhibition (winner-take-all). The model assumes an exactly one-hot hidden state space;
+the numerical sampler sums over that space rather than simulating an individual hidden-state trajectory.
+
+\paragraph{Why the free-energy gradient is the mean force.} With the hidden state held at $m$, the visible
+force is $\bm f_m(\vx)=-\grad E_m(\vx)=-\grad\Ev(\vx)+\grad a_m(\vx)$. Differentiating
+\eqref{eq:potts-marginal} at fixed parameters gives
+\begin{align}
+  -\grad F(\vx)
+  &=-\grad\Ev(\vx)+T\grad\log\sum_m e^{a_m(\vx)/T}\nonumber\\
+  &=-\grad\Ev(\vx)+\sum_m\frac{e^{a_m(\vx)/T}}{\sum_k e^{a_k(\vx)/T}}\,\grad a_m(\vx)\nonumber\\
+  &=\sum_m p_m(\vx)\,\bm f_m(\vx).
+  \label{eq:potts-mean-force}
+\end{align}
+Thus the logarithmic sum produces precisely the conditional average of the state-dependent forces. The same
+derivation applies to the quadratic input fields introduced below. If per-pixel Ising units have already been
+summed out, replace $\Ev$ throughout this argument by $\Ev+F_{\rm local}$; their contribution is common to all
+Potts states, so the probabilities $p_m$ are unchanged.
+
+\paragraph{Free energy versus average energy.} The free energy also accounts for the entropy of the hidden
+state at fixed $\vx$:
+\begin{equation}
+  \begin{aligned}
+    F(\vx)&=\sum_m p_m(\vx)E_m(\vx)+T\sum_m p_m(\vx)\log p_m(\vx)\\
+    &=\langle E\rangle_{y\mid\vx}-T S(y\mid\vx),\qquad
+    S(y\mid\vx)=-\sum_m p_m\log p_m.
+  \end{aligned}
+  \label{eq:potts-entropy}
+\end{equation}
+It is therefore not simply the average energy. The entropy term ensures that its gradient gives
+\eqref{eq:potts-mean-force}, even though the occupation probabilities themselves depend on $\vx$.
+
+\paragraph{Physical switching and what is simulated.} A physical unit occupies one state at a time. At
+approximately fixed $\vx$, an ergodic hidden process that equilibrates to $p_m(\vx)$ spends a fraction $p_m$ of
+its time in state $m$. Consider a time window $\Delta s$ long compared with hidden mixing but short enough that
+the visible configuration and imposed parameters barely change. Then its time-averaged force is approximately
+\begin{equation*}
+  \frac{1}{\Delta s}\int_s^{s+\Delta s}\bm f_{y(u)}(\vx)\,du
+  \simeq\sum_m p_m(\vx)\bm f_m(\vx)=-\grad F(\vx).
+\end{equation*}
+For example, occupation fractions $p_1=0.7$ and $p_2=0.3$, with all others negligible, give
+$0.7\bm f_1+0.3\bm f_2$. This is stochastic hopping, not a prescribed periodic oscillation. Multiple states
+can contribute to the mean force while the instantaneous hidden state remains exclusive. Since their weights
+depend on the visible configuration, this averaging does not require the visible image to be an average of
+the prototypes: the effective landscape can retain distinct wells.
+
+Equation~\eqref{eq:potts-marginal} specifies equilibrium occupations, not transition rates or switching times.
+A fast and a slow hidden process can share those occupations while producing different transient visible
+dynamics. The present generation code evaluates $p_m$ and the mean force directly, with no simulated discrete
+jumps; a plot of changing probabilities or of their largest entry is therefore not a physical switching
+record. Replacing an explicit hidden process by this mean force during generation requires fast equilibration
+relative to both visible motion and the imposed parameter schedule (Section~\ref{sec:physical}).
 
 \subsection{Spring coupling and per-pixel units}
 \paragraph{Spring coupling (\texttt{--quad}).} The input field also contains the squared pixels,
@@ -273,10 +338,15 @@ simulation the drift $\vx-2\grad F$ is used directly.
 \section{When the idealisation holds}\label{sec:physical}
 The hidden units must follow their input field. Near $t=0$ the pixel relaxation time in generation is about $0.03$
 (stiffness $2k-1\approx36$), and pixel noise moves $a_j$ by about $T$ in a time $T/(2\|\bm W_j\|^2)$; the hidden
-correlation time must be short against both. At equal temperatures (clamped training, releases, replica
-generation) detailed balance keeps the pixel marginal exactly $e^{-F/T}$ for any hidden correlation time, which
-then only adds friction; with two temperatures it also heats the pixels. Bistability and speed pull against each
-other: a deep barrier gives Ising-like units, a shallow one fast switching (Kramers rate $\propto e^{-\Delta U/T}$);
+correlation time must be short against both, and against changes of the imposed parameter schedule. For frozen
+parameters, equal temperatures and ergodic dynamics satisfying detailed balance, the joint Gibbs distribution
+and its visible marginal are independent of the hidden transition rates. The single-copy model has marginal
+$\propto e^{-F/T}$; the replica construction for generation instead has marginal
+$\propto e^{-[2F-\|\vx\|^2/2]/T}$. These equilibrium statements do not imply that a time-dependent generative
+process follows the same dynamics for arbitrary hidden rates: finite hidden relaxation can introduce lag,
+memory and correlated force fluctuations. A temperature mismatch generally removes this Gibbs-equilibrium
+guarantee. Bistability and speed pull against each other: a deep barrier gives Ising-like units, a shallow one
+fast switching (Kramers rate $\propto e^{-\Delta U/T}$);
 the way out is a much higher attempt frequency than the pixels, with barriers of a few $T$. A Potts unit built from
 $M$ bistable units with finite inhibition will sometimes have zero or two units on; whether the model tolerates
 that is untested.

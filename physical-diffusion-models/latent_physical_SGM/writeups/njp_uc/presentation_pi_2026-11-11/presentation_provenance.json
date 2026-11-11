@@ -1,0 +1,28 @@
+{
+  "title": "Physical diffusion models with fast hidden units",
+  "presentation_date": "2026-11-11",
+  "main_slides": 19,
+  "backup_slides": 6,
+  "movie_slide": 17,
+  "primary_run": "mnist28_d0123456789_K1536_ema_potts_quad_local_quartic_r1_lin_pooled",
+  "validation": {
+    "latex_warnings": 0,
+    "science_review": "equations and claims checked against code, theory and saved metrics",
+    "visual_review": "math slides and scientific figure crops inspected",
+    "embedded_movie_sha256": "a1c030aeaf3531ad5fb79666a81876f6a4312a8f3191a498c481ad8f90aa7daf"
+  },
+  "asset_sha256": {
+    "assets/conceptual_draft.pdf": "12bd6a6ed8d60b33170f185428f7e9c08340da1b7a51528fad566c5f930cd5f8",
+    "assets/force_comparison_final.pdf": "10739894060cff6ff5ee8828b99ae31a3a842761ebeb08ff06ec75ff21529e01",
+    "assets/movie_poster.png": "c053fb2f580121ef3c702d15bae4a7489fccfecc27e2a52c9bc1844442d9a321",
+    "assets/parameter_evolution_draft.pdf": "e24dc474a0543669f597bd6eaced25a99e111e9d32f71c486b1f2852e91984b8",
+    "assets/parameter_evolution_linear.pdf": "edab05e886421e30a75becd74acdb07f4245285bd0ae8ae0c395f6c7300c11d9",
+    "assets/potts_video_summary.pdf": "3a159f90144ae3cdbe134464d60c537636f4b42c0fdcec6e5f4bc59ac16a4b5e",
+    "assets/sample_gallery_provenance.json": "52100d84868f414d8a6d0cf1216b2a9aae9aec17191b1decfcfe5491a2411c46",
+    "assets/sample_ising.pdf": "db08ff5ce916058a7f3855144e243ec3c978a22f9df7f9e8ae5b5e252333649d",
+    "assets/sample_potts.pdf": "1d84e528a6d97191ee87632c493fbdec4a136d2feef381babf2380f8eae872e0",
+    "assets/trajectory_provenance.json": "06cc44e68ea3a720a107c86c2c6a9b96472d71073d7bdb1785894f463cabd0b1",
+    "assets/video_info.json": "3360a097ef38f6bed611d717b5e5bb33fbe68442e67d6109fb6ec328755f49e0",
+    "assets/visible_coupling_evolution.pdf": "b12ce5193e4ff40a8ef3dee21d39968dd5d0d33b3217f857760c276203b41a59"
+  }
+}
