@@ -15,6 +15,8 @@
      <out>/<label>.npy for fid_score.py / evaluate_multiclass.py
   6. default path unchanged: sample_latent.sample with make_drift (no new flags) against a copy of the original
      sample_latent.py (sampler_check/orig/sample_latent.py) on the same trajectories, bit for bit; and job 4187940
+  7. --brownian cached: increments from cached tree values against VirtualBrownianTree.evaluate at three
+     tolerances; a fast solve with 'cached' against 'tree' (steps, final states)
 
 Usage (from latent_physical_SGM/):
   sbatch --time=00:45:00 jobs/run_gpu_neuronic.sh sampler_check.py --sections 1,2,3 --runs p784,i784 ...
@@ -281,9 +283,12 @@ def micro_costs(fs, x0, keys, reps=40):
         return jax.lax.fori_loop(0, reps, body, jnp.zeros(B))
 
     def one_bm(key):
-        bm = diffrax.VirtualBrownianTree(0.0, lm.T_FORWARD, fs.brownian_tol, (fs.n,), key, diffrax.SpaceTimeLevyArea)
+        bm = fs._path(key)
 
         def body(i, acc):
+            if fs.brownian == "cached":                       # one bisection per step
+                v = bm.levy_at(tt[i] + 1e-12 * acc)
+                return acc + v.W.sum() * 1e-20 + v.H.sum() * 1e-20
             inc = bm.evaluate(tt[i] + 1e-12 * acc, tt[i] + 1e-3, use_levy=True)
             return acc + inc.W.sum() * 1e-20 + inc.H.sum() * 1e-20
         return jax.lax.fori_loop(0, reps, body, jnp.zeros(()))
@@ -306,14 +311,15 @@ def speed(configs, micro=True):
     out = []
     loaded = {}
     for cfg in configs:
-        alias, chunk, tol, prec = cfg.split(":")
+        alias, chunk, tol, prec, *rest = cfg.split(":")
+        brownian = rest[0] if rest else "tree"
         chunk, tol = int(chunk), float(tol)
-        log(f"\n--- speed: {alias} chunk {chunk} tol {tol:g} precision {prec}")
+        log(f"\n--- speed: {alias} chunk {chunk} tol {tol:g} precision {prec} brownian {brownian}")
         if alias not in loaded:
             loaded.clear()
             loaded[alias] = load(alias)
         th, W, b, run_dir, kw = loaded[alias]
-        fs = sf.FastSampler(th, W, b, precision=prec, brownian_tol=tol, **kw)
+        fs = sf.FastSampler(th, W, b, precision=prec, brownian_tol=tol, brownian=brownian, **kw)
         set_name = "base"
         if kw["problem"] == "mnist28" and chunk > 500:
             raise SystemExit("mnist28 base set has 500 trajectories")
@@ -347,12 +353,13 @@ def speed(configs, micro=True):
 # ------------------------------------------------------------------------------------------------- section 5 --
 def dist_samples(specs):
     for spec in specs:
-        alias, n, chunk, tol, prec = spec.split(":")
+        alias, n, chunk, tol, prec, *rest = spec.split(":")
+        brownian = rest[0] if rest else "tree"
         n, chunk, tol = int(n), int(chunk), float(tol)
-        label = f"{alias}_n{n}_c{chunk}_tol{tol:g}_{prec}"
+        label = f"{alias}_n{n}_c{chunk}_tol{tol:g}_{prec}_{brownian}"
         log(f"\n--- samples: {label}")
         th, W, b, run_dir, kw = load(alias)
-        fs = sf.FastSampler(th, W, b, precision=prec, brownian_tol=tol, **kw)
+        fs = sf.FastSampler(th, W, b, precision=prec, brownian_tol=tol, brownian=brownian, **kw)
         args = SimpleNamespace(run=run_name(alias), set="base", n=n, chunk=chunk, sampler="sde")
         prov = {"note": "sampler_check section 5"}
         t0 = time.time()
@@ -391,6 +398,68 @@ def default_unchanged(aliases, m):
                   f"per trajectory {np.array2string(dd, precision=2)}")
 
 
+# ------------------------------------------------------------------------------------------------- section 7 --
+def brownian_checks(tols, alias, m, intervals):
+    """--brownian cached against the stock tree: (a) the tree's values (W_t, bar H_t) from the unrolled bisection vs
+    VirtualBrownianTree._evaluate, and the increments over consecutive random times from cached values vs
+    VirtualBrownianTree.evaluate(t0, t1, use_levy=True), per tolerance (H = bar H_{s,u} / (u - s) amplifies rounding
+    differences of the values by 1 / (u - s), so it is compared as (u - s) H); (b) a fast solve with 'cached' vs
+    'tree' on the same trajectories (steps and final states)."""
+    CachedTree, _ = sf._cached_brownian_classes()
+    from diffrax._misc import linear_rescale
+    rng = np.random.default_rng(1)
+    knots = sf.knot_times()[2]
+    ts = np.sort(np.concatenate([[0.0, lm.T_FORWARD], knots[rng.choice(knots.size, 20, replace=False)],
+                                 rng.uniform(0.0, lm.T_FORWARD, 200)]))
+    ts = np.unique(ts)
+    _, keys = trajectories("mnist28_d0123", 500, 8)
+    for tol in tols:
+        L = sf.tree_levels(tol)
+
+        def one(key, ts_):
+            tree = diffrax.VirtualBrownianTree(0.0, lm.T_FORWARD, tol, (lm.N,), key, diffrax.SpaceTimeLevyArea)
+            ct = CachedTree(tree, diffrax.SpaceTimeLevyArea, L)
+            ref = jax.vmap(lambda t: tree._evaluate(linear_rescale(tree.t0, t, tree.t1)))(ts_)
+            vals = jax.vmap(ct.levy_at)(ts_)
+            stock = jax.vmap(lambda a, b: tree.evaluate(a, b, use_levy=True))(ts_[:-1], ts_[1:])
+            v0 = jax.tree_util.tree_map(lambda x: x[:-1], vals)
+            v1 = jax.tree_util.tree_map(lambda x: x[1:], vals)
+            mine = jax.vmap(ct.increment)(v0, v1)
+            return (ref.W, ref.bar_H, vals.W, vals.bar_H, stock.W, stock.H * stock.dt[:, None],
+                    mine.W, mine.H * mine.dt[:, None])
+
+        out = jax.jit(jax.vmap(one, in_axes=(0, None)))(jnp.asarray(keys), jnp.asarray(ts))
+        rW, rB, vW, vB, sW, sH, mW, mH = [np.asarray(o) for o in out]
+        d_val = float(max(np.max(np.abs(rW - vW)), np.max(np.abs(rB - vB))))
+        dW, dH = float(np.max(np.abs(sW - mW))), float(np.max(np.abs(sH - mH)))
+        same = float(np.mean((rW == vW) & (rB == vB)))
+        check(f"7 cached Brownian values, tol {tol:g} ({L} levels)", max(d_val, dW, dH) <= 1e-13,
+              f"values max|diff| {d_val:.2e} (bit-identical share {same:.3f}, max|W| {np.max(np.abs(rW)):.2f}); "
+              f"increments over {len(ts) - 1} intervals x 8 keys: max|dW| {dW:.2e}, max|(u-s) dH| {dH:.2e}")
+    th, W, b, run_dir, kw = load(alias)
+    x0, keys = trajectories(kw["problem"], 500, m)
+    res = {}
+    for impl in ("tree", "cached"):
+        fs = sf.FastSampler(th, W, b, brownian=impl, **kw)
+        fs.solve_chunk(x0, keys, intervals=1)
+        t0 = time.time()
+        res[impl] = fs.solve_chunk(x0, keys, intervals=intervals)
+        log(f"  {alias}, {m} trajectories, {intervals or sf.N_INTERVALS} intervals, brownian {impl}: "
+            f"{time.time() - t0:.1f} s, mean steps {res[impl][1].sum(1).mean():.0f}")
+        del fs
+    # the steps can differ: during the first tiny steps (dt0 = 1e-8) H over a step is computed from O(1) values at its
+    # ends, so rounding differences of the values change it by percents (in the stock tree as well) and shift the
+    # step sizes; the final states must agree as closely as two runs of the old sampler do (about 1e-5)
+    d = np.max(np.abs(res["tree"][0] - res["cached"][0]), axis=1)
+    same = np.all(res["tree"][1] == res["cached"][1], axis=1)
+    tot = res["tree"][1].sum(1) - res["cached"][1].sum(1)
+    check(f"7 solve with cached Brownian values = stock tree ({alias})", np.median(d) < 1e-3,
+          f"identical steps in every interval for {int(same.sum())}/{m} trajectories (total step differences "
+          f"{np.array2string(tot)}); max|diff| per trajectory median {np.median(d):.2e}, max {np.max(d):.2e}")
+    RESULTS["sections"]["brownian_solve"] = {"max_diff": d.tolist(), "same_steps": same.tolist(),
+                                             "step_diff": tot.tolist()}
+
+
 # ---------------------------------------------------------------------------------------------------- main --
 def main():
     global REPORT
@@ -400,11 +469,16 @@ def main():
     ap.add_argument("--traj-runs", default="p784", help="section 3")
     ap.add_argument("--ntraj", type=int, default=16)
     ap.add_argument("--traj-tol", type=float, default=lm.BROWNIAN_TOL)
-    ap.add_argument("--speed", default="p784:250:1e-12:f64", help="section 4: RUN:CHUNK:TOL:PRECISION,...")
+    ap.add_argument("--speed", default="p784:250:1e-12:f64",
+                    help="section 4: RUN:CHUNK:TOL:PRECISION[:BROWNIAN],...")
     ap.add_argument("--no-micro", action="store_true")
-    ap.add_argument("--samples", default="", help="section 5: RUN:N:CHUNK:TOL:PRECISION,...")
+    ap.add_argument("--samples", default="", help="section 5: RUN:N:CHUNK:TOL:PRECISION[:BROWNIAN],...")
     ap.add_argument("--default-runs", default="paper,p784", help="section 6")
     ap.add_argument("--default-n", type=int, default=4)
+    ap.add_argument("--b-tols", default="1e-12,1e-8,1e-6", help="section 7")
+    ap.add_argument("--b-run", default="p784", help="section 7")
+    ap.add_argument("--b-ntraj", type=int, default=16, help="section 7")
+    ap.add_argument("--b-intervals", type=int, default=0, help="section 7: 0 = all")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     REPORT = os.path.join(OUT, "report.txt")
@@ -415,7 +489,9 @@ def main():
             ("3", trajectory_checks, (args.traj_runs.split(","), args.ntraj, args.traj_tol)),
             ("4", speed, ([c for c in args.speed.split(",") if c], not args.no_micro)),
             ("5", dist_samples, ([c for c in args.samples.split(",") if c],)),
-            ("6", default_unchanged, (args.default_runs.split(","), args.default_n))]
+            ("6", default_unchanged, (args.default_runs.split(","), args.default_n)),
+            ("7", brownian_checks, ([float(t) for t in args.b_tols.split(",")], args.b_run, args.b_ntraj,
+                                    args.b_intervals or None))]
     for key, fn, fargs in todo:
         if key not in sections:
             continue

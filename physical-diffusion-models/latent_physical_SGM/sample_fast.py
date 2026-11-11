@@ -65,10 +65,153 @@ import lineax  # noqa: E402
 
 PRECISIONS = ("f64", "mixed")
 VISIBLE_IMPLS = ("auto", "stencil", "dense")
+BROWNIAN_IMPLS = ("tree", "cached")
 STENCIL_MAX_OFFSETS = 24          # 'auto': stencil up to 24 lattice offsets (Chebyshev radius 3), dense above
 MAX_STEPS_INTERVAL = 100_000
 N_KNOTS = lm.N_TIME_STEPS
 N_INTERVALS = N_KNOTS - 1
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# --brownian cached: the same VirtualBrownianTree, one bisection per step instead of two
+# ---------------------------------------------------------------------------------------------------------------
+def tree_levels(tol, t0=0.0, t1=lm.T_FORWARD):
+    """Depth of VirtualBrownianTree's bisection over [t0, t1] at tolerance tol: its loop runs while
+    2^-level > tol / (t1 - t0) (same float64 numbers), e.g. 43 levels at 1e-12, 29 at 1e-8, 23 at 1e-6."""
+    tol_n = tol / (t1 - t0)
+    level = 0
+    while 2.0 ** (-level) > tol_n:
+        level += 1
+    return level
+
+
+def _cached_brownian_classes():
+    """The classes of --brownian cached, built on diffrax 0.6.0's VirtualBrownianTree internals (imported here, so
+    that the default path never touches them):
+      CachedTree      the stock tree plus levy_at(t), its value (W_t, H, bar H_t) at one time, the same bisection as
+                      VirtualBrownianTree._evaluate_leaf (SpaceTimeLevyArea, 'sqrt' spline) with the loop unrolled to
+                      its fixed depth, and increment(v0, v1) = VirtualBrownianTree.evaluate(t0, t1, use_levy=True)
+                      computed from the two values (the same _levy_diff and rescaling);
+      CachedSRA1      SRA1 whose solver state is the tree's value at the current time: a step evaluates the tree once
+                      (at its end) instead of twice. diffrax keeps the solver state of accepted steps only, so after a
+                      rejection the state is still the value at the step's start;
+      GivenIncrement  a control path that returns one precomputed increment (the step's)."""
+    import math
+    import equinox as eqx
+    import jax.random as jr
+    import jax.tree_util as jtu
+    if diffrax.__version__ != "0.6.0":
+        raise RuntimeError(f"--brownian cached is written against diffrax 0.6.0 internals, not {diffrax.__version__}")
+    from diffrax._brownian.tree import _LevyVal, _State, _levy_diff, _split_interval
+    from diffrax._custom_types import levy_tree_transpose
+    from diffrax._misc import linear_rescale
+    from diffrax._term import WrapTerm               # diffeqsolve wraps every term (time direction)
+
+    class GivenIncrement(diffrax.AbstractPath):
+        inc: diffrax.SpaceTimeLevyArea
+
+        @property
+        def t0(self):
+            return -jnp.inf
+
+        @property
+        def t1(self):
+            return jnp.inf
+
+        def evaluate(self, t0, t1=None, left=True, use_levy=False):
+            return self.inc if use_levy else self.inc.W
+
+    class CachedTree(diffrax.AbstractBrownianPath):
+        tree: diffrax.VirtualBrownianTree
+        levy_area: type = eqx.field(static=True)
+        n_levels: int = eqx.field(static=True)
+
+        @property
+        def t0(self):
+            return self.tree.t0
+
+        @property
+        def t1(self):
+            return self.tree.t1
+
+        def evaluate(self, t0, t1=None, left=True, use_levy=False):
+            return self.tree.evaluate(t0, t1, left, use_levy)
+
+        def levy_at(self, t):
+            tr = self.tree
+            r = linear_rescale(tr.t0, t, tr.t1)
+            return jtu.tree_map(lambda key, struct: self._leaf(key, r, struct), tr.key, tr.shape)
+
+        def increment(self, v0, v1):
+            tr = self.tree
+            out = levy_tree_transpose(tr.shape, jtu.tree_map(_levy_diff, tr.shape, v0, v1))
+            return tr._denormalise_bm_inc(out)
+
+        def _leaf(self, key, r, struct):
+            tr = self.tree
+            assert tr.levy_area is diffrax.SpaceTimeLevyArea and tr._spline == "sqrt"
+            shape, dtype = struct.shape, struct.dtype
+            r = jnp.asarray(r, dtype)
+            state_key, init_key_w, init_key_hh = jr.split(key, 3)
+            bhh_1 = jr.normal(init_key_hh, shape, dtype) / math.sqrt(12)
+            bhh_0 = jnp.zeros_like(bhh_1)
+            w_0 = jnp.zeros(shape, dtype)
+            w_1 = jr.normal(init_key_w, shape, dtype)
+            st = _State(level=0, s=jnp.zeros((), dtype), w_s_u_su=(w_0, w_1, w_1), key=state_key,
+                        bhh_s_u_su=(bhh_0, bhh_1, bhh_1), bkk_s_u_su=None)
+            for _ in range(self.n_levels):                        # VirtualBrownianTree's while loop, unrolled
+                _t, _w_stu, _w_st_tu, _keys, _bhh_stu, _bhh_st_tu, _, _ = tr._brownian_arch(st, shape, dtype)
+                _cond = r > _t
+                st = _State(level=st.level + 1, s=jnp.where(_cond, _t, st.s),
+                            w_s_u_su=_split_interval(_cond, _w_stu, _w_st_tu),
+                            key=jnp.where(_cond, _keys[0], _keys[1]),
+                            bhh_s_u_su=_split_interval(_cond, _bhh_stu, _bhh_st_tu), bkk_s_u_su=None)
+            s = st.s
+            su = jnp.asarray(2.0 ** -st.level, dtype=dtype)
+            sr = jax.nn.relu(r - s)
+            ru = jax.nn.relu(su - sr)
+            w_s, w_u, w_su = st.w_s_u_su
+            bhh_s, bhh_u, bhh_su = st.bhh_s_u_su
+            sr3, ru3, su3 = jnp.power(sr, 3), jnp.power(ru, 3), jnp.power(su, 3)
+            key1, key2 = jr.split(st.key, 2)
+            x1 = jr.normal(key1, shape, dtype)
+            x2 = jr.normal(key2, shape, dtype)
+            sr_ru_half = jnp.sqrt(sr * ru)
+            d = jnp.sqrt(sr3 + ru3)
+            d_prime = 1 / (2 * su * d)
+            a = d_prime * sr3 * sr_ru_half
+            b = d_prime * ru3 * sr_ru_half
+            with jax.numpy_dtype_promotion("standard"):
+                w_sr = sr / su * w_su + 6 * sr * ru / su3 * bhh_su + 2 * (a + b) / su * x1
+                w_r = w_s + w_sr
+                c = jnp.sqrt(3 * sr3 * ru3) / (6 * d)
+                bhh_sr = sr3 / su3 * bhh_su - a * x1 + c * x2
+                bhh_r = bhh_s + bhh_sr + 0.5 * (r * w_s - s * w_r)
+                inverse_r = 1 / jnp.where(jnp.abs(r) < jnp.finfo(r).eps, jnp.inf, r)
+                hh_r = inverse_r * bhh_r
+            return _LevyVal(dt=r, W=w_r, H=hh_r, bar_H=bhh_r, K=None, bar_K=None)
+
+    def control_term(term):
+        """(the ControlTerm, the WrapTerm direction or None) of the diffusion term as diffeqsolve passes it."""
+        return (term.term, term.direction) if isinstance(term, WrapTerm) else (term, None)
+
+    class CachedSRA1(diffrax.SRA1):
+        def init(self, terms, t0, t1, y0, args):
+            super().init(terms, t0, t1, y0, args)
+            return control_term(terms.terms[1])[0].control.levy_at(t0)
+
+        def step(self, terms, t0, t1, y0, args, solver_state, made_jump):
+            drift, diffusion = terms.terms
+            ct, direction = control_term(diffusion)
+            v1 = ct.control.levy_at(t1)
+            given = diffrax.ControlTerm(ct.vector_field, GivenIncrement(ct.control.increment(solver_state, v1)))
+            if direction is not None:
+                given = WrapTerm(given, direction)
+            y1, y_error, dense_info, _, result = super().step(diffrax.MultiTerm(drift, given), t0, t1, y0, args, None,
+                                                              made_jump)
+            return y1, y_error, dense_info, v1, result
+
+    return CachedTree, CachedSRA1
 
 
 def knot_times():
@@ -103,6 +246,8 @@ class FastSampler:
       precision     'f64' (default) or 'mixed' (the two hidden-unit GEMMs in float32 at HIGHEST precision)
       visible_impl  'auto' (stencil up to STENCIL_MAX_OFFSETS lattice offsets, else dense), 'stencil', 'dense'
       brownian_tol  VirtualBrownianTree tolerance (default lm.BROWNIAN_TOL = 1e-12, sample_latent's)
+      brownian      'tree' (default): the stock tree, evaluate(t0, t1) per step (two bisections); 'cached': the same
+                    tree and path, one bisection per step, unrolled (_cached_brownian_classes)
       rtol, atol, dt0  PIDController tolerances and the first step (default the paper's SDE settings)
       max_steps     per interval and trajectory
     sampler 'ode' builds the PF-ODE drift (for checks; solve_chunk integrates the SDE only).
@@ -111,11 +256,13 @@ class FastSampler:
     def __init__(self, theta_hist, W_hist, b_hist, problem="mnist28", hidden="ising", local=None, quad=None,
                  radius=None, neighbourhood="chebyshev", sampler="sde", precision="f64", visible_impl="auto",
                  brownian_tol=lm.BROWNIAN_TOL, rtol=lm.RTOL_SDE, atol=lm.ATOL_SDE, dt0=lm.DT0,
-                 max_steps=MAX_STEPS_INTERVAL):
+                 max_steps=MAX_STEPS_INTERVAL, brownian="tree"):
         if precision not in PRECISIONS:
             raise ValueError(f"precision must be one of {PRECISIONS}, not {precision!r}")
         if visible_impl not in VISIBLE_IMPLS:
             raise ValueError(f"visible_impl must be one of {VISIBLE_IMPLS}, not {visible_impl!r}")
+        if brownian not in BROWNIAN_IMPLS:
+            raise ValueError(f"brownian must be one of {BROWNIAN_IMPLS}, not {brownian!r}")
         if hidden not in ("ising", "potts"):
             raise ValueError(f"hidden must be 'ising' or 'potts', not {hidden!r}")
         theta_hist = np.asarray(theta_hist, dtype=np.float64)
@@ -138,6 +285,9 @@ class FastSampler:
         self.precision = precision
         self.brownian_tol, self.rtol, self.atol, self.dt0 = float(brownian_tol), float(rtol), float(atol), float(dt0)
         self.max_steps = int(max_steps)
+        self.brownian, self.n_levels = brownian, tree_levels(self.brownian_tol)
+        if brownian == "cached":
+            self._CachedTree, self._CachedSRA1 = _cached_brownian_classes()
         self.order, self.xp, self.s = knot_times()
 
         # visible energy: only the pair groups (and k_6) that are nonzero somewhere in the history; the others are
@@ -166,13 +316,15 @@ class FastSampler:
         self._sig = jnp.full((n,), jnp.sqrt(2.0 * lm.TEMP))       # sample_latent: jnp.sqrt(2.0 * lm.TEMP) * eye(n)
 
         self._args_jit = jax.jit(self._interval_args)
-        self._solve_jit = jax.jit(jax.vmap(self._solve_one, in_axes=(0, 0, 0, None, None, None)))
+        self._solve_jit = jax.jit(jax.vmap(self._solve_one, in_axes=(0, 0, 0, 0, None, None, None)))
+        self._levy0_jit = jax.jit(jax.vmap(self._levy0))
         self._drift_batch = jax.jit(jax.vmap(self.drift, in_axes=(0, 0, None)))
 
     # ------------------------------------------------------------------------------------------------ settings --
     def settings(self):
         """The sampler settings, for the samples manifest."""
         return {"impl": "fast", "precision": self.precision, "visible": self.visible, "brownian_tol": self.brownian_tol,
+                "brownian": self.brownian, "tree_levels": self.n_levels,
                 "rtol": self.rtol, "atol": self.atol, "dt0": self.dt0, "solver": "SRA1",
                 "levy_area": "SpaceTimeLevyArea", "diffusion": "diagonal (lineax.DiagonalLinearOperator)",
                 "interp": "linear (jnp.interp convention), hidden fields and forces mixed from the two knots",
@@ -245,18 +397,33 @@ class FastSampler:
     def _diffusion(self, t, y, args):
         return lineax.DiagonalLinearOperator(self._sig)
 
-    def _solve_one(self, y, key, cstate, t0, t1, args):
-        """One trajectory over one knot interval [t0, t1] (vmapped over the chunk). The Brownian tree is the same
-        object solve_SDE builds (over [0, T_FORWARD], same key and tolerance), so every interval reads the same path."""
-        bm = diffrax.VirtualBrownianTree(0.0, lm.T_FORWARD, self.brownian_tol, (self.n,), key,
-                                         diffrax.SpaceTimeLevyArea)
-        terms = diffrax.MultiTerm(diffrax.ODETerm(self.drift), diffrax.ControlTerm(self._diffusion, bm))
+    def _path(self, key):
+        """The trajectory's Brownian path: the tree solve_SDE builds (over [0, T_FORWARD], same key and tolerance),
+        so every interval reads the same path; wrapped for --brownian cached."""
+        tree = diffrax.VirtualBrownianTree(0.0, lm.T_FORWARD, self.brownian_tol, (self.n,), key,
+                                           diffrax.SpaceTimeLevyArea)
+        if self.brownian == "cached":
+            return self._CachedTree(tree, diffrax.SpaceTimeLevyArea, self.n_levels)
+        return tree
+
+    def _levy0(self, key):
+        """--brownian cached: the solver state at t = 0 (the tree's value there); a dummy otherwise."""
+        if self.brownian == "cached":
+            return self._path(key).levy_at(jnp.zeros((), dtype=jnp.float64))
+        return jnp.zeros(())
+
+    def _solve_one(self, y, key, cstate, bstate, t0, t1, args):
+        """One trajectory over one knot interval [t0, t1] (vmapped over the chunk), starting from the controller
+        state cstate (and, --brownian cached, the Brownian value bstate at t0)."""
+        cached = self.brownian == "cached"
+        terms = diffrax.MultiTerm(diffrax.ODETerm(self.drift), diffrax.ControlTerm(self._diffusion, self._path(key)))
         sol = diffrax.diffeqsolve(
-            terms, diffrax.SRA1(), t0=t0, t1=t1, dt0=cstate[2], y0=y, args=args,
-            saveat=diffrax.SaveAt(t1=True, controller_state=True),
+            terms, self._CachedSRA1() if cached else diffrax.SRA1(), t0=t0, t1=t1, dt0=cstate[2], y0=y, args=args,
+            saveat=diffrax.SaveAt(t1=True, controller_state=True, solver_state=cached),
             stepsize_controller=diffrax.PIDController(rtol=self.rtol, atol=self.atol),
-            controller_state=cstate, max_steps=self.max_steps)
-        return sol.ys[-1], sol.controller_state, sol.stats["num_steps"], sol.stats["num_accepted_steps"]
+            controller_state=cstate, solver_state=bstate if cached else None, max_steps=self.max_steps)
+        return (sol.ys[-1], sol.controller_state, sol.solver_state if cached else bstate, sol.stats["num_steps"],
+                sol.stats["num_accepted_steps"])
 
     def initial_controller_state(self, B):
         """PIDController.init's state for dt0 (no step_ts / jump_ts clipping at t = 0): (made_jump, at_dtmin, dt,
@@ -273,10 +440,11 @@ class FastSampler:
         y = jnp.asarray(x0, dtype=jnp.float64)
         keys = jnp.asarray(keys)
         cstate = self.initial_controller_state(y.shape[0])
+        bstate = self._levy0_jit(keys)
         steps, acc = [], []
         for j in range(N_INTERVALS if intervals is None else intervals):
-            y, cstate, ns, na = self._solve_jit(y, keys, cstate, jnp.asarray(self.s[j]), jnp.asarray(self.s[j + 1]),
-                                                self.interval_args(j))
+            y, cstate, bstate, ns, na = self._solve_jit(y, keys, cstate, bstate, jnp.asarray(self.s[j]),
+                                                        jnp.asarray(self.s[j + 1]), self.interval_args(j))
             steps.append(ns)
             acc.append(na)
         y = np.asarray(y)
