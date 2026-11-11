@@ -148,6 +148,24 @@ def parse():
                          "products; parameters, Adam, EMA, the data stream and validation stay float64. Exact "
                          "hidden statistics only (not with --hidden-samples, --hidden-rule cd1, --hidden-norm "
                          "occupancy or --hidden-floor)")
+    ap.add_argument("--step-impl", choices=["default", "lean"], default="default",
+                    help="lean: the same training steps with less overhead: each chunk's 100 batches drawn before the "
+                         "scan from the same keys, the theta projection and k_6 gradient zeroing as constant masks "
+                         "(build_runner chunk_batches, theta_masks). Bit-identical to default (speed_check.py "
+                         "section 6). (--select ema skips the unused best_params update in either case)")
+    ap.add_argument("--steps-schedule", default="",
+                    help="step factors per slice range, 'k0:f0,k1:f1,...': slice k >= k_i (the last such entry) runs "
+                         "paper_steps(k) x --steps-scale x f_i steps, rounded to the nearest 100 m + 1 (no "
+                         "recompilation); slices before the first entry factor 1. E.g. '30:0.5,70:1,80:2'. Empty "
+                         "(default): the paper's schedule, rounded as before")
+    ap.add_argument("--ref-kmeans", choices=["cpu", "gpu"], default="cpu",
+                    help="Potts units: the k-means of the prototype reference (latent_model.prototype_reference) in "
+                         "numpy (cpu, default) or on the GPU (latent_model.kmeans_jax: the same seeding draws and "
+                         "iterations in float64, equal up to rounding; minutes -> seconds at K >= 784)")
+    ap.add_argument("--assemble", choices=["files", "memory"], default="files",
+                    help="final params_history.npy / hidden_history.npz from this job's slices kept in memory "
+                         "(memory; slices of an earlier job are read from their files) instead of re-reading every "
+                         "slice file (files, default). The same file contents")
     ap.add_argument("--hidden-fixed", action="store_true",
                     help="hold the hidden couplings at the closed-form reference of each slice (Fisher or prototype "
                          "W*, b*; per-pixel w*, c*) and train only the visible parameters. Not with --quad (no "
@@ -231,6 +249,86 @@ def save_atomic(path, **arrays):
     tmp = path + ".tmp.npz"
     np.savez(tmp, **arrays)
     os.replace(tmp, path)
+
+
+def parse_steps_schedule(spec):
+    """--steps-schedule 'k0:f0,k1:f1,...' (first slice : step factor; slices ascending in 0..99, factors > 0) ->
+    tuple of (k_i, f_i); '' -> () (the paper's schedule, as before). Slice k gets the factor f_i of the last entry
+    with k_i <= k, and factor 1 before the first entry; e.g. '30:0.5,70:1,80:2' halves slices 30-69 and doubles
+    80-99."""
+    spec = (spec or "").strip()
+    if not spec:
+        return ()
+    out = []
+    for part in spec.split(","):
+        try:
+            k, f = part.split(":")
+            k, f = int(k), float(f)
+        except ValueError:
+            raise ValueError(f"--steps-schedule {spec!r}: entries must be 'slice:factor', e.g. '30:0.5,80:2'") from None
+        if not (0 <= k < lm.N_TIME_STEPS and np.isfinite(f) and f > 0) or (out and k <= out[-1][0]):
+            raise ValueError(f"--steps-schedule {spec!r}: slices must ascend within 0..{lm.N_TIME_STEPS - 1} and "
+                             f"factors must be > 0")
+        out.append((k, f))
+    return tuple(out)
+
+
+def steps_schedule_str(schedule):
+    """Canonical form of a parsed --steps-schedule (as recorded in config.json; '' = none)."""
+    return ",".join(f"{k}:{f!r}" for k, f in schedule)
+
+
+def steps_factor(schedule, k):
+    """Step factor of slice k under a parsed --steps-schedule (1 without one)."""
+    f = 1.0
+    for k0, fk in schedule:
+        if k >= k0:
+            f = fk
+    return f
+
+
+def slice_steps(k, steps_scale=1.0, schedule=()):
+    """Adam steps of slice k. Without a schedule, as before: max(1, round(paper_steps(k) * steps_scale)). With one
+    (--steps-schedule): paper_steps(k) * steps_scale * factor(k), rounded to the nearest count of the form 100 m + 1
+    with m >= 1 (at least 101), the form of every paper_steps(k), so that every slice runs m chunks of 100 steps and
+    one single step, the two lengths the jitted run is compiled for (each further remainder length costs one more
+    compilation of a few seconds; e.g. --steps-scale 2 alone gives 2 x (100 m + 1) = 100 (2m) + 2 steps)."""
+    if not schedule:
+        return max(1, int(round(lm.paper_steps(k) * steps_scale)))
+    x = lm.paper_steps(k) * steps_scale * steps_factor(schedule, k)
+    return 100 * max(1, int(round((x - 1.0) / 100.0))) + 1
+
+
+def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None):
+    """The sampler's input: params_history.npy (theta per slice) and hidden_history.npz (W, b, t, then wl, bl with
+    --local, then Q with --quad and K > 0), stacked in slice order. Slices in `held` (slice -> the arrays as saved in
+    its slice file; --assemble memory) are taken from memory, all others are read from their slice files (every
+    slice with --assemble files, and slices made by an earlier job: resume, --init-from). The same arrays in the same
+    order either way, so the files hold the same bytes (the zip entries of the .npz carry their write time). Returns
+    the shape of the theta history."""
+    held = held or {}
+    thetas, Ws, bs, wls, bls, Qs = [], [], [], [], [], []
+    for k in range(n_slices):
+        s = held[k] if k in held else np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
+        thetas.append(s["theta"])
+        Ws.append(s["W"])
+        bs.append(s["b"])
+        if local:
+            wls.append(s["wl"])
+            bls.append(s["bl"])
+        if quad:
+            Qs.append(s["Q"])
+    tmp = os.path.join(out_dir, "params_history.tmp.npy")
+    theta_hist = np.stack(thetas)
+    np.save(tmp, theta_hist)
+    os.replace(tmp, os.path.join(out_dir, "params_history.npy"))
+    tmp = os.path.join(out_dir, "hidden_history.tmp.npz")
+    loc = {"wl": np.stack(wls), "bl": np.stack(bls)} if local else {}
+    if Qs:
+        loc["Q"] = np.stack(Qs)
+    np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
+    os.replace(tmp, os.path.join(out_dir, "hidden_history.npz"))
+    return theta_hist.shape
 
 
 def scale_by_adam_grouped(group_keys, b1=0.9, b2=0.999, eps=1e-8):
@@ -331,8 +429,16 @@ class OccupancyTransform:
 
 def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sextic", n_pairs=None,
                  cd1_grad=None, cd1_releases=1, loss_key=False, floor=0.0, floor_samples=0, hidden_norm="element",
-                 occ_beta=0.999, occ_same_draws=False, zero_slices=()):
+                 occ_beta=0.999, occ_same_draws=False, zero_slices=(), track_best=True, theta_masks=False,
+                 chunk_batches=False):
     """Jitted scan of n training steps, identical in effect to the paper's training_step loop.
+    track_best (default True): best_params follows the paper's slice result at every step. False (--select ema, whose
+    slice result is the EMA): best_params keeps its value from init_carry, which saves reading and writing one copy of
+    every parameter per step; best_loss and best_epoch are still tracked and the carry keeps its structure.
+    theta_masks, chunk_batches (--step-impl lean; both False by default, which leaves every step as before): the
+    projection of theta and the zeroing of the k_6 gradient as elementwise selects with constant masks instead of
+    indexed updates; the n steps' batches drawn before the scan, from the same keys (the per-step split of the key
+    chain, then one vmapped sample_forward_process). Both give the same numbers (speed_check.py section 6).
     zero_slices (--pair-terms): slices of the flat visible parameters set to exactly zero after every step (dropped
     pair-coupling groups); empty by default, which leaves every step unchanged.
 
@@ -373,8 +479,22 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
     w_ema = 1.0 / ema_steps
     if visible == "quartic":
         kd, cd = lm.kduff_slice(n_vis), lm.cduff_slice(n_vis, n_pairs)
+    if theta_masks:                       # project() and the k_6 gradient zeroing below as constant masks
+        n_theta = 4 * n_vis + 3 * n_pairs
+        zero_m, floor_v, k6_m = np.zeros(n_theta, bool), np.full(n_theta, -np.inf), np.zeros(n_theta, bool)
+        k6_m[k6] = True
+        for s in zero_slices:
+            zero_m[s] = True
+        if visible == "sextic":
+            floor_v[k6] = lm.K6_FLOOR
+        else:
+            zero_m[k6] = True
+            floor_v[kd] = lm.K4_FLOOR
+            floor_v[cd] = 0.0             # dropped c_duff entries are zeroed as before (max(0, 0) = 0 there)
 
     def project(theta):
+        if theta_masks:                   # the same values as the indexed updates below (max(x, -inf) = x)
+            return jnp.where(zero_m, 0.0, jnp.maximum(theta, floor_v))
         for s in zero_slices:             # --pair-terms: dropped pair-coupling groups stay exactly zero
             theta = theta.at[s].set(0.0)
         if visible == "sextic":           # the paper's constraint
@@ -402,10 +522,13 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         idx = jr.categorical(key, A / lm.TEMP, axis=-1, shape=(floor_samples,) + A.shape[:-1])
         return jnp.bincount(idx.ravel(), length=A.shape[-1]).astype(A.dtype) / idx.size
 
-    def one_step(carry, t_curr, lrs, dt):
+    def one_step(carry, t_curr, lrs, dt, xs=None):
         params, adam_state, key, step, best_params, best_loss, best_epoch, ema = carry
-        key, k_epoch, k_release = jr.split(key, 3)                # same split as run_optimization (third key unused there)
-        X = sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train, k_epoch, beta=1)
+        if xs is None:
+            key, k_epoch, k_release = jr.split(key, 3)            # same split as run_optimization (third key unused there)
+            X = sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train, k_epoch, beta=1)
+        else:                                                     # chunk_batches: this step's batch and third key, drawn
+            X, k_release = xs                                     # before the scan (the carry's key is already advanced)
         k_floor = k_release
         if extra_key:                                             # one more key, for the visit count
             k_release, k_floor = jr.split(k_release)
@@ -419,7 +542,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         if cd1_grad is not None:                                  # local rule for the hidden parameters
             grads = dict(grads, **cd1_grad(params, X, k_cd1, dt, cd1_releases))
         if visible == "quartic":                                  # k_6 is not a parameter of the quartic model
-            grads = dict(grads, theta=grads["theta"].at[k6].set(0.0))
+            grads = dict(grads, theta=(jnp.where(k6_m, 0.0, grads["theta"]) if theta_masks
+                                       else grads["theta"].at[k6].set(0.0)))
         if occupancy:
             occ = (lm.loss_draw_occupation(params, X, lm.TEMP, k_loss, floor_samples) if occ_same_draws
                    else occupation(params, X, k_floor))
@@ -432,7 +556,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
             new["b"] = new["b"] + floor * lrs["b"] * decay * unvisited(params, X, k_floor)
         new["theta"] = project(new["theta"])
         better = loss < best_loss
-        best_params = jax.tree_util.tree_map(lambda a, b: jnp.where(better, a, b), new, best_params)
+        if track_best:                    # --select ema never reads best_params (the slice result is the EMA)
+            best_params = jax.tree_util.tree_map(lambda a, b: jnp.where(better, a, b), new, best_params)
         best_loss = jnp.where(better, loss, best_loss)
         best_epoch = jnp.where(better, step, best_epoch)
         ema = jax.tree_util.tree_map(lambda e, p: e + w_ema * (p - e), ema, new)
@@ -440,7 +565,18 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
 
     @partial(jax.jit, static_argnums=3)
     def run(carry, t_curr, lrs, n, dt=0.0):
-        return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt), carry, None, length=n)
+        if not chunk_batches:
+            return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt), carry, None, length=n)
+
+        def keys(key, _):                 # one_step's per-step split of the key chain, ahead of the scan
+            key, k_epoch, k_release = jr.split(key, 3)
+            return key, (k_epoch, k_release)
+
+        key, (k_epochs, k_releases) = jax.lax.scan(keys, carry[2], None, length=n)
+        Xs = jax.vmap(lambda k: sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train,
+                                                       k, beta=1))(k_epochs)
+        return jax.lax.scan(lambda c, xs: one_step(c, t_curr, lrs, dt, xs), carry[:2] + (key,) + carry[3:],
+                            (Xs, k_releases))
 
     return run, adam
 
@@ -536,6 +672,9 @@ def main():
                          "cd1, --hidden-norm occupancy or --hidden-floor (their draws and occupations would change "
                          "with the float32 fields)")
     pair_terms = lm.parse_pair_terms(args.pair_terms)          # raises on an invalid list
+    steps_sched = parse_steps_schedule(args.steps_schedule)    # raises on an invalid schedule
+    if args.ref_kmeans == "gpu" and not (args.hidden == "potts" and args.K > 0):
+        raise ValueError("--ref-kmeans gpu is the k-means of the Potts prototype reference (--hidden potts, --K > 0)")
     if args.neighbourhood != "chebyshev" and args.radius is None:
         raise ValueError("--neighbourhood von_neumann needs an explicit --radius")
     if args.hidden_norm == "state" and (args.K < 1 or args.hidden_fixed):
@@ -574,7 +713,8 @@ def main():
         "pair_terms": ",".join(pair_terms) if pair_terms else "none", "neighbourhood": args.neighbourhood,
         "ising_reseed": args.ising_reseed, "ising_weak_boost": args.ising_weak_boost, "val_every": args.val_every,
         "init_from": args.init_from, "init_slices": args.init_slices, "lr_scale": args.lr_scale,
-        "visible_impl": args.visible_impl, "precision": args.precision,
+        "visible_impl": args.visible_impl, "precision": args.precision, "step_impl": args.step_impl,
+        "steps_schedule": steps_schedule_str(steps_sched), "ref_kmeans": args.ref_kmeans, "assemble": args.assemble,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -591,7 +731,8 @@ def main():
                 "pair_terms": "duff,lin,om", "neighbourhood": "chebyshev",
                 "ising_reseed": False, "ising_weak_boost": 1.0, "val_every": 0,
                 "init_from": None, "init_slices": 0, "lr_scale": 1.0,
-                "visible_impl": "dense", "precision": "f64"}   # runs started before these options existed
+                "visible_impl": "dense", "precision": "f64", "step_impl": "default",
+                "steps_schedule": "", "ref_kmeans": "cpu", "assemble": "files"}   # runs started before these options existed
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -617,7 +758,7 @@ def main():
         return
     log(logf, f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; job {os.environ.get('SLURM_JOB_ID', 'manual')}; "
               f"jax {jax.__version__}; devices {jax.devices()}; code {code_sha}; config "
-              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision')})}"
+              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision', 'step_impl', 'steps_schedule', 'ref_kmeans', 'assemble')})}"
               + (f"; cd1 kappa {args.cd1_kappa}, dt {args.cd1_dt}, releases {args.cd1_releases}, "
                  f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else ""))
 
@@ -656,10 +797,12 @@ def main():
     if args.hidden_rule == "cd1":
         cd1_grad = lm.make_cd1_hidden_grad(vis, lm.TEMP, K, args.hidden, args.local, samples=args.cd1_hidden_samples)
         field_scale = jax.jit(lambda p, X: lm.hidden_field_scale(p, X, lm.TEMP, K, args.hidden, args.local))
+    lean = {"theta_masks": True, "chunk_batches": True} if args.step_impl == "lean" else {}
     run, adam = build_runner(loss_fn, data_train, n_vis, args.ema_steps, args.visible, vis.P,
                              cd1_grad=cd1_grad, cd1_releases=args.cd1_releases, loss_key=args.hidden_samples > 0,
                              floor=args.hidden_floor, floor_samples=args.hidden_samples, hidden_norm=args.hidden_norm,
-                             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices)
+                             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
+                             track_best=args.select == "best", **lean)
     run_late = None
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
         run_late, _ = build_runner(
@@ -667,7 +810,8 @@ def main():
                          jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt),
             data_train, n_vis, args.ema_steps, args.visible, vis.P, loss_key=True,
             floor=args.hidden_floor, floor_samples=args.hidden_samples_late, hidden_norm=args.hidden_norm,
-            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices)
+            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
+            track_best=args.select == "best", **lean)
 
     state_cls = None
     if fisher:
@@ -679,14 +823,18 @@ def main():
     elif K > 0 and args.hidden == "potts":
         km_seed = 100 * (args.seed - lm.KEY_SEED)
         pooled = args.proto_init in ("pooled", "random")       # random: the reference only sets lr scales/diagnostics
-        W_ref, b_ref, state_cls = lm.prototype_reference(data, labels, taus, lm.TEMP, K, seed=km_seed, pooled=pooled)
+        t_ref = time.time()
+        km_fn = lm.kmeans_jax if args.ref_kmeans == "gpu" else None    # None: numpy k-means (lm.kmeans), as before
+        W_ref, b_ref, state_cls = lm.prototype_reference(data, labels, taus, lm.TEMP, K, seed=km_seed, pooled=pooled,
+                                                         kmeans_fn=km_fn)
         if not (np.isfinite(W_ref).all() and np.isfinite(b_ref).all()):
             raise RuntimeError(f"prototype reference is not finite for --seed {args.seed} (k-means seeds {km_seed} + class)")
         # The hidden learning-rate scales always come from the default-seed reference (k-means seed 0), so that
         # --seed changes the initial prototypes and the key chain but not the step sizes (rms b* is sensitive to the
         # clustering: at t = 0 it is 0.59 for k-means seed 0 and 1.5 for seed 100 with 128 states at 14x14).
         W_lr, b_lr = (W_ref, b_ref) if km_seed == 0 else \
-            lm.prototype_reference(data, labels, taus, lm.TEMP, K, seed=0, pooled=pooled)[:2]
+            lm.prototype_reference(data, labels, taus, lm.TEMP, K, seed=0, pooled=pooled, kmeans_fn=km_fn)[:2]
+        t_ref = time.time() - t_ref
         sW = np.sqrt(np.mean(W_lr**2, axis=(1, 2)))
         sb = np.maximum(np.sqrt(np.mean(b_lr**2, axis=1)), lm.TEMP)
         rb = np.maximum(np.sqrt(np.mean(b_ref**2, axis=1)), lm.TEMP)
@@ -696,7 +844,8 @@ def main():
                   f"{np.linalg.norm(W_ref[0]):.4g} (t=5) -> {np.linalg.norm(W_ref[-1]):.4g} (t=0); rms b* {rb[0]:.3g} -> "
                   f"{rb[-1]:.3g}; rms W* per entry {rW[0]:.3g} -> {rW[-1]:.3g}; hidden lr scales (k-means seed 0): "
                   f"b {sb[0]:.3g} -> {sb[-1]:.3g}, W {sW[0]:.3g} -> {sW[-1]:.3g}"
-                  + ("; initial W random (rms of W* at t = 5), b = 0" if args.proto_init == "random" else ""))
+                  + ("; initial W random (rms of W* at t = 5), b = 0" if args.proto_init == "random" else "")
+                  + f"; computed in {t_ref:.1f} s (k-means on the {args.ref_kmeans})")
         np.save(os.path.join(out_dir, "state_class.npy"), state_cls)
     elif K > 0 and args.hidden == "ising":       # K Ising units, one per node of a split tree (latent_model.split_reference)
         km_seed = 100 * (args.seed - lm.KEY_SEED)
@@ -751,7 +900,8 @@ def main():
         with open(os.path.join(src, "config.json")) as f:
             scfg = json.load(f)
         free = {"name", "steps_scale", "val_every", "lr_scale", "init_from", "init_slices", "max_slices",
-                "visible_impl", "precision"}         # numerics of the new slices only: a continuation may differ
+                "visible_impl", "precision", "step_impl", "steps_schedule", "ref_kmeans",
+                "assemble"}                          # numerics of the new slices only: a continuation may differ
         bad = {k: (scfg.get(k, defaults.get(k)), v) for k, v in config.items()
                if k not in free and k in defaults and scfg.get(k, defaults.get(k)) != v}
         bad.update({k: (scfg.get(k), config[k]) for k in ("K", "cls", "hidden_lr_scale", "freeze_hidden_slices")
@@ -818,12 +968,13 @@ def main():
         log(logf, f"resuming at slice {done} ({where}) from {slice_dir}")
 
     # ---- slices -----------------------------------------------------------------------------------------------
+    held = {} if args.assemble == "memory" and n_slices == lm.N_TIME_STEPS else None   # this job's slices (assembly)
     for k in range(done, n_slices):
         W_prev = np.asarray(params["W"]) if tree is not None else None    # the previous slice's units (diagnostics)
         t0 = time.time()
         t_curr = float(taus[k])
         optimization_key, optimization_subkey = jr.split(optimization_key)
-        n_steps = max(1, int(round(lm.paper_steps(k) * args.steps_scale)))
+        n_steps = slice_steps(k, args.steps_scale, steps_sched)          # without a schedule: as before
         if args.hidden_fixed:                    # hidden couplings = this slice's closed-form reference, not trained
             params = dict(params)
             if K > 0:
@@ -933,6 +1084,7 @@ def main():
                "first_loss": float(losses[0]), "last1000_mean": float(np.mean(losses[-1000:])),
                "best_loss": best_loss, "best_epoch": best_epoch, "val_loss": val, "val_median": float(np.median(val_ps)),
                "select": args.select, "seconds": t_train, "steps_per_s": n_steps / t_train,
+               **({"steps_factor": steps_factor(steps_sched, k)} if steps_sched else {}),
                "job": os.environ.get("SLURM_JOB_ID", "manual"), "code_sha256": code_sha}
         if args.val_every:                      # learning curve: add the final slice result, save per-sample losses
             if curve_steps[-1] != n_steps:
@@ -1013,6 +1165,9 @@ def main():
                     key=np.asarray(optimization_key), loss_trace=losses[::10].astype(np.float32),
                     val_per_sample=val_ps.astype(np.float32), val_idx=idx.astype(np.int32), record=json.dumps(rec),
                     **extra)
+        if held is not None:                     # --assemble memory: the arrays just saved, for write_history
+            held[k] = {"theta": np.asarray(params["theta"]), "W": np.asarray(params["W"]),
+                       "b": np.asarray(params["b"]), **{g: extra[g] for g in ("Q", "wl", "bl") if g in extra}}
         with open(os.path.join(out_dir, "train_log.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
         msg = (f"slice {k:3d} t {t_curr:.4f}: {n_steps} steps in {t_train:.0f} s ({rec['steps_per_s']:.0f}/s); "
@@ -1046,7 +1201,14 @@ def main():
         log(logf, msg)
 
     # ---- assemble ---------------------------------------------------------------------------------------------
-    if n_slices == lm.N_TIME_STEPS:
+    if n_slices == lm.N_TIME_STEPS and held is not None:      # --assemble memory: the same files (write_history)
+        t_asm = time.time()
+        shape = write_history(out_dir, slice_dir, n_slices, taus, args.local, args.quad and K > 0, held)
+        with open(os.path.join(out_dir, "DONE"), "w") as f:
+            f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
+        log(logf, f"assembled params_history.npy {shape} and hidden_history.npz in {time.time() - t_asm:.1f} s "
+                  f"({len(held)} slices from memory, {n_slices - len(held)} from their files); DONE")
+    elif n_slices == lm.N_TIME_STEPS:
         thetas, Ws, bs, wls, bls, Qs = [], [], [], [], [], []
         for k in range(n_slices):
             s = np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))

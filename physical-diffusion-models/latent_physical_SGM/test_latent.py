@@ -11,6 +11,11 @@
   6. speed of the new trainer for K = 0 and K = 1
   7. sampler drift with a hidden unit  vs  x - 2 grad F by autodiff of the reference free energy
   8. sampler on the paper checkpoint (4 trajectories)  vs  the saved states of job 4187940; K = 1 sampler smoke
+  ...
+  13. the opt-in fast paths: stencil / dense_skip visible energy vs dense; the mixed-precision loss (float32 at
+      HIGHEST) vs float64; the per-step trims (best_params skipped under --select ema, --step-impl lean) bitwise
+      against the default runner; --steps-schedule; the GPU k-means (--ref-kmeans gpu) vs numpy; the history
+      assembly from memory (--assemble memory) vs from the slice files
 Writes out/latent_physical_SGM/tests/<job>/report.txt and checks.json; exit code 1 if any check fails.
 """
 
@@ -59,6 +64,169 @@ def check(name, value, tol, cmp="<"):
 def rel(a, b):
     a, b = np.asarray(a, dtype=np.float64), np.asarray(b, dtype=np.float64)
     return float(np.max(np.abs(a - b)) / max(np.max(np.abs(b)), 1e-300))
+
+
+def block_13(key, data, taus):
+    """13: the opt-in fast paths (2026-11-11). data: the paper's 0/1 training images."""
+    t13 = time.time()
+    # stencil and dense_skip vs dense: all three pair groups (sextic), and the trained model's case (lin, quartic)
+    for G, rad, kept, sextic in ((14, 2, ("duff", "lin", "om"), True), (28, 1, ("lin",), False)):
+        conn_s = lm.connectivity(G, rad)
+        n_s, P_s = G * G, conn_s.shape[0]
+        k1, k2, key = jr.split(key, 3)
+        th_s = jr.normal(k1, (4 * n_s + 3 * P_s,)) * 0.3
+        for s in lm.dropped_pair_slices(n_s, P_s, kept) + (() if sextic else (lm.k6_slice(n_s),)):
+            th_s = th_s.at[s].set(0.0)
+        X_s = jr.normal(k2, (32, n_s)) * 0.8
+        dense_s = lm.DenseVisible(conn_s, n_s)
+        g_d, l_d = jax.jit(dense_s.grad_lap)(th_s, X_s)
+        for impl in ("stencil", "dense_skip"):
+            v = lm.make_visible(conn_s, n_s, impl, kept, sextic)
+            g_v, l_v = jax.jit(v.grad_lap)(th_s, X_s)
+            errs = [rel(g_v, g_d), rel(l_v, l_d)]
+            if impl == "stencil":
+                errs.append(rel(jax.jit(v.energy)(th_s, X_s), jax.jit(dense_s.energy)(th_s, X_s)))
+            check(f"13 {impl} vs dense visible energy ({G}x{G} r{rad}, {','.join(kept)}, "
+                  f"{'sextic' if sextic else 'quartic'}): grad, Laplacian" + (", energy" if impl == "stencil" else ""),
+                  max(errs), 1e-11)
+
+    # loss and gradient of a small random Potts model (8 states, --quad --local) on the trained model's lattice
+    conn_s = lm.connectivity(28, 1)
+    P_s = conn_s.shape[0]
+    zs = lm.dropped_pair_slices(lm.N, P_s, ("lin",))
+    kept_m = np.ones(4 * lm.N + 3 * P_s, bool)
+    for s in zs + (lm.k6_slice(lm.N),):
+        kept_m[s] = False
+    k1, k2, k3, k4, k5, k6, k7, key = jr.split(key, 8)
+    th_q = lm.quartic_initial_theta(lm.paper_theta_layout(P_s)[0], lm.N, P_s)
+    th_q = jnp.where(kept_m, th_q + 0.2 * jr.normal(k1, th_q.shape), 0.0)
+    Kp = 8
+    pq = {"theta": th_q, "W": 0.02 * jr.normal(k2, (Kp, lm.N)), "b": 0.02 * jr.normal(k3, (Kp,)),
+          "Q": 0.005 * jr.normal(k4, (Kp, lm.N)), "wl": 0.3 * jr.normal(k5, (lm.N,)), "bl": 0.02 * jr.normal(k6, (lm.N,))}
+    t_q = float(taus[60])
+    Xq = sample_forward_process(t_q, 64, lm.TEMP, lm.SIGMA_FORWARD, data, k7, beta=1)
+    vis_d = lm.DenseVisible(conn_s)
+    vis_st = lm.make_visible(conn_s, lm.N, "stencil", ("lin",), sextic=False)
+    loss_d = lm.make_loss(vis_d, lm.TEMP, Kp, "potts", True)
+    loss_m = lm.make_loss(vis_st, lm.TEMP, Kp, "potts", True, compute_dtype=jnp.float32)
+    L_d, G_d = jax.jit(jax.value_and_grad(loss_d))(pq, Xq)
+    L_s, G_s = jax.jit(jax.value_and_grad(lm.make_loss(vis_st, lm.TEMP, Kp, "potts", True)))(pq, Xq)
+    L_m, G_m = jax.jit(jax.value_and_grad(loss_m))(pq, Xq)
+    on = lambda g, a: np.asarray(a)[kept_m] if g == "theta" else np.asarray(a)   # noqa: E731  (theta: kept entries)
+    check("13 loss + gradient, stencil vs dense (Potts 8 --quad --local, 28x28 r1 lin quartic)",
+          max([abs(float(L_s) - float(L_d)) / abs(float(L_d))] + [rel(on(g, G_s[g]), on(g, G_d[g])) for g in G_d]),
+          1e-10)
+    nrel = {g: float(np.linalg.norm(on(g, G_m[g]) - on(g, G_d[g])) / np.linalg.norm(on(g, G_d[g]))) for g in G_d}
+    report(f"   mixed vs float64 gradients (relative norm): {', '.join(f'{g} {e:.1e}' for g, e in nrel.items())}; "
+           f"dtypes {sorted({str(np.asarray(v).dtype) for v in G_m.values()})}")
+    check(f"13 mixed-precision loss vs float64 (relative; {float(L_d):.6g})", abs(float(L_m) - float(L_d)) / abs(float(L_d)),
+          1e-5)
+    check("13 mixed-precision gradient vs float64, worst group (relative norm)", max(nrel.values()), 1e-4)
+    dots = [ln for ln in jax.jit(jax.value_and_grad(loss_m)).lower(pq, Xq).as_text().splitlines() if "dot_general" in ln]
+    n_bad = sum(not ("HIGHEST" in ln and "xf32>" in ln and "xf64>" not in ln) for ln in dots)
+    check(f"13 mixed precision: every product is float32 at HIGHEST ({len(dots)} dot_general)", n_bad + (not dots), 0.5)
+
+    # per-step trims: best_params skipped (--select ema) and --step-impl lean, bitwise against the default runner
+    lrs = {g: (1e-3 if g == "theta" else 3e-5) for g in pq}
+
+    def run_variant(loss_, **kw):
+        run_, adam_ = train_latent.build_runner(loss_, data, lm.N, 1000.0, "quartic", P_s, zero_slices=zs, **kw)
+        c = train_latent.init_carry(pq, adam_, jr.PRNGKey(4))
+        ls = []
+        for nst in (100, 100, 1):                            # both compiled chunk lengths
+            c, l = run_(c, t_q, lrs, nst)
+            ls.append(np.asarray(l))
+        return c, np.concatenate(ls)
+
+    lean = {"track_best": False, "theta_masks": True, "chunk_batches": True}
+    for lab, loss_, variants in (("stencil mixed", loss_m, (("best skipped", {"track_best": False}), ("lean", lean))),
+                                 ("dense f64", loss_d, (("best skipped", {"track_best": False}),))):
+        c0, l0 = run_variant(loss_)
+        for vname, kw in variants:
+            c1, l1 = run_variant(loss_, **kw)
+            same = np.array_equal(l0, l1) and all(
+                np.array_equal(np.asarray(a), np.asarray(b))
+                for i in (0, 1, 2, 3, 5, 6, 7) for a, b in zip(jax.tree_util.tree_leaves(c0[i]),
+                                                               jax.tree_util.tree_leaves(c1[i])))
+            check(f"13 {vname} ({lab}, Potts 8 --quad --local, 201 steps): losses, parameters, Adam state, key, best "
+                  f"loss and step, EMA (the --select ema result) bitwise equal to the default runner", 0.0 if same else 1.0,
+                  0.5)
+
+    # --steps-schedule: no schedule = the old step counts; a schedule gives counts 100 m + 1 near the target
+    old = [max(1, int(round(lm.paper_steps(k) * sc))) for sc in (1.0, 0.1, 2.0) for k in range(lm.N_TIME_STEPS)]
+    new = [train_latent.slice_steps(k, sc, ()) for sc in (1.0, 0.1, 2.0) for k in range(lm.N_TIME_STEPS)]
+    check("13 steps schedule: none = the old step counts (scales 1, 0.1, 2; slices differing)",
+          sum(a != b for a, b in zip(old, new)), 0.5)
+    sch = train_latent.parse_steps_schedule("30:0.5,70:1,80:2")
+    cnt = [train_latent.slice_steps(k, 1.0, sch) for k in range(lm.N_TIME_STEPS)]
+    target = [lm.paper_steps(k) * (0.5 if 30 <= k < 70 else (2.0 if k >= 80 else 1.0)) for k in range(lm.N_TIME_STEPS)]
+    bad = sum(c % 100 != 1 or abs(c - x) > 50 for c, x in zip(cnt, target))
+    bad += sum(cnt[k] != lm.paper_steps(k) for k in list(range(30)) + list(range(70, 80)))
+    bad += train_latent.parse_steps_schedule(train_latent.steps_schedule_str(sch)) != sch
+    for spec in ("30:2,10:1", "5:0", "5:-1", "x", "100:1", "3:1:2"):
+        try:
+            train_latent.parse_steps_schedule(spec)
+            bad += 1
+        except ValueError:
+            pass
+    report(f"   steps schedule '30:0.5,70:1,80:2': slices 0/30/69/70/80/99 -> {[cnt[k] for k in (0, 30, 69, 70, 80, 99)]} "
+           f"(paper {[lm.paper_steps(k) for k in (0, 30, 69, 70, 80, 99)]}); total {sum(cnt)} vs {sum(map(lm.paper_steps, range(100)))}")
+    check("13 steps schedule '30:0.5,70:1,80:2': counts 100 m + 1 within 50 of the target, factor-1 slices unchanged, "
+          "canonical form round trip, invalid specs rejected (failures)", bad, 0.5)
+
+    # GPU k-means vs numpy on 3000 images, 24 centres
+    Xk = np.asarray(data, dtype=np.float64)[:3000]
+    Cc, ac = lm.kmeans(Xk, 24, 5)
+    Cg, ag = lm.kmeans_jax(Xk, 24, 5)
+    Cg2, ag2 = lm.kmeans_jax(Xk, 24, 5)
+    rng = np.random.default_rng(5)
+    idx = [int(rng.integers(Xk.shape[0]))]
+    d2 = np.sum((Xk - Xk[idx[0]]) ** 2, axis=1)
+    for _ in range(1, 24):
+        idx.append(int(rng.choice(Xk.shape[0], p=d2 / d2.sum())))
+        d2 = np.minimum(d2, np.sum((Xk - Xk[idx[-1]]) ** 2, axis=1))
+    rng = np.random.default_rng(5)
+    i0 = int(rng.integers(Xk.shape[0]))
+    idx_g = np.asarray(lm._kmeanspp_device(jnp.asarray(Xk), jnp.asarray(i0), jnp.asarray(rng.random(23))))
+    check("13 GPU k-means: seeding indices equal to numpy's (24 centres; differing)", int(np.sum(idx_g != np.array(idx))),
+          0.5)
+    obj_c, obj_g = float(np.sum((Xk - Cc[ac]) ** 2)), float(np.sum((Xk - Cg[ag]) ** 2))
+    check(f"13 GPU k-means: objective vs numpy (relative; {obj_c:.8g}), assignments equal "
+          f"{float(np.mean(ac == ag)):.4f}", abs(obj_g - obj_c) / obj_c, 1e-9)
+    check("13 GPU k-means deterministic (two runs, differing entries)",
+          int(np.sum(Cg != Cg2) + np.sum(ag != ag2)), 0.5)
+
+    # history assembly: write_history from memory (all / half of the slices) vs the files, on synthetic slices
+    hd = os.path.join(OUT, "history_check")
+    sd = os.path.join(hd, "slices")
+    os.makedirs(sd, exist_ok=True)
+    rng = np.random.default_rng(13)
+    held = {}
+    for k in range(lm.N_TIME_STEPS):
+        arrs = {"theta": rng.normal(size=5), "W": rng.normal(size=(3, 4)), "b": rng.normal(size=3),
+                "Q": rng.normal(size=(3, 4)), "wl": rng.normal(size=4), "bl": rng.normal(size=4)}
+        train_latent.save_atomic(os.path.join(sd, f"slice_{k:03d}.npz"), key=np.zeros(2, np.uint32), **arrs)
+        held[k] = arrs
+    outs = {}
+    for lab, hk in (("files", {}), ("memory", held), ("half", {k: held[k] for k in range(50, 100)})):
+        od = os.path.join(hd, lab)
+        os.makedirs(od, exist_ok=True)
+        train_latent.write_history(od, sd, lm.N_TIME_STEPS, taus, True, True, hk)
+        with open(os.path.join(od, "params_history.npy"), "rb") as f:
+            ph = f.read()
+        z = np.load(os.path.join(od, "hidden_history.npz"))
+        outs[lab] = (ph, list(z.files), {m: z[m] for m in z.files})
+    ref_th = np.stack([held[k]["theta"] for k in range(lm.N_TIME_STEPS)])
+    bad = int(not np.array_equal(np.load(os.path.join(hd, "files", "params_history.npy")), ref_th))
+    for lab in ("memory", "half"):
+        ph, files, arrs = outs[lab]
+        bad += int(ph != outs["files"][0]) + int(files != outs["files"][1])
+        bad += sum(not (arrs[m].dtype == outs["files"][2][m].dtype and np.array_equal(arrs[m], outs["files"][2][m]))
+                   for m in files)
+    report(f"   history check: hidden_history.npz members {outs['files'][1]}")
+    check("13 history from memory (all / half of the slices) = from the slice files: params_history.npy bytes, "
+          "hidden_history.npz members, order, dtypes and values (failures)", bad, 0.5)
+    report(f"   block 13: {time.time() - t13:.0f} s")
 
 
 def main():
@@ -424,6 +592,8 @@ def main():
         x = jr.normal(kx, (lm.N,)) * 0.5
         ref = x - 2.0 * jax.grad(F_quad)(x, jnp.asarray(th_i), Wq, Qq, bq)
         check(f"12 quad {hid}: sde drift vs x - 2 grad F (autodiff)", rel(drift(tt, x, ()), ref), 1e-10)
+
+    block_13(key, data, taus)
 
     n_fail = sum(not c["ok"] for c in CHECKS)
     report(f"=== {len(CHECKS)} checks, {n_fail} failed; total {time.time() - t_all:.0f} s")

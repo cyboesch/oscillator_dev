@@ -1072,7 +1072,65 @@ def kmeans(X, k, seed, iters=50):
     return C, assign
 
 
-def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False):
+@jax.jit
+def _kmeanspp_device(X, i0, us):
+    """k-means++ seeding of kmeans_jax on the device: the indices of the k centres, i0 first, then one per uniform
+    u of `us`, drawn as Generator.choice(n, p=d2 / d2.sum()) draws it: the number of entries <= u of the normalised
+    cumulative distribution (searchsorted 'right')."""
+    d2 = jnp.sum((X - X[i0]) ** 2, axis=1)
+
+    def draw(d2, u):
+        cdf = jnp.cumsum(d2 / jnp.sum(d2))
+        i = jnp.sum(cdf / cdf[-1] <= u)
+        return jnp.minimum(d2, jnp.sum((X - X[i]) ** 2, axis=1)), i
+
+    _, idx = jax.lax.scan(draw, d2, us)
+    return jnp.concatenate([jnp.reshape(i0, (1,)).astype(idx.dtype), idx])
+
+
+@partial(jax.jit, static_argnums=2)
+def _lloyd_device(X, C, iters):
+    """Lloyd's iterations of kmeans() on the device, with its stopping rule (np.allclose of the new and the old
+    centres; the old centres and their assignment are returned then) and its empty-cluster rule (the centre stays).
+    Cluster sums are one-hot products (deterministic), not scatter-adds."""
+    k = C.shape[0]
+    x2 = jnp.sum(X * X, axis=1)
+    cols = jnp.arange(k)
+
+    def body(state):
+        C, _, it, _ = state
+        a = jnp.argmin(x2[:, None] - 2.0 * (X @ C.T) + jnp.sum(C * C, axis=1)[None, :], axis=1)
+        onehot = (a[:, None] == cols[None, :]).astype(X.dtype)
+        counts = jnp.sum(onehot, axis=0)
+        newC = jnp.where(counts[:, None] > 0, (onehot.T @ X) / jnp.maximum(counts, 1.0)[:, None], C)
+        same = jnp.all(jnp.abs(newC - C) <= 1e-8 + 1e-5 * jnp.abs(C))      # np.allclose(newC, C)
+        return jnp.where(same, C, newC), a, it + 1, same
+
+    a0 = jnp.argmin(jnp.zeros((X.shape[0], 1), X.dtype), axis=1)
+    C, a, _, _ = jax.lax.while_loop(lambda s: (s[2] < iters) & ~s[3], body, (C, a0, jnp.int32(0), jnp.bool_(False)))
+    return C, a
+
+
+def kmeans_jax(X, k, seed, iters=50):
+    """kmeans() on the default JAX device (--ref-kmeans gpu): the same k-means++ seeding and Lloyd iterations, the
+    same stopping rule and the same return values, in float64. The random draws are numpy's, from the same
+    Generator(seed) stream as kmeans() (one integer for the first centre, then one uniform per further centre, which
+    is what Generator.choice(n, p=...) draws), so the seeding picks the same centres unless rounding moves a
+    cumulative-probability boundary across a draw. Distances, the cumulative distribution, the assignments and the
+    cluster means are computed on the device (summation orders differ from numpy's), so the result equals kmeans()
+    up to rounding: an assignment can flip where two centres are equally near to rounding, and the iterations can
+    then end in a different local optimum. Deterministic. Returns numpy (centres (k, d), assignment (n,))."""
+    X = np.asarray(X, dtype=np.float64)
+    rng = np.random.default_rng(seed)
+    i0 = int(rng.integers(X.shape[0]))
+    us = rng.random(k - 1)
+    Xd = jnp.asarray(X)
+    idx = _kmeanspp_device(Xd, jnp.asarray(i0), jnp.asarray(us))
+    C, assign = _lloyd_device(Xd, Xd[idx], int(iters))
+    return np.asarray(C), np.asarray(assign)
+
+
+def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False, kmeans_fn=None):
     """W*(tau), b*(tau) of one Potts unit with M states: the Gaussian-mixture solution for M k-means prototypes
     (M/2 per class; pooled=True: M prototypes of all images together, without labels) with their pooled
     within-cluster covariance S_w and weights pi_m:
@@ -1080,14 +1138,16 @@ def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False):
       W_m = T S(tau)^-1 mu_m(tau),  b_m = T log pi_m - W_m . mu_m(tau) / 2.
     The common part of the W_m (their weighted mean) is moved out of the hidden unit, since a uniform linear tilt
     belongs to the visible bias. Returns W (len(taus), M, N), b (len(taus), M), state class (M,); with pooled=True
-    the state class is the majority label of the cluster and is used for diagnostics only."""
+    the state class is the majority label of the cluster and is used for diagnostics only.
+    kmeans_fn: the k-means, kmeans (numpy; default) or kmeans_jax (--ref-kmeans gpu)."""
+    km = kmeans if kmeans_fn is None else kmeans_fn
     classes = np.unique(np.asarray(labels))
     n_cls = classes.size
     if not pooled and M % n_cls:
         raise ValueError(f"M = {M} must be a multiple of the {n_cls} classes (M/{n_cls} prototypes per class)")
     X = np.asarray(data, dtype=np.float64)
     if pooled:
-        C, assign = kmeans(X, M, seed)
+        C, assign = km(X, M, seed)
         R = X - C[assign]
         counts = np.bincount(assign, minlength=M)
         lab = np.asarray(labels)
@@ -1099,7 +1159,7 @@ def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False):
         cents, cls, resid, cnts = [], [], [], []
         for c in classes.tolist():
             Xc = X[labels == c]
-            Cc, assign = kmeans(Xc, M // n_cls, seed + c)
+            Cc, assign = km(Xc, M // n_cls, seed + c)
             cents.append(Cc)
             cls += [c] * (M // n_cls)
             resid.append(Xc - Cc[assign])

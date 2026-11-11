@@ -11,9 +11,15 @@
      (a large DEFAULT error means XLA uses TF32 for float32 products by default)
   5. speed of the training step (train_latent.build_runner) for dense / dense_skip / stencil x f64 / mixed at
      K = 0 (pixels only), 784, 3072, 6144 (Potts --quad --local), and of loss + gradient alone (the difference is
-     sampling and optimizer bookkeeping)
+     sampling and optimizer bookkeeping); rows 'nobest' (track_best=False, as under --select ema) and 'lean'
+     (--step-impl lean) and its parts for the stencil mixed path
+  6. the per-step trims of build_runner (track_best=False, theta_masks, chunk_batches) against the default runner:
+     carries and losses bitwise equal after 301 steps (stencil mixed at K = 0, 784, 3072; dense f64 at K = 784);
+     kernels per step in the compiled scan bodies; the optimized HLO of each variant at K = 784
 
 Usage (from latent_physical_SGM/):  sbatch --time=02:00:00 jobs/run_gpu_neuronic.sh speed_check.py
+Optional arguments: the sections, e.g. '1,4' (default all), and for section 5 a comma list of row-name substrings,
+e.g. 'stencil mixed' (default all rows).
 Writes out/latent_physical_SGM/speed_check/<job>/report.txt and results.json. Exit code 1 if a correctness check
 or the float32 acceptance criteria fail (so dependent jobs do not start).
 """
@@ -422,7 +428,8 @@ def precision_checks():
 # ---------------------------------------------------------------------------------------------------------------
 # 5. speed of the training step
 # ---------------------------------------------------------------------------------------------------------------
-def speed():
+def bench_setup():
+    """The model of the timings: four-digit data, radius 1, --pair-terms lin, quartic, Potts --quad --local."""
     prob = lm.make_problem("mnist28_d0123", 1)
     conn, n, data = prob["conn"], prob["n"], prob["data"]
     P = conn.shape[0]
@@ -432,7 +439,6 @@ def speed():
     for s in zero_slices:
         theta0 = theta0.at[s].set(0.0)
     t_bench = float(lm.forward_time_pts()[90])
-    X = sample_forward_process(t_bench, lm.BATCH_SIZE, T, lm.SIGMA_FORWARD, data, jr.PRNGKey(9), beta=1)
 
     def make_params(K):
         if K == 0:
@@ -440,6 +446,21 @@ def speed():
         k1, k2, k3, k4 = jr.split(jr.PRNGKey(5), 4)
         return {"theta": theta0, "W": 0.1 * jr.normal(k1, (K, n)), "b": jnp.zeros(K),
                 "Q": 0.02 * jr.normal(k2, (K, n)), "wl": 0.5 * jr.normal(k3, (n,)), "bl": 0.1 * jr.normal(k4, (n,))}
+
+    return conn, n, data, P, terms, zero_slices, t_bench, make_params
+
+
+# per-step trims of train_latent.build_runner (keyword options; {} = the default runner)
+TRIMS = {"base": {}, "nobest": {"track_best": False},
+         "nobest+masks": {"track_best": False, "theta_masks": True},
+         "nobest+chunk": {"track_best": False, "chunk_batches": True},
+         "lean": {"track_best": False, "theta_masks": True, "chunk_batches": True}}
+
+
+def speed():
+    conn, n, data, P, terms, zero_slices, t_bench, make_params = bench_setup()
+    X = sample_forward_process(t_bench, lm.BATCH_SIZE, T, lm.SIGMA_FORWARD, data, jr.PRNGKey(9), beta=1)
+    row_filter = [s.strip() for s in sys.argv[2].split(",")] if len(sys.argv) > 2 else None
 
     def timed(call):
         """seconds per call of `call` (100 steps), after one warm-up (compilation) call"""
@@ -456,18 +477,24 @@ def speed():
         jax.block_until_ready(r)
         return (time.perf_counter() - tc) / reps, t_first
 
-    variants = [("dense", "f64"), ("dense_skip", "f64"), ("stencil", "f64"), ("dense", "mixed"), ("stencil", "mixed")]
+    variants = [("dense", "f64", "base"), ("dense_skip", "f64", "base"), ("stencil", "f64", "base"),
+                ("dense", "mixed", "base"), ("stencil", "mixed", "base"), ("stencil", "mixed", "nobest"),
+                ("stencil", "mixed", "nobest+masks"), ("stencil", "mixed", "nobest+chunk"),
+                ("stencil", "mixed", "lean")]
     out = {}
     log("  ms per step (full training step: sampling, loss + gradient, Adam, update, EMA, best) | loss + gradient "
         "+ a plain update only | first call (compile + 100 steps)")
     for K in (0, 784, 3072, 6144):
-        for impl, prec in variants:
-            name = f"K{K} {impl} {prec}"
+        for impl, prec, trim in variants:
+            name = f"K{K} {impl} {prec}" + ("" if trim == "base" else f" {trim}")
+            if row_filter is not None and not any(s in name for s in row_filter):
+                continue
             try:
                 vis = lm.make_visible(conn, n, impl, terms, sextic=False)
                 loss = lm.make_loss(vis, T, K, "potts", K > 0,
                                     compute_dtype=jnp.float32 if prec == "mixed" else None)
-                run, adam = train_latent.build_runner(loss, data, n, 1000.0, "quartic", P, zero_slices=zero_slices)
+                run, adam = train_latent.build_runner(loss, data, n, 1000.0, "quartic", P, zero_slices=zero_slices,
+                                                      **TRIMS[trim])
                 params = make_params(K)
                 state = {"carry": train_latent.init_carry(params, adam, jr.PRNGKey(1))}
                 lrs = {g: 1e-6 for g in params}
@@ -492,7 +519,7 @@ def speed():
                     return l
 
                 s_full, first = timed(call_full)
-                s_lg, _ = timed(call_lg)
+                s_lg = timed(call_lg)[0] if trim == "base" else float("nan")   # the same for every trim
                 finite = bool(np.all(np.isfinite(np.asarray(call_full()))))
                 r = {"ms_step": 10.0 * s_full, "ms_lossgrad": 10.0 * s_lg, "first_call_s": first, "finite": finite}
                 if K == 784 and impl == "stencil" and prec == "mixed":
@@ -508,24 +535,141 @@ def speed():
                 log(f"  {name}: crashed\n{tb}")
                 out[name] = {"crashed": tb}
                 FAILED.append(f"speed {name} crashed")
-    base = {K: out.get(f"K{K} dense f64", {}).get("ms_step") for K in (0, 784, 3072, 6144)}
-    log("\n  speed-up of the full step over dense f64:")
-    for K in (0, 784, 3072, 6144):
-        if base[K]:
-            log(f"    K {K:5d}: " + ", ".join(f"{impl} {prec} {base[K] / out[f'K{K} {impl} {prec}']['ms_step']:.1f}x"
-                                            for impl, prec in variants
-                                            if out.get(f"K{K} {impl} {prec}", {}).get("ms_step")))
+    for ref in ("dense f64", "stencil mixed"):
+        log(f"\n  speed-up of the full step over {ref}:")
+        for K in (0, 784, 3072, 6144):
+            b = out.get(f"K{K} {ref}", {}).get("ms_step")
+            if b:
+                log(f"    K {K:5d}: " + ", ".join(f"{nm[len(f'K{K} '):]} {b / r['ms_step']:.3f}x"
+                                                for nm, r in out.items()
+                                                if nm.startswith(f"K{K} ") and r.get("ms_step")))
+    return out
+
+
+def hlo_opcode(rhs):
+    """Opcode of an HLO instruction from the text right of '=' (shape, possibly a nested tuple, then opcode(...))."""
+    rhs = rhs.strip()
+    if rhs.startswith("("):                      # tuple shape: skip to its closing parenthesis
+        depth = 0
+        for i, ch in enumerate(rhs):
+            depth += (ch == "(") - (ch == ")")
+            if depth == 0:
+                rhs = rhs[i + 1:]
+                break
+    else:
+        rhs = rhs.split(None, 1)[1] if len(rhs.split(None, 1)) > 1 else ""
+    return rhs.strip().split("(")[0].strip()
+
+
+def hlo_bodies(text):
+    """Kernels per while-loop body of a compiled HLO module: {body name: {opcode: count}} for the instructions
+    that launch work (fusions by kind, custom calls such as cuBLAS GEMMs, and the unfused ops), not parameters,
+    tuples, bitcasts or constants."""
+    comps, cur = {}, None
+    for ln in text.splitlines():
+        s = ln.strip()
+        if s.endswith("{") and ("(" in s) and not s.startswith("ROOT") and "=" not in s.split("(")[0]:
+            cur = s.split()[0].lstrip("%") if not s.startswith("ENTRY") else "ENTRY"
+            comps[cur] = []
+        elif s == "}":
+            cur = None
+        elif cur is not None and "=" in s:
+            comps[cur].append(s)
+    bodies = set()
+    for lines in comps.values():
+        for s in lines:
+            if " while(" in s and "body=" in s:
+                bodies.add(s.split("body=")[1].split(",")[0].split()[0].lstrip("%"))
+    skip = ("parameter", "get-tuple-element", "tuple", "bitcast", "constant", "after-all", "partition-id")
+    out = {}
+    for b in sorted(bodies):
+        cnt = {}
+        for s in comps.get(b, []):
+            op = hlo_opcode(s.split("=", 1)[1])
+            if op in skip:
+                continue
+            if op == "fusion":
+                op = "fusion:" + (s.split("kind=")[1].split(",")[0].split()[0] if "kind=" in s else "?")
+            if op == "custom-call":
+                tgt = s.split('custom_call_target="')[1].split('"')[0] if 'custom_call_target="' in s else "?"
+                op = "custom-call:" + tgt
+            cnt[op] = cnt.get(op, 0) + 1
+        out[b] = {"total": sum(cnt.values()), **dict(sorted(cnt.items()))}
+    return out
+
+
+def trims():
+    """Section 6: every trim of TRIMS against the default runner from the same carry, 3 chunks of 100 steps and a
+    remainder chunk of 1 (both compiled lengths). Carries and per-step losses must be bitwise equal; with
+    track_best=False, best_params is exempt (it keeps its initial value by design)."""
+    conn, n, data, P, terms, zero_slices, t_bench, make_params = bench_setup()
+    out = {}
+    for K, impl, prec in ((784, "stencil", "mixed"), (784, "dense", "f64"), (0, "stencil", "mixed"),
+                          (3072, "stencil", "mixed")):
+        vis = lm.make_visible(conn, n, impl, terms, sextic=False)
+        loss = lm.make_loss(vis, T, K, "potts", K > 0, compute_dtype=jnp.float32 if prec == "mixed" else None)
+        params = make_params(K)
+        lrs = {g: (1e-3 if g == "theta" else 3e-5) for g in params}      # large enough to move every group
+        ref = None
+        for trim, kw in TRIMS.items():
+            if impl == "dense" and trim not in ("base", "nobest", "lean"):
+                continue
+            name = f"K{K} {impl} {prec} {trim}"
+            try:
+                run, adam = train_latent.build_runner(loss, data, n, 1000.0, "quartic", P, zero_slices=zero_slices, **kw)
+                carry = train_latent.init_carry(params, adam, jr.PRNGKey(3))
+                ls = []
+                for nsteps in (100, 100, 100, 1):
+                    carry, l = run(carry, t_bench, lrs, nsteps)
+                    ls.append(np.asarray(l))
+                leaves = [np.asarray(x) for x in jax.tree_util.tree_leaves(carry)]
+                best_leaves = len(jax.tree_util.tree_leaves(carry[4]))
+                start = len(jax.tree_util.tree_leaves(carry[:4]))
+                res = {"carry": leaves, "best_range": (start, start + best_leaves), "losses": np.concatenate(ls)}
+                if trim == "base":
+                    ref = res
+                    r = {"finite": bool(np.all(np.isfinite(res["losses"])))}
+                else:
+                    lo, hi = res["best_range"]
+                    exempt = set(range(lo, hi)) if kw.get("track_best", True) is False else set()
+                    diff = [i for i, (a, b) in enumerate(zip(res["carry"], ref["carry"]))
+                            if i not in exempt and not (a.shape == b.shape and a.dtype == b.dtype
+                                                        and np.array_equal(a, b, equal_nan=True))]
+                    same_loss = bool(np.array_equal(res["losses"], ref["losses"]))
+                    maxdiff = max([float(np.max(np.abs(res["carry"][i].astype(np.float64)
+                                                       - ref["carry"][i].astype(np.float64))))
+                                   for i in diff if res["carry"][i].size] or [0.0])
+                    r = {"leaves_differing": diff, "losses_equal": same_loss, "max_abs_diff": maxdiff,
+                         "best_params_exempt": bool(exempt)}
+                    check(f"trim bitwise: {name} vs base", not diff and same_loss,
+                          f"{len(res['carry'])} carry leaves, differing {diff} (max |diff| {maxdiff:.2e}); per-step "
+                          f"losses equal: {same_loss}; best_params exempt: {bool(exempt)}")
+                if K == 784:
+                    comp = run.lower(carry, t_bench, lrs, 100).compile().as_text()
+                    with open(os.path.join(OUT, f"hlo_{impl}_{prec}_{trim.replace('+', '_')}_K784.txt"), "w") as f:
+                        f.write(comp)
+                    r["kernels_per_body"] = hlo_bodies(comp)
+                    log(f"  (info) {name}: kernels per scan body {json.dumps(r['kernels_per_body'])}")
+                out[name] = r
+                del run, adam, carry
+            except Exception:
+                tb = traceback.format_exc()
+                log(f"  {name}: crashed\n{tb}")
+                out[name] = {"crashed": tb}
+                FAILED.append(f"trims {name} crashed")
     return out
 
 
 def main():
     # optional argument: the sections to run, e.g. "1,4" (default: all)
-    todo = set(sys.argv[1].split(",")) if len(sys.argv) > 1 else {"1", "2", "3", "4", "5"}
-    log(f"speed_check job {JOB}, {time.strftime('%Y-%m-%d %H:%M:%S')}; sections {sorted(todo)}")
+    todo = set(sys.argv[1].split(",")) if len(sys.argv) > 1 else {"1", "2", "3", "4", "5", "6"}
+    log(f"speed_check job {JOB}, {time.strftime('%Y-%m-%d %H:%M:%S')}; sections {sorted(todo)}"
+        + (f"; section 5 rows matching {sys.argv[2]!r}" if len(sys.argv) > 2 else ""))
     for key, name, fn in (("1", "1 environment", env),
                           ("2", "2 visible energy: stencil / dense_skip vs dense", visible_checks),
                           ("3", "3 HLO of the mixed-precision loss", hlo_checks),
                           ("4", "4 float32 vs float64 on trained slices", precision_checks),
+                          ("6", "6 per-step trims: bitwise equality and kernels per step", trims),
                           ("5", "5 speed of the training step", speed)):
         if key in todo:
             section(name, fn)
