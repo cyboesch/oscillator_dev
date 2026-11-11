@@ -137,6 +137,17 @@ def parse():
                     help="visible pair-coupling groups that exist: 'all' (default), 'none', or a comma list of lin "
                          "(c_lin (x_i - x_j)^2), om (c_om x_i^2 x_j) and duff (c_duff (x_i - x_j)^4 / 4); the others "
                          "start at zero and are held at exactly zero")
+    ap.add_argument("--visible-impl", choices=list(lm.VISIBLE_IMPLS), default="dense",
+                    help="how the training loss evaluates the visible energy: dense (default: dense N x N products "
+                         "of all pair groups, as before), dense_skip (the same without the groups dropped by "
+                         "--pair-terms and without k_6 in the quartic model), stencil (per lattice offset, kept "
+                         "groups only; about 0.1 ms instead of 7 ms per step at radius 1). Equal up to rounding; "
+                         "validation and the paper comparison always use the dense path")
+    ap.add_argument("--precision", choices=["f64", "mixed"], default="f64",
+                    help="mixed: the training loss and its gradient in float32 with full-float32 (HIGHEST) matrix "
+                         "products; parameters, Adam, EMA, the data stream and validation stay float64. Exact "
+                         "hidden statistics only (not with --hidden-samples, --hidden-rule cd1, --hidden-norm "
+                         "occupancy or --hidden-floor)")
     ap.add_argument("--hidden-fixed", action="store_true",
                     help="hold the hidden couplings at the closed-form reference of each slice (Fisher or prototype "
                          "W*, b*; per-pixel w*, c*) and train only the visible parameters. Not with --quad (no "
@@ -519,6 +530,11 @@ def main():
                          "0 < --occ-beta < 1")
     if args.occ_same_draws and (args.hidden_norm != "occupancy" or args.hidden_samples < 1):
         raise ValueError("--occ-same-draws needs --hidden-norm occupancy and --hidden-samples S > 0")
+    if args.precision == "mixed" and (args.hidden_samples > 0 or args.hidden_rule != "exact"
+                                      or args.hidden_norm == "occupancy" or args.hidden_floor > 0):
+        raise ValueError("--precision mixed needs exact hidden statistics: not with --hidden-samples, --hidden-rule "
+                         "cd1, --hidden-norm occupancy or --hidden-floor (their draws and occupations would change "
+                         "with the float32 fields)")
     pair_terms = lm.parse_pair_terms(args.pair_terms)          # raises on an invalid list
     if args.neighbourhood != "chebyshev" and args.radius is None:
         raise ValueError("--neighbourhood von_neumann needs an explicit --radius")
@@ -558,6 +574,7 @@ def main():
         "pair_terms": ",".join(pair_terms) if pair_terms else "none", "neighbourhood": args.neighbourhood,
         "ising_reseed": args.ising_reseed, "ising_weak_boost": args.ising_weak_boost, "val_every": args.val_every,
         "init_from": args.init_from, "init_slices": args.init_slices, "lr_scale": args.lr_scale,
+        "visible_impl": args.visible_impl, "precision": args.precision,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -573,7 +590,8 @@ def main():
                 "hidden_jackknife_order": 1, "occ_same_draws": False,
                 "pair_terms": "duff,lin,om", "neighbourhood": "chebyshev",
                 "ising_reseed": False, "ising_weak_boost": 1.0, "val_every": 0,
-                "init_from": None, "init_slices": 0, "lr_scale": 1.0}   # runs started before these options existed
+                "init_from": None, "init_slices": 0, "lr_scale": 1.0,
+                "visible_impl": "dense", "precision": "f64"}   # runs started before these options existed
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -599,7 +617,7 @@ def main():
         return
     log(logf, f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; job {os.environ.get('SLURM_JOB_ID', 'manual')}; "
               f"jax {jax.__version__}; devices {jax.devices()}; code {code_sha}; config "
-              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost')})}"
+              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision')})}"
               + (f"; cd1 kappa {args.cd1_kappa}, dt {args.cd1_dt}, releases {args.cd1_releases}, "
                  f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else ""))
 
@@ -615,7 +633,10 @@ def main():
               f"std {prob['std']:.5f}; training on {data_train.shape[0]} (cls {args.cls}); {prob['conn'].shape[0]} pairs")
 
     # ---- model ------------------------------------------------------------------------------------------------
-    vis = lm.DenseVisible(prob["conn"], n_vis)
+    vis_dense = lm.DenseVisible(prob["conn"], n_vis)          # validation and the paper comparison: always dense
+    vis = vis_dense if args.visible_impl == "dense" else lm.make_visible(
+        prob["conn"], n_vis, args.visible_impl, pair_terms, sextic=args.visible == "sextic")   # the training loss
+    cdt = jnp.float32 if args.precision == "mixed" else None   # --precision mixed: float32 training loss
     theta0, _ = lm.paper_theta_layout(vis.P, n_vis)
     if args.visible == "quartic":
         theta0 = lm.quartic_initial_theta(theta0, n_vis, vis.P)
@@ -628,9 +649,9 @@ def main():
     n_slices = min(args.max_slices, lm.N_TIME_STEPS)
     jk = (2 if args.hidden_jackknife_order == 2 else True) if args.hidden_jackknife else False
     loss_fn = lm.make_loss(vis, lm.TEMP, K, args.hidden, args.local, samples=args.hidden_samples,
-                           jackknife=jk, replicates=args.hidden_replicates)
-    loss_ps = jax.jit(lm.make_loss_per_sample(vis, lm.TEMP, K, args.hidden, args.local))
-    loss_ps_k0 = jax.jit(lm.make_loss_per_sample(vis, lm.TEMP, 0))
+                           jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt)
+    loss_ps = jax.jit(lm.make_loss_per_sample(vis_dense, lm.TEMP, K, args.hidden, args.local))
+    loss_ps_k0 = jax.jit(lm.make_loss_per_sample(vis_dense, lm.TEMP, 0))
     cd1_grad = None
     if args.hidden_rule == "cd1":
         cd1_grad = lm.make_cd1_hidden_grad(vis, lm.TEMP, K, args.hidden, args.local, samples=args.cd1_hidden_samples)
@@ -643,7 +664,7 @@ def main():
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
         run_late, _ = build_runner(
             lm.make_loss(vis, lm.TEMP, K, args.hidden, args.local, samples=args.hidden_samples_late,
-                         jackknife=jk, replicates=args.hidden_replicates),
+                         jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt),
             data_train, n_vis, args.ema_steps, args.visible, vis.P, loss_key=True,
             floor=args.hidden_floor, floor_samples=args.hidden_samples_late, hidden_norm=args.hidden_norm,
             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices)
@@ -729,7 +750,8 @@ def main():
         src = os.path.join(args.out_root, args.init_from)
         with open(os.path.join(src, "config.json")) as f:
             scfg = json.load(f)
-        free = {"name", "steps_scale", "val_every", "lr_scale", "init_from", "init_slices", "max_slices"}
+        free = {"name", "steps_scale", "val_every", "lr_scale", "init_from", "init_slices", "max_slices",
+                "visible_impl", "precision"}         # numerics of the new slices only: a continuation may differ
         bad = {k: (scfg.get(k, defaults.get(k)), v) for k, v in config.items()
                if k not in free and k in defaults and scfg.get(k, defaults.get(k)) != v}
         bad.update({k: (scfg.get(k), config[k]) for k in ("K", "cls", "hidden_lr_scale", "freeze_hidden_slices")

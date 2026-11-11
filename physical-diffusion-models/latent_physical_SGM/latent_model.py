@@ -346,13 +346,18 @@ class DenseVisible:
     where d_C, d_D are row sums.
     """
 
-    def __init__(self, conn, n=N):
+    def __init__(self, conn, n=N, terms=None, sextic=True):
+        """terms None (default): every pair group and k_6, today's code path. A tuple of kept groups (--visible-impl
+        dense_skip): grad_lap leaves out the other groups (and k_6 if not sextic) statically; their parameters must
+        be exactly zero, as --pair-terms and the quartic projection keep them."""
         conn = np.asarray(conn)
         self.n = int(n)
         self.I = jnp.asarray(conn[:, 0])
         self.J = jnp.asarray(conn[:, 1])
         self.P = int(conn.shape[0])
         self.n_theta = 4 * self.n + 3 * self.P
+        self.terms = None if terms is None else tuple(sorted(terms))
+        self.sextic = bool(sextic)
 
     def split(self, theta):
         P, n = self.P, self.n
@@ -369,6 +374,8 @@ class DenseVisible:
 
     def grad_lap(self, theta, X):
         """X: (B, N). Returns grad E (B, N) and Laplacian of E (B,)."""
+        if self.terms is not None:
+            return self._grad_lap_kept(theta, X)
         k_lin, k_duff, k6, bias, C, U, D = self.mats(theta)
         dC, dD = jnp.sum(C, axis=1), jnp.sum(D, axis=1)
         X2 = X * X
@@ -389,6 +396,41 @@ class DenseVisible:
                + 3.0 * jnp.sum(dD * X2 - 2.0 * X * XD + X2D, axis=1))
         return g, lap
 
+    def _grad_lap_kept(self, theta, X):
+        """grad_lap with only the kept pair groups (and k_6 only if sextic): the products of the dropped groups
+        multiply exact zeros (with --pair-terms lin, 10 of the 12 N x N products of a training step)."""
+        k_lin, k_duff, k6, c_lin, c_om, c_duff, bias = self.split(theta)
+        X2 = X * X
+        X3 = X2 * X
+        g = k_lin * X + k_duff * X3
+        s = k_lin + 3.0 * k_duff * X2
+        if self.sextic:
+            g = g + k6 * X3 * X2
+            s = s + 5.0 * k6 * X2 * X2
+        g = g + bias
+        lap = jnp.sum(s, axis=1)
+        Z = jnp.zeros((self.n, self.n), dtype=theta.dtype)
+        if "lin" in self.terms:
+            Cu = Z.at[self.I, self.J].add(c_lin)
+            C = Cu + Cu.T
+            dC = jnp.sum(C, axis=1)
+            g = g + 2.0 * (dC * X - X @ C)
+            lap = lap + 2.0 * jnp.sum(dC)
+        if "om" in self.terms:
+            U = Z.at[self.I, self.J].add(c_om)
+            XU = X @ U.T
+            g = g + 2.0 * X * XU + X2 @ U
+            lap = lap + 2.0 * jnp.sum(XU, axis=1)
+        if "duff" in self.terms:
+            Du = Z.at[self.I, self.J].add(c_duff)
+            D = Du + Du.T
+            dD = jnp.sum(D, axis=1)
+            XD = X @ D
+            X2D = X2 @ D
+            g = g + dD * X3 - 3.0 * X2 * XD + 3.0 * X * X2D - X3 @ D
+            lap = lap + 3.0 * jnp.sum(dD * X2 - 2.0 * X * XD + X2D, axis=1)
+        return g, lap
+
     def energy(self, theta, X):
         k_lin, k_duff, k6, bias, C, U, D = self.mats(theta)
         dC, dD = jnp.sum(C, axis=1), jnp.sum(D, axis=1)
@@ -399,6 +441,154 @@ class DenseVisible:
         e_om = jnp.sum(X2 * (X @ U.T), axis=1)
         e_duff = 0.25 * jnp.sum(dD * X2 * X2, axis=1) - jnp.sum(X3 * (X @ D), axis=1) + 0.75 * jnp.sum(X2 * (X2 @ D), axis=1)
         return e_self + e_lin + e_om + e_duff
+
+
+class StencilVisible:
+    """The visible energy of DenseVisible evaluated per lattice offset instead of with dense N x N matrices
+    (--visible-impl stencil). Same flat parameters and interface (n, P, n_theta, grad_lap, energy); equal to
+    DenseVisible up to rounding. Only the kept pair groups `terms` (and k_6 if `sextic`) are evaluated: the others
+    must be exactly zero in theta, as --pair-terms and the quartic projection keep them.
+
+    The pairs must form complete lattice offsets on a square grid, as connectivity() makes them (every pixel whose
+    partner at offset (dy, dx) is on the grid has that pair). For pair (i, j), i < j (i = source), d = x_i - x_j,
+    a = c_lin, u = c_om, c = c_duff:
+        g_i += 2 a d + 2 u x_i x_j + c d^3,     g_j += -2 a d + u x_i^2 - c d^3
+        lap += 4 a + 2 u x_j + 6 c d^2,         E += a d^2 + u x_i^2 x_j + c d^4 / 4
+    Only slices, pads, elementwise products, reductions and one gather with unique indices (no scatter-add with
+    colliding indices), so the forward and the reverse pass are deterministic on the GPU.
+    """
+
+    def __init__(self, conn, n=N, terms=tuple(sorted(PAIR_TERMS)), sextic=True):
+        conn = np.asarray(conn)
+        G = math.isqrt(int(n))
+        if G * G != int(n):
+            raise ValueError(f"StencilVisible needs a square grid, not n = {n}")
+        self.n, self.G, self.P = int(n), G, int(conn.shape[0])
+        self.n_theta = 4 * self.n + 3 * self.P
+        self.terms, self.sextic = tuple(sorted(terms)), bool(sextic)
+        if any(t not in PAIR_TERMS for t in self.terms):
+            raise ValueError(f"unknown pair terms {self.terms}")
+        if self.P and np.any(conn[:, 0] >= conn[:, 1]):
+            raise ValueError("StencilVisible needs pairs (i, j) with i < j")
+        ri, ci = np.divmod(conn[:, 0], G)
+        rj, cj = np.divmod(conn[:, 1], G)
+        dy, dx = rj - ri, cj - ci
+        self.offsets, wins = [], []
+        for oy, ox in sorted(set(zip(dy.tolist(), dx.tolist()))):
+            sel = np.flatnonzero((dy == oy) & (dx == ox))
+            win = np.full((G - oy, G - abs(ox)), -1, dtype=np.int64)
+            win[ri[sel], ci[sel] - max(0, -ox)] = sel
+            if (win < 0).any():
+                raise ValueError(f"pair offset ({oy}, {ox}) is not a complete lattice offset")
+            self.offsets.append((int(oy), int(ox)))
+            wins.append(win.ravel())
+        perm = np.concatenate(wins) if wins else np.zeros(0, dtype=np.int64)
+        if not np.array_equal(np.sort(perm), np.arange(self.P)):
+            raise ValueError("the pair list is not a set of lattice offsets")
+        self.perm = perm                                 # pair index of each window slot, offset by offset
+        self.cuts = np.cumsum([0] + [w.size for w in wins]).tolist()
+
+    def _windows(self, c):
+        """(P,) pair couplings -> one (G - dy, G - |dx|) array per offset, indexed by the source pixel."""
+        cw = c[self.perm]
+        return [cw[s:e].reshape(self.G - oy, self.G - abs(ox))
+                for (oy, ox), s, e in zip(self.offsets, self.cuts[:-1], self.cuts[1:])]
+
+    def _views(self, Xg, oy, ox):
+        """Sources x_i and targets x_j of offset (oy, ox) as (B, G - oy, G - |ox|) views, and the pads that put
+        per-source / per-target values back on the (G, G) grid."""
+        G = self.G
+        lo, hi = max(0, -ox), max(0, ox)
+        xs = Xg[:, :G - oy, lo:G - hi]
+        xt = Xg[:, oy:, hi:G - lo]
+        return xs, xt, ((0, 0), (0, oy), (lo, hi)), ((0, 0), (oy, 0), (hi, lo))
+
+    def _split_self(self, theta):
+        n, P = self.n, self.P
+        return theta[0:n], theta[n:2 * n], theta[2 * n:3 * n], theta[3 * n + 3 * P:]
+
+    def grad_lap(self, theta, X):
+        """X: (B, N). Returns grad E (B, N) and Laplacian of E (B,)."""
+        n, P, G, B = self.n, self.P, self.G, X.shape[0]
+        k_lin, k_duff, k6, bias = self._split_self(theta)
+        X2 = X * X
+        X3 = X2 * X
+        g = k_lin * X + k_duff * X3
+        s = k_lin + 3.0 * k_duff * X2
+        if self.sextic:
+            g = g + k6 * X3 * X2
+            s = s + 5.0 * k6 * X2 * X2
+        g = g + bias
+        lap = jnp.sum(s, axis=1)
+        if not self.terms or not self.offsets:
+            return g, lap
+        cw = {t: self._windows(theta[PAIR_TERMS[t](n, P)]) for t in self.terms}
+        Xg = X.reshape(B, G, G)
+        acc = jnp.zeros_like(Xg)
+        for o, (oy, ox) in enumerate(self.offsets):
+            xs, xt, pad_s, pad_t = self._views(Xg, oy, ox)
+            d = xs - xt
+            gs, gt = 0.0, 0.0
+            if "lin" in cw:
+                f = 2.0 * cw["lin"][o] * d
+                gs, gt = gs + f, gt - f
+            if "om" in cw:
+                u = cw["om"][o]
+                gs = gs + 2.0 * u * xs * xt
+                gt = gt + u * xs * xs
+                lap = lap + 2.0 * jnp.sum(u * xt, axis=(1, 2))
+            if "duff" in cw:
+                c = cw["duff"][o]
+                d2 = d * d
+                f = c * d2 * d
+                gs, gt = gs + f, gt - f
+                lap = lap + 6.0 * jnp.sum(c * d2, axis=(1, 2))
+            acc = acc + jnp.pad(gs, pad_s) + jnp.pad(gt, pad_t)
+        if "lin" in cw:
+            lap = lap + 4.0 * jnp.sum(theta[clin_slice(n, P)])        # independent of x
+        return g + acc.reshape(B, n), lap
+
+    def energy(self, theta, X):
+        n, P, G, B = self.n, self.P, self.G, X.shape[0]
+        k_lin, k_duff, k6, bias = self._split_self(theta)
+        X2 = X * X
+        e = jnp.sum(0.5 * k_lin * X2 + 0.25 * k_duff * X2 * X2 + bias * X, axis=1)
+        if self.sextic:
+            e = e + jnp.sum(k6 * X2 * X2 * X2 / 6.0, axis=1)
+        if not self.terms or not self.offsets:
+            return e
+        cw = {t: self._windows(theta[PAIR_TERMS[t](n, P)]) for t in self.terms}
+        Xg = X.reshape(B, G, G)
+        for o, (oy, ox) in enumerate(self.offsets):
+            xs, xt, _, _ = self._views(Xg, oy, ox)
+            d = xs - xt
+            if "lin" in cw:
+                e = e + jnp.sum(cw["lin"][o] * d * d, axis=(1, 2))
+            if "om" in cw:
+                e = e + jnp.sum(cw["om"][o] * xs * xs * xt, axis=(1, 2))
+            if "duff" in cw:
+                d2 = d * d
+                e = e + 0.25 * jnp.sum(cw["duff"][o] * d2 * d2, axis=(1, 2))
+        return e
+
+
+VISIBLE_IMPLS = ("dense", "dense_skip", "stencil")
+
+
+def make_visible(conn, n=N, impl="dense", terms=None, sextic=True):
+    """The visible energy of the training loss (--visible-impl). 'dense': DenseVisible(conn, n), all groups and k_6,
+    the default and the path that matches the paper's code. 'dense_skip': the same products without the dropped
+    groups (and k_6 unless sextic). 'stencil': StencilVisible, per lattice offset, only the kept groups. All three
+    are equal up to rounding as long as the dropped groups (and k_6 of the quartic model) are exactly zero.
+    terms: kept pair groups (None = all)."""
+    if impl == "dense":
+        return DenseVisible(conn, n)
+    kept = tuple(sorted(PAIR_TERMS)) if terms is None else tuple(terms)
+    if impl == "dense_skip":
+        return DenseVisible(conn, n, terms=kept, sextic=sextic)
+    if impl == "stencil":
+        return StencilVisible(conn, n, terms=kept, sextic=sextic)
+    raise ValueError(f"--visible-impl must be one of {VISIBLE_IMPLS}, not {impl!r}")
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -520,7 +710,22 @@ def hidden_terms_quad(W, Q, b, X, T, hidden="ising", stat=None):
     return -gbar, lap, A, p
 
 
-def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False, replicates=1):
+def in_compute_dtype(fn, dtype):
+    """--precision mixed: fn(params, X, key) evaluated with the parameters and X cast to `dtype` (float32) and every
+    matrix product at full float32 precision (HIGHEST: XLA may otherwise use TF32 for float32 products, whose
+    11-bit significand is far too coarse once fields are divided by T). The precision is fixed when the products
+    are traced and carries over to their transposes in the backward pass. The casts are differentiable, so the
+    parameter gradient comes back in the parameters' own dtype (float64); the result stays in `dtype`."""
+    def wrapped(params, X, key=None):
+        p = {k: v.astype(dtype) for k, v in params.items()}
+        with jax.default_matmul_precision("float32"):
+            return fn(p, X.astype(dtype), key)
+
+    return wrapped
+
+
+def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False, replicates=1,
+                         compute_dtype=None):
     """Per-sample implicit score-matching loss at k_B T = T for p ~ exp(-F/T):
     -lap F / T + |grad F|^2 / (2 T^2). hidden = 'ising' (K units) or 'potts' (one unit with K states);
     if params contains 'Q', the hidden units also couple to the squared pixels (hidden_terms_quad);
@@ -538,10 +743,15 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     it has the same noise as the plug-in estimate; a device combines a full, two half and four quarter windows).
     replicates = R > 1 (diagnostic, needs samples > 0): the mean of R independent estimates, each from its own S
     draws (keys split from `key`). It keeps the bias of one S-draw estimate and divides its variance by R, which
-    separates bias from noise (R S draws pooled into one estimate would have the smaller bias of S' = R S)."""
+    separates bias from noise (R S draws pooled into one estimate would have the smaller bias of S' = R S).
+    compute_dtype = jnp.float32 (--precision mixed): the loss and its parameter gradient in float32 with full-float32
+    products (in_compute_dtype); None (default) leaves the function exactly as before. Exact statistics only."""
     terms = hidden_terms if hidden == "ising" else potts_terms
     if replicates < 1 or (replicates > 1 and samples < 1):
         raise ValueError("replicates must be >= 1, and > 1 only with samples > 0")
+    if compute_dtype is not None and samples > 0:
+        raise ValueError("compute_dtype needs exact hidden statistics (samples = 0): the sampled draws depend on the "
+                         "dtype of the fields")
     if jackknife not in (False, True, 0, 1, 2) or (jackknife == 2 and (samples < 4 or samples % 4)):
         raise ValueError("jackknife must be False / 0, True / 1, or 2 (2 needs samples divisible by 4)")
 
@@ -587,15 +797,22 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
             return estimate(key)
         return jnp.mean(jax.vmap(estimate)(jr.split(key, replicates)), axis=0)
 
-    return loss
+    if compute_dtype is None:
+        return loss
+    return in_compute_dtype(loss, compute_dtype)
 
 
-def make_loss(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False, replicates=1):
-    """Batch mean of make_loss_per_sample (the paper's loss for K = 0)."""
-    per_sample = make_loss_per_sample(vis, T, K, hidden, local, samples, jackknife, replicates)
+def make_loss(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False, replicates=1, compute_dtype=None):
+    """Batch mean of make_loss_per_sample (the paper's loss for K = 0). With compute_dtype (float32), the per-sample
+    losses are averaged in float64."""
+    per_sample = make_loss_per_sample(vis, T, K, hidden, local, samples, jackknife, replicates, compute_dtype)
 
-    def loss(params, X, key=None):
-        return jnp.mean(per_sample(params, X, key))
+    if compute_dtype is None:
+        def loss(params, X, key=None):
+            return jnp.mean(per_sample(params, X, key))
+    else:
+        def loss(params, X, key=None):
+            return jnp.mean(per_sample(params, X, key).astype(jnp.float64))
 
     return loss
 

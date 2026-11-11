@@ -198,3 +198,132 @@ optimising.
 ```
 Run names: `<problem>_K<K>_ema_potts_quad_local_quartic_r1_lin_pooled` (Potts),
 `<problem>_K<K>_ema_ising_quad_local_quartic_r1_lin` (Ising), under `out/latent_physical_SGM/`.
+
+## 9. Code analysis of the training step (2026-11-11) and the opt-in fast paths
+
+Read from the code and the logs; the numbers marked "estimate" are not measured yet (jobs below). Only the
+visible-energy part was checked by an independent second reading.
+
+### What one step really costs
+
+- **Visible energy: 12 float64 N x N products** (6 in `grad_lap`, 6 in the backward pass forming the cotangents of
+  C, U, D), 7.55 GFLOP, about 7.0 ms of the 7.7 ms pixels-only step (about 0.7 ms is RNG, Adam, EMA, loop).
+  With `--pair-terms lin`, **5 of the 6 forward products** multiply exact zeros (not 4 as section 5 says), and so do
+  their 5 backward products: 10 of 12 are wasted. The cost does not depend on the pair count (radius 14: 129 steps/s,
+  radius 1: 130/s).
+- **Hidden part: 14 products of size B x N x K** (6 forward: A, |G|^2, gbar; 8 backward: the four products with X or
+  X^2 on the left need only the parameter cotangent). 28 B N = **11.2 MFLOP per state**, not 14. At the measured
+  10.2-10.5 us per state this is 1.07-1.11 TFLOP/s, 76-79% of the float64 peak. 14 is the minimum for the exact loss
+  and gradient: stacking [X, X^2] or a custom VJP saves kernel launches, not FLOPs.
+- **Outside the products** (Adam, update, EMA, the `best_params` select, which runs every step even under
+  `--select ema` and is never read there; RNG; `--local` costs 0.25 ms of kernel latency): 5-8% of a step today.
+  They become most of the step once the products are fast.
+- **Per-run overhead** (Potts 3072: 1,054 s = 1.2%) is mostly one-time: 677 s numpy k-means before slice 0
+  (1,734 s at K = 6144), 277 s final assembly (re-reading 100 slices, writing `hidden_history.npz`), about 1 s per
+  slice. At 10-20x faster steps it becomes 10-20% of a run.
+
+### Measured (job 4222239, `speed_check.py` section 5; L40, full training step incl. sampling, Adam, EMA)
+
+| ms per step | dense f64 (today) | dense_skip f64 | stencil f64 | dense mixed | **stencil mixed** | 100-slice run, stencil mixed |
+|---|---|---|---|---|---|---|
+| pixels only | 7.70 | 1.70 | 0.38 | 0.50 | **0.20** (38x) | 4.5 h -> 7 min |
+| Potts 784 | 16.2 | 11.1 | 9.8 | 1.13 | **0.79** (20x) | 9.4 h -> 28 min |
+| Potts 3072 | 40.3 | 34.1 | 32.9 | 2.53 | **2.22** (18x) | 23.5 h -> 1.3 h |
+| Potts 6144 | 71.5 | 63.8 | 62.6 | 4.86 | **4.56** (16x) | 42 h -> 2.7 h |
+
+The dense f64 column reproduces section 4 (7.7 / 16.2 / 40.3 / 71.4 ms). Loss + gradient alone is 0.59 / 1.73 /
+3.48 ms (K 784 / 3072 / 6144): about 22-25% of a fast step is sampling and optimizer bookkeeping (Adam, EMA and the
+unused `best_params` select), the next thing to trim. End to end through `train_latent.py` (2 slices, slice 1):
+Potts 784 stencil + mixed 1,270 steps/s (was 62/s), pixels only stencil f64 2,684 steps/s (was 130/s).
+Plus the fixed per-run costs (k-means start-up 1.5 / 11 / 29 min at K 784 / 3072 / 6144, final assembly).
+
+**Accuracy (job 4222254, `speed_check.py 1,4`).** float32 (stencil + mixed, HIGHEST) vs float64 on 16 batches of
+512 at trained slices of three runs (four-digit Potts 784 and Ising 784, ten-digit Potts 3072):
+- error / batch-to-batch gradient noise: visible theta about 2e-6 (late Ising slices up to 1.2e-4); W, Q, b at
+  most 3e-6 for t >= 2.5, 1e-4 at t ~ 0.5, 5-7e-4 (max 4e-3) at t = 0 for Potts 3072; rarely visited Potts states
+  (occupation < 1e-4) at most 9e-4; local units about 1e-5. Cosines >= 0.99998.
+- The errors of W, Q, b are random (bias z about 1). Those of the local units and of theta in late Ising slices are
+  systematic (bias z about 4 of a possible 4) but only 1e-5 to 1e-4 of the noise.
+- Per-sample loss relative error median 1e-7 to 6e-7.
+- Only failure of the preset criteria: Potts 3072 slice 99, relative error of b 1.0e-3 (limit 1e-3); its
+  error / noise is 7e-4, 14x inside the limit.
+- **TF32 is XLA's default for float32 products on the L40**: without HIGHEST the field errors in a/T are about 1000x
+  larger, up to 3.0 at t = 0 (HIGHEST: 0.016). `in_compute_dtype` sets HIGHEST; all 17 (stencil) / 29 (dense)
+  products of the mixed loss are float32 at HIGHEST (section 3 of the check).
+- Stencil vs dense (section 2): 1e-16 to 1e-15 on six lattices (Chebyshev r 1, 2, von Neumann r 1, 3, 14x14, 8x8
+  all-to-all), loss equal, gradients 1e-16 to 1e-13, deterministic over recompilation. `dense_skip` is equal up to
+  rounding but not bit-identical to dense.
+- `test_latent.py` (job 4222242): 53 checks, 0 failed, so the default path is unchanged.
+- Training: the first two slices of Potts 784 with stencil + mixed (`bench_mixst_K784`) log the same numbers as the
+  float64 run to every printed digit (validation -19552.9 / -19564.2, |W| 3.759, |Q| 0.1813, 596.10 effective
+  states, best step 4160).
+- **Late slices (job 4222313, `..._pooled_late_mixst`):** slices 80-99 of the four-digit Potts 784 run retrained
+  with stencil + mixed on top of its float64 slices 0-79, at 1,259 steps/s (float64: 62/s). Per-slice validation
+  loss vs the float64 slices: mean difference +4.8 units over the 20 slices, largest +32 (slice 82), slice 99
+  -146,298.5 vs -146,312.0 (+13.5, 0.009%; doubling the steps moved slice 99 by 17,000). The differences appear
+  right after the warm start and shrink to about +-3 units, as rounding-level divergence does. Effective states
+  agree within 1-4 (slice 99: 451.8 vs 447.9), states below 1e-6: 126-137 vs 127-140.
+
+### Speed-ups, in order
+
+1. **`--visible-impl stencil`** (`latent_model.StencilVisible`): the visible energy per lattice offset (4 offsets
+   at radius 1), only the kept pair groups, no N x N matrices. Equal to the dense path up to rounding; only slices,
+   pads, elementwise products and one unique-index gather, so deterministic in both passes. `dense_skip` keeps the
+   dense products but leaves out the dropped groups (about 1.2 ms instead of 7.0). For the paper's radius 14
+   (420 offsets) dense stays the better choice.
+2. **`--precision mixed`** (`latent_model.in_compute_dtype`): the loss and its gradient in float32 with every
+   product at HIGHEST precision; parameters, Adam, EMA, the data stream (drawn in float64 with the paper's keys, then
+   cast) and validation stay float64. TF32 must be excluded explicitly: XLA may use it for float32 products by
+   default, it is no faster than float32 on the L40 (both about 90 TFLOP/s), and its 11-bit significand gives field
+   errors of about 0.1-0.3 in a/T at t <= 0.2. Expected float32 errors (estimate): field error in a/T about 1e-5
+   at t = 2.5 and up to about 1e-2 at t = 0; per-sample hidden-gradient errors about 1e-5 for t >= 1, up to 0.5-4%
+   at t ~ 0 (from the softmax-backward cancellation, |G|^2 / T^2 about 7e5), random rather than systematic, so a
+   few % of the batch-to-batch noise at most. The forward cancellation in the Potts Laplacian
+   (sum p |G|^2 - |gbar|^2) only affects the logged loss: reverse mode never uses that value. Fallback if the last
+   slices fail: float64 for slices >= 95.
+3. **Step schedule** (changes results): slices 7-30 decide which Potts states survive (four digits, Potts 784:
+   lost states peak at 192 with 1x steps vs 88 with 2x, 140 vs 71 at t = 0; flat from slice 30 to 79 in both), so
+   only **slices 30-69** can be cut. At 1/3 of their steps a run needs 1,536,307 steps (-27%); spending the saving
+   on 2x steps in slices 80-99 costs +1% in total and should recover most of the 2x FID gain (20.3 -> 17.7).
+   Slices 80-99 still improve at 4x steps (job 4221035, slice 80).
+4. After 1-2: cache the k-means reference, assemble the history from memory, skip `best_params` under
+   `--select ema`, run per-slice diagnostics on the GPU. `--val-every 1000` (float64 validation on 4,096 samples)
+   would then cost about 4-5% of a run.
+5. Sampling becomes the larger part of a pipeline (2,000 samples at K = 3072: 2.6 h); see section 6, item 5.
+6. Option paths: float64 Gumbel-max Potts draws cost about 140 ps x S x B x K per draw site (S = 64, K = 3072: about
+   14 ms per step); an inverse-CDF sampler would remove most of it. The jackknife rebuilds A and |G|^2 per part.
+
+### Corrections to sections 4-7
+
+- Section 7's benchmark (`--steps-scale 0.1`) recompiles inside the timed slice: slices 0 and 1 then have
+  remainders 90 and 20, and `run` is jitted with a static step count. Use `--steps-scale 1 --max-slices 2` and read
+  slice 1 (11,201 = 112 x 100 + 1 steps).
+- Section 4, recompilation: "only two lengths occur" holds for `--steps-scale 1` only.
+- Section 7, disk: a run also writes `hidden_history.npz`, a second copy of W and Q: about 7.7 GB per run at
+  K = 3072 and 15.5 GB at K = 6144.
+- Section 6.6: packing several runs on one GPU gives nothing in float64 (the products already run near the float64
+  peak); it may help after the float32 path, mainly for K <= 784.
+
+### New flags (defaults unchanged)
+
+- `--visible-impl {dense, dense_skip, stencil}` (default dense) and `--precision {f64, mixed}` (default f64), both
+  recorded in `config.json`; old runs resume as dense / f64. Both are in the `--init-from` free set, so late slices
+  can be retrained with them on top of float64 early slices. `--precision mixed` refuses `--hidden-samples`,
+  `--hidden-rule cd1`, `--hidden-norm occupancy` and `--hidden-floor` (their draws would change with float32 fields).
+- Validation (`loss_ps`) and the paper comparison (`loss_ps_k0`) always use the dense float64 path, so validation
+  losses stay comparable with every existing run.
+
+### Checks submitted 2026-11-11
+
+| job | what |
+|---|---|
+| 4222238 | CPU: compile and import the edited modules |
+| 4222239 | `speed_check.py`: stencil / dense_skip vs dense on 6 lattices (gradient, Laplacian, energy, autodiff, Hessian trace; loss and gradient; determinism); HLO of the mixed loss (all products float32 at HIGHEST); float32 vs float64 loss and gradients on trained slices (four-digit Potts 784 slices 0/50/80/90/95/99, ten-digit Potts 3072 and four-digit Ising 784 slices 0/50/80/95/99; 16 batches each; with HIGHEST and DEFAULT precision); step timings for dense / dense_skip / stencil x f64 / mixed at K = 0, 784, 3072, 6144. Report: `out/latent_physical_SGM/speed_check/4222239/report.txt` |
+| 4222240 | `train_latent.py` 2 slices, Potts 784, stencil + mixed (`bench_mixst_K784`): end-to-end plumbing and steps/s of slice 1 |
+| 4222241 | `train_latent.py` 2 slices, pixels only, stencil (`bench_stencil_K0`) |
+| 4222242 | `test_latent.py`: the default path is unchanged |
+| 4222254 | `speed_check.py 1,4`: the float32 comparison again, with the theta gradient restricted to the entries training uses (4222239 compared the dropped c_om / c_duff / k_6 entries too, where the dense path computes discarded gradients and the stencil gives 0) |
+| 4222313 | slices 80-99 of the four-digit Potts 784 run retrained with stencil + mixed on top of its slices 0-79 (`..._pooled_late_mixst`, about 20 min); compare the per-slice validation loss and state counts with the original slices 80-99 (replaces 4222243, which waited on 4222239) |
+
+Float32 acceptance (per slice and parameter group, mixed vs float64 on the same batches): median relative gradient
+error <= 1e-3, cosine >= 0.9999, error / batch-to-batch gradient noise median <= 1e-2 and max <= 5e-2.
