@@ -2202,6 +2202,18 @@ FID level off with K for a training reason (larger models may need more steps).
     curves for different K are parallel and the late-slope z-scores similar (slices 80-99, median -1.9 to -2.6 for
     every Potts and Ising K), so larger K are not more under-trained than small K: the K comparison is fair at a
     fixed budget, while the absolute FIDs would all improve with longer late slices.
+- **Late-slice test (2026-11-11, running).** Four-digit Potts 784, only slices 80-99 retrained from the paper run's
+  slice 79 (`--init-from <run> --init-slices 80`, slices 0-79 symlinked), more steps vs a larger learning rate
+  (`--steps-scale`, `--lr-scale`): jobs 4221035 (4x steps), 4221036 (4x lr), 4221037 (16x lr), 4221038 (4x steps and
+  4x lr); FID with precision/recall of all of them 4221039, curves 4221040 (group `late`), both after the four runs
+  (about 02:00 on 11-12); quick FID of the learning-rate runs only (paper, 2x, 4x lr, 16x lr) 4222886.
+  - Result so far (held-out loss at the end of each slice minus the paper run's, same validation images; 17:30):
+    the learning rate limits, not the number of steps. Slice 90 / 95 / 98 / 99: 2x steps -325 / -1,125 / -4,548 /
+    -17,162; 4x lr -364 / -1,777 / -8,279 / -26,839; 16x lr -480 / -2,492 / -12,653 / -34,115 (paper loss there
+    -24,616 / -36,949 / -74,130 / -146,312). 4x steps at the paper learning rate gains less than 2x steps did; 4x steps
+    and 4x lr together match 16x lr at slices 80-85 (the run is still going). 16x lr is stable and still clearly ahead of
+    4x, so the best learning rate is above 16x and the late slices are not yet converged. Each learning-rate run takes
+    2.8 h (training plus 500 samples). Sample quality: pending (FID jobs above).
 
 ## Caveats
 

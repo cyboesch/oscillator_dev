@@ -327,3 +327,30 @@ Plus the fixed per-run costs (k-means start-up 1.5 / 11 / 29 min at K 784 / 3072
 
 Float32 acceptance (per slice and parameter group, mixed vs float64 on the same batches): median relative gradient
 error <= 1e-3, cosine >= 0.9999, error / batch-to-batch gradient noise median <= 1e-2 and max <= 5e-2.
+
+### In progress (2026-11-11, 17:45)
+
+- **Convergence study** (11 jobs, 4222697-4222707) on a frozen copy of the validated code:
+  `physical-diffusion-models/latent_frozen_20261111/` (its README lists the questions, runs and job ids). First results:
+  - Slices 0-30 at 2x steps on the fast path (`..._mixst_early2x_part`) reproduce the float64 2x run's state counts
+    exactly: lost states 28 / 88 / 71 / 35 / 31 and effective states 402 / 445 / 490 / 548 / 562 at slices
+    9 / 15 / 19 / 25 / 30 (1x steps: 29 / 179 / 192 / 147 / 116 lost). Slices 31-99 at 1x follow
+    (`..._mixst_early2x`); its FID tells how much of the 2x gain (FID 20.3 -> 17.7) comes from the early slices.
+  - Late slices at 1x steps, lr x4 (`..._late_s1_lr4_mixst`, 9 min) reproduce the float64 run 4221036 (2.6 h): slice
+    99 validation -173,048 vs -173,151, 401 vs 399 effective states. Slice 99 still improves by -5,141 +- 110 over the
+    second half of the slice: not converged even at lr x4.
+  - From the float64 late runs: 1x steps at lr x4 beat 2x steps on validation (-173,151 vs -163,474 at slice 99);
+    lr x16 is better still (-180,426) but collapses state use (116 effective states vs 448). FIDs pending.
+  - When all jobs have ended: FID / KID paired against the paper-schedule run, galleries, learning curves.
+- **Build work** (two parallel tracks, each tested on the GPU, then reviewed; not finished, not yet reviewed):
+  a fast reverse-SDE sampler (`sample_fast.py`, opt-in: integration knot interval by knot interval with the knot
+  matrices shared by all trajectories, analytic visible force, diagonal noise, no per-step progress callback; options
+  for the Brownian tolerance, float32 hidden products and the chunk size), and training trims (`best_params` skipped
+  under `--select ema`, further per-step trims, `--steps-schedule`, k-means of the prototype reference on the GPU,
+  history assembly from memory, `test_latent.py` block 13).
+- **Next (agreed):** a test of knots denser near t = 0 (t_k = 5 (1 - k/99)^1.5: last interval 0.005 instead of 0.05;
+  learning rate and steps per slice as the paper's linear functions of t, +9% steps), after the build tracks; then a
+  pilot pipeline and a plan for the new sweep from scratch.
+- **Not planned:** continuous-time (joint-knot) training. Estimate: at best 1.5-3x fewer GPU-hours (no per-slice
+  restarts, bigger batches; against that two knots per sample and no warm start), possibly none; runs 5-8x shorter
+  only through multi-GPU data parallelism; its main promise would be quality between the knots.
