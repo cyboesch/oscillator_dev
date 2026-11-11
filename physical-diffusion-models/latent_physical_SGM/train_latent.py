@@ -433,7 +433,7 @@ class OccupancyTransform:
 def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sextic", n_pairs=None,
                  cd1_grad=None, cd1_releases=1, loss_key=False, floor=0.0, floor_samples=0, hidden_norm="element",
                  occ_beta=0.999, occ_same_draws=False, zero_slices=(), track_best=True, theta_masks=False,
-                 chunk_batches=False, scan_unroll=1):
+                 chunk_batches=False):
     """Jitted scan of n training steps, identical in effect to the paper's training_step loop.
     track_best, theta_masks, chunk_batches (--step-impl lean; the defaults True, False, False leave every step as
     before): track_best False (lean with --select ema, whose slice result is the EMA): best_params keeps its value
@@ -570,10 +570,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
 
     @partial(jax.jit, static_argnums=3)
     def run(carry, t_curr, lrs, n, dt=0.0):
-        if not chunk_batches and scan_unroll == 1:
+        if not chunk_batches:
             return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt), carry, None, length=n)
-        if not chunk_batches:             # scan_unroll (timing experiments, speed_check.py): steps per loop iteration
-            return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt), carry, None, length=n, unroll=scan_unroll)
 
         def keys(key, _):                 # one_step's per-step split of the key chain, ahead of the scan
             key, k_epoch, k_release = jr.split(key, 3)
@@ -583,7 +581,7 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         Xs = jax.vmap(lambda k: sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train,
                                                        k, beta=1))(k_epochs)
         return jax.lax.scan(lambda c, xs: one_step(c, t_curr, lrs, dt, xs), carry[:2] + (key,) + carry[3:],
-                            (Xs, k_releases), unroll=scan_unroll)
+                            (Xs, k_releases))
 
     return run, adam
 

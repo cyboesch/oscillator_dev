@@ -454,8 +454,9 @@ def bench_setup():
 TRIMS = {"base": {}, "nobest": {"track_best": False},
          "nobest+masks": {"track_best": False, "theta_masks": True},
          "nobest+chunk": {"track_best": False, "chunk_batches": True},
-         "lean": {"track_best": False, "theta_masks": True, "chunk_batches": True},
-         "lean+unroll4": {"track_best": False, "theta_masks": True, "chunk_batches": True, "scan_unroll": 4}}
+         "lean": {"track_best": False, "theta_masks": True, "chunk_batches": True}}
+# (2026-11-11, job 4222847: scan_unroll=4 on top of lean was 2-3% slower at K = 784-6144 and 2% faster at K = 0;
+#  XLA flags: command buffers off 5-13% slower, CONDITIONALS / graph_min_graph_size=1 within +-2%; none kept)
 
 
 def speed():
@@ -481,7 +482,7 @@ def speed():
     variants = [("dense", "f64", "base"), ("dense_skip", "f64", "base"), ("stencil", "f64", "base"),
                 ("dense", "mixed", "base"), ("stencil", "mixed", "base"), ("stencil", "mixed", "nobest"),
                 ("stencil", "mixed", "nobest+masks"), ("stencil", "mixed", "nobest+chunk"),
-                ("stencil", "mixed", "lean"), ("stencil", "mixed", "lean+unroll4")]
+                ("stencil", "mixed", "lean")]
     out = {}
     log("  ms per step (full training step: sampling, loss + gradient, Adam, update, EMA, best) | loss + gradient "
         "+ a plain update only | first call (compile + 100 steps)")
