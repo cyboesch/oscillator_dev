@@ -598,6 +598,80 @@ def block_14():
     report(f"   block 14: {time.time() - t14:.0f} s")
 
 
+def block_15(data):
+    """15: train_latent --split-dead (split_dead_states, 2026-11-12): free-energy-preserving re-seeding of dead Potts
+    states. A small Potts model (12 states, --quad --local, the trained model's lattice and visible terms) with 4 states
+    made dead (bias -50): at spread 0 the score-matching loss and the free energy are unchanged to rounding; at spread
+    0.5 every dead state is alive again, the donors are the 4 busiest states, each pair shares its donor's occupation,
+    and the loss moves only slightly; the spec parser."""
+    t15 = time.time()
+    k1, k2, k3, k4, k5, k6, k7 = jr.split(jr.PRNGKey(15), 7)
+    conn_s = lm.connectivity(28, 1)
+    P_s = conn_s.shape[0]
+    zs = lm.dropped_pair_slices(lm.N, P_s, ("lin",))
+    kept_m = np.ones(4 * lm.N + 3 * P_s, bool)
+    for s in zs + (lm.k6_slice(lm.N),):
+        kept_m[s] = False
+    th = lm.quartic_initial_theta(lm.paper_theta_layout(P_s)[0], lm.N, P_s)
+    th = jnp.where(kept_m, th, 0.0)
+    Kp, dead_idx = 12, np.array([2, 5, 7, 11])
+    b0 = 0.02 * jr.normal(k2, (Kp,))
+    b0 = b0.at[dead_idx].set(-50.0)
+    p0 = {"theta": th, "W": 0.05 * jr.normal(k1, (Kp, lm.N)), "b": b0, "Q": 0.005 * jr.normal(k3, (Kp, lm.N)),
+          "wl": 0.3 * jr.normal(k4, (lm.N,)), "bl": 0.02 * jr.normal(k5, (lm.N,))}
+    X = sample_forward_process(1.0, 2048, lm.TEMP, lm.SIGMA_FORWARD, data, k6, beta=1)
+    vis = lm.make_visible(conn_s, lm.N, "stencil", ("lin",), sextic=False)
+    loss = jax.jit(lm.make_loss(vis, lm.TEMP, Kp, "potts", True))
+
+    def occ(p):
+        A = np.asarray(X) @ np.asarray(p["W"]).T + np.asarray(p["b"]) + (np.asarray(X) ** 2) @ np.asarray(p["Q"]).T
+        Z = A / lm.TEMP
+        P = np.exp(Z - Z.max(axis=1, keepdims=True))
+        return (P / P.sum(axis=1, keepdims=True)).mean(axis=0), Z
+
+    def free_energy(p):
+        _, Z = occ(p)
+        zm = Z.max(axis=1)
+        return -lm.TEMP * (zm + np.log(np.exp(Z - zm[:, None]).sum(axis=1)))
+
+    pbar0, _ = occ(p0)
+    busiest = set(np.argsort(-pbar0)[:4].tolist())
+    L0, F0 = float(loss(p0, X)), free_energy(p0)
+    p_s0, info0 = train_latent.split_dead_states(p0, X, 0.0)
+    L1, F1 = float(loss(p_s0, X)), free_energy(p_s0)
+    report(f"   split, spread 0: {info0}; loss {L0:.10g} -> {L1:.10g}; max |dF| {np.max(np.abs(F1 - F0)):.2e}")
+    check("15 split at spread 0: score-matching loss unchanged (relative)", abs(L1 - L0) / abs(L0), 1e-10)
+    check("15 split at spread 0: free energy unchanged on every sample (max |dF| / T)",
+          float(np.max(np.abs(F1 - F0))) / lm.TEMP, 1e-9)
+    p_s, info = train_latent.split_dead_states(p0, X, 0.5)
+    pbar1, Z1 = occ(p_s)
+    L2, F2 = float(loss(p_s, X)), free_energy(p_s)
+    donors = [int(j) for j in range(Kp) if j not in dead_idx and not np.allclose(np.asarray(p_s["W"][j]),
+                                                                                 np.asarray(p0["W"][j]))]
+    pair_share = max(abs(float(pbar1[d] + pbar1[j]) - float(pbar0[j])) / float(pbar0[j])
+                     for d, j in zip(sorted(dead_idx.tolist()), sorted(donors, key=lambda j: -pbar0[j])))
+    bad = int(info["dead"] != 4 or info["split"] != 4) + int(set(donors) != busiest)
+    bad += int(np.any(pbar1[dead_idx] < 1e-6))
+    report(f"   split, spread 0.5: {info}; donors {sorted(donors)} (busiest {sorted(busiest)}); occupations of the "
+           f"re-seeded states {np.array2string(pbar1[dead_idx], precision=3)}; loss {L2:.10g} (relative change "
+           f"{abs(L2 - L0) / abs(L0):.2e}); max dF / T {np.max(F2 - F0) / lm.TEMP:+.3f}, min {np.min(F2 - F0) / lm.TEMP:+.3f}; "
+           f"largest relative change of a pair's total occupation {pair_share:.3f}")
+    check("15 split at spread 0.5: 4 dead states re-seeded from the 4 busiest donors, all alive afterwards (failures)",
+          bad, 0.5)
+    check("15 split at spread 0.5: free energy only lowered, by at most T log cosh of a few SD (max dF / T <= 0; "
+          "min dF / T)", max(float(np.max(F2 - F0)) / lm.TEMP, 0.0) + (float(np.min(F2 - F0)) / lm.TEMP < -5.0), 1e-9)
+    check("15 split at spread 0.5: loss moves only slightly (relative)", abs(L2 - L0) / abs(L0), 1e-2)
+    ok = train_latent.parse_split_slices("20, 25,20") == (20, 25) and train_latent.parse_split_slices("") == ()
+    for spec in ("0", "100", "x", "20;25", ","):
+        try:
+            train_latent.parse_split_slices(spec)
+            ok = False
+        except ValueError:
+            pass
+    check("15 --split-dead spec parser (valid lists, invalid ones refused)", 0.0 if ok else 1.0, 0.5)
+    report(f"   block 15: {time.time() - t15:.0f} s")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     t_all = time.time()
@@ -608,6 +682,10 @@ def main():
         finish(t_all)
     if sys.argv[1:] == ["14"]:          # block 14 alone (CPU-sized)
         block_14()
+        finish(t_all)
+    if sys.argv[1:] == ["15"]:          # block 15 alone (CPU-sized)
+        data, _, _, _ = lm.load_data()
+        block_15(data)
         finish(t_all)
     key = jr.PRNGKey(123)
     conn = lm.connectivity()
@@ -971,6 +1049,7 @@ def main():
 
     block_13(key, data, taus)
     block_14()
+    block_15(data)
     finish(t_all)
 
 

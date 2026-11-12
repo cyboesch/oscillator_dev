@@ -188,6 +188,18 @@ def parse():
                     help="Potts units: the k-means of the prototype reference (latent_model.prototype_reference) in "
                          "numpy (cpu, default) or on the GPU (latent_model.kmeans_jax: the same seeding draws and "
                          "iterations in float64, equal up to rounding; minutes -> seconds at K >= 784)")
+    ap.add_argument("--split-dead", default="",
+                    help="Potts units: at the start of the listed slices (comma-separated, e.g. '20,25,30,35,40'), "
+                         "every state whose mean occupation on a batch of the slice's data is below 1e-6 (the "
+                         "training log's states_below_1e-6 rule) becomes a copy of a busy state (split_dead_states): "
+                         "donor j (busiest first, one dead state each) and the dead state get W_j +- eps v, Q_j and "
+                         "b_j - T log 2 each, v the leading principal direction of the donor's posterior-weighted "
+                         "data, eps = s T / sqrt(lambda_1) with s = --split-spread. The free energy changes only at "
+                         "second order (by -T log cosh of a field difference of SD s), and the two copies can then "
+                         "specialise. Recorded in config.json; in the --init-from free set. Default: none")
+    ap.add_argument("--split-spread", type=float, default=0.5,
+                    help="--split-dead: SD s of the field difference (in units of T) between the two copies over the "
+                         "donor's data; 0 makes exact copies (which stay identical: no symmetry breaking)")
     ap.add_argument("--assemble", choices=["files", "memory"], default="files",
                     help="final params_history.npy / hidden_history.npz from this job's slices kept in memory "
                          "(memory; slices of an earlier job are read from their files) instead of re-reading every "
@@ -326,6 +338,82 @@ def slice_steps(k, steps_scale=1.0, schedule=(), grid="uniform"):
         return max(1, int(round(base * steps_scale)))
     x = base * steps_scale * steps_factor(schedule, k)
     return 100 * max(1, int(round((x - 1.0) / 100.0))) + 1
+
+
+def parse_split_slices(spec):
+    """--split-dead 'k1,k2,...' -> sorted tuple of distinct slice indices in 1..99 ('' -> ())."""
+    if not spec.strip():
+        return ()
+    try:
+        ks = sorted({int(s) for s in spec.split(",") if s.strip()})
+    except ValueError:
+        raise ValueError(f"--split-dead {spec!r}: expected slice indices, e.g. '20,25,30'") from None
+    if not ks or ks[0] < 1 or ks[-1] > lm.N_TIME_STEPS - 1:
+        raise ValueError(f"--split-dead {spec!r}: slice indices must lie in 1..{lm.N_TIME_STEPS - 1}")
+    return tuple(ks)
+
+
+def split_dead_states(params, X, spread, temp=lm.TEMP, dead_below=1e-6, n_power=30):
+    """--split-dead: re-seed the dead Potts states as copies of busy ones, keeping the free energy (nearly) unchanged.
+
+    On the batch X (the slice's data): posteriors p(m | x) of the Potts fields a_m = W_m x + Q_m x^2 + b_m and the
+    mean occupation pbar_m. Dead: pbar_m < dead_below. Donors: the living states, busiest first, one dead state each.
+    For donor j and dead state d: v = the leading principal direction of the data weighted by p(j | x) (power
+    iteration), lambda its variance, eps = spread T / sqrt(lambda); then
+        W_j <- W_j + eps v,  W_d <- W_j - eps v,  Q_d <- Q_j,  b_j, b_d <- b_j - T log 2.
+    The pair contributes exp(a_j / T) cosh(delta) with delta = eps v.x / T (SD `spread` over the donor's data) instead
+    of exp(a_j / T): the free energy changes by -T log cosh(delta), second order in delta (exactly 0 at spread 0, where
+    the copies are identical and stay so). Returns (new params, info)."""
+    W = np.asarray(params["W"], dtype=np.float64)
+    b = np.asarray(params["b"], dtype=np.float64)
+    Q = np.asarray(params["Q"], dtype=np.float64) if "Q" in params else None
+    X = np.asarray(X, dtype=np.float64)
+    A = X @ W.T + b
+    if Q is not None:
+        A = A + (X * X) @ Q.T
+    Z = A / temp
+    P = np.exp(Z - Z.max(axis=1, keepdims=True))
+    P /= P.sum(axis=1, keepdims=True)
+    pbar = P.mean(axis=0)
+    dead = np.flatnonzero(pbar < dead_below)
+    alive = np.flatnonzero(pbar >= dead_below)
+    n = int(min(dead.size, alive.size))
+    info = {"dead": int(dead.size), "split": n}
+    if n == 0:
+        return params, info
+    donors = alive[np.argsort(-pbar[alive], kind="stable")][:n]
+    dead = dead[:n]
+    W2, b2 = W.copy(), b.copy()
+    Q2 = Q.copy() if Q is not None else None
+    eps_all = []
+    log2 = temp * np.log(2.0)
+    for d, j in zip(dead, donors):
+        w = P[:, j]
+        sel = w > 1e-12 * w.max()                       # the data the donor carries (the rest adds nothing)
+        Xs, ws = X[sel], w[sel] / w[sel].sum()
+        Xc = Xs - ws @ Xs
+        v = np.ones(X.shape[1]) / np.sqrt(X.shape[1])
+        for _ in range(n_power):
+            u = Xc.T @ (ws * (Xc @ v))
+            nu = np.linalg.norm(u)
+            if nu == 0.0:
+                break
+            v = u / nu
+        lam = float(np.sum(ws * (Xc @ v) ** 2))
+        eps = spread * temp / np.sqrt(lam) if lam > 0.0 else 0.0
+        W2[j], W2[d] = W[j] + eps * v, W[j] - eps * v
+        b2[j] = b2[d] = b[j] - log2
+        if Q2 is not None:
+            Q2[d] = Q[j]
+        eps_all.append(eps)
+    new = dict(params)
+    new["W"], new["b"] = jnp.asarray(W2), jnp.asarray(b2)
+    if Q2 is not None:
+        new["Q"] = jnp.asarray(Q2)
+    info.update(donor_occ_max=float(pbar[donors].max()), donor_occ_min=float(pbar[donors].min()),
+                eps_median=float(np.median(eps_all)), eps_rel_median=float(np.median(
+                    [e / (np.linalg.norm(W[j]) + 1e-300) for e, j in zip(eps_all, donors)])))
+    return new, info
 
 
 def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None):
@@ -707,6 +795,11 @@ def main():
     pair_terms = lm.parse_pair_terms(args.pair_terms)          # raises on an invalid list
     steps_sched = parse_steps_schedule(args.steps_schedule)    # raises on an invalid schedule
     time_grid = lm.parse_time_grid(args.time_grid)             # canonical spec; raises on an invalid one
+    split_slices = parse_split_slices(args.split_dead)         # raises on an invalid list
+    if split_slices and not (args.hidden == "potts" and args.K >= 2 and not args.hidden_fixed):
+        raise ValueError("--split-dead needs trained Potts units (--hidden potts, --K >= 2, not --hidden-fixed)")
+    if split_slices and not args.split_spread >= 0.0:
+        raise ValueError("--split-spread must be >= 0")
     if args.ref_kmeans == "gpu" and not (args.hidden == "potts" and args.K > 0):
         raise ValueError("--ref-kmeans gpu is the k-means of the Potts prototype reference (--hidden potts, --K > 0)")
     if args.neighbourhood != "chebyshev" and args.radius is None:
@@ -750,6 +843,7 @@ def main():
         "visible_impl": args.visible_impl, "precision": args.precision, "step_impl": args.step_impl,
         "steps_schedule": steps_schedule_str(steps_sched), "ref_kmeans": args.ref_kmeans, "assemble": args.assemble,
         "time_grid": time_grid,
+        "split_dead": ",".join(map(str, split_slices)), "split_spread": args.split_spread,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -768,7 +862,7 @@ def main():
                 "init_from": None, "init_slices": 0, "lr_scale": 1.0,
                 "visible_impl": "dense", "precision": "f64", "step_impl": "default",
                 "steps_schedule": "", "ref_kmeans": "cpu", "assemble": "files",
-                "time_grid": "uniform"}   # runs started before these options existed
+                "time_grid": "uniform", "split_dead": "", "split_spread": 0.5}   # runs from before these options
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -795,7 +889,7 @@ def main():
         return
     log(logf, f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; job {os.environ.get('SLURM_JOB_ID', 'manual')}; "
               f"jax {jax.__version__}; devices {jax.devices()}; code {code_sha}; config "
-              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision', 'step_impl', 'steps_schedule', 'ref_kmeans', 'assemble', 'time_grid')})}"
+              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision', 'step_impl', 'steps_schedule', 'ref_kmeans', 'assemble', 'time_grid', 'split_dead', 'split_spread')})}"
               + (f"; cd1 kappa {args.cd1_kappa}, dt {args.cd1_dt}, releases {args.cd1_releases}, "
                  f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else ""))
 
@@ -956,7 +1050,8 @@ def main():
                       f"sit at identical times (t >= {float(taus[n_link - 1]):.4f})")
         free = {"name", "steps_scale", "val_every", "lr_scale", "init_from", "init_slices", "max_slices",
                 "visible_impl", "precision", "step_impl", "steps_schedule", "ref_kmeans",
-                "assemble", "time_grid"}             # numerics of the new slices only (time_grid: checked above)
+                "assemble", "time_grid", "split_dead", "split_spread"}   # numerics of the new slices only
+                                                     # (time_grid: checked above)
         bad = {k: (scfg.get(k, defaults.get(k)), v) for k, v in config.items()
                if k not in free and k in defaults and scfg.get(k, defaults.get(k)) != v}
         bad.update({k: (scfg.get(k), config[k]) for k in ("K", "cls", "hidden_lr_scale", "freeze_hidden_slices")
@@ -1038,6 +1133,16 @@ def main():
                 params["b"] = jnp.asarray(b_ref[k:k + 1] if one else b_ref[k])
             if args.local:
                 params["wl"], params["bl"] = jnp.asarray(wl_ref[k]), jnp.asarray(bl_ref[k])
+        split_info = None
+        if k in split_slices and k >= args.freeze_hidden_slices:   # --split-dead: dead states become copies
+            Xsp = sample_forward_process(t_curr, VAL_N, lm.TEMP, lm.SIGMA_FORWARD, data_train,
+                                         jr.fold_in(jr.PRNGKey(VAL_SEED + 3), k), beta=1)
+            params, split_info = split_dead_states(params, Xsp, args.split_spread)
+            log(logf, f"slice {k}: --split-dead: {split_info['dead']} states below 1e-6 at the start; "
+                      f"{split_info['split']} re-seeded as copies of the busiest states"
+                      + (f" (donor occupation {split_info['donor_occ_min']:.2e}-{split_info['donor_occ_max']:.2e}; "
+                         f"median eps {split_info['eps_median']:.3g}, relative to |W_j| "
+                         f"{split_info['eps_rel_median']:.3g})" if split_info["split"] else ""))
         train_hidden = K > 0 and k >= args.freeze_hidden_slices and not args.hidden_fixed
         lrs = {"theta": float(lr_v[k]),
                "W": float(args.hidden_lr_scale * sW[k]) if train_hidden else 0.0,
@@ -1133,6 +1238,7 @@ def main():
         val = float(np.mean(val_ps))
         rec = {"slice": k, "t": t_curr, "steps": n_steps, "lr_v": lrs["theta"], "lr_W": lr_log["W"], "lr_b": lr_log["b"],
                **({"n_weak_boosted": n_boost} if n_boost is not None else {}),
+               **({"split": split_info} if split_info is not None else {}),
                **({"cd1_dt": dt_k} if cd1_grad is not None else {}),
                **({"hidden_samples": args.hidden_samples_late if run_k is run_late else args.hidden_samples}
                   if run_late is not None else {}),

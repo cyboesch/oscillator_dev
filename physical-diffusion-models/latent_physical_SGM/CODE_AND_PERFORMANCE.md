@@ -798,3 +798,128 @@ with the patches overlapping. Not started; it waits for the knot-spacing and ear
   - Weights per patch or shared?
   - Patch size, stride and states per patch.
   - Start on a smaller problem first, stepwise.
+
+### Results: knot spacing and early 2x for seeds 1-3 (2026-11-12 11:00)
+
+Jobs: GPU 4226682 (thinned knots), 4226676 / 4226677 (early 2x, seeds 2 / 3); FID 4226688
+(`out/latent_physical_SGM/fid/4226688/report.txt`), gallery 4226689
+(`out/latent_physical_SGM/convergence_study/gallery_next/compare.png`), curves 4226690.
+
+**1. Knot spacing does not limit quality anywhere.** The paper-schedule run was sampled with doubled knot spacing in
+one range at a time, paired against the full knots:
+
+| knots dropped (spacing 0.0505 -> 0.101) | FID | paired vs full knots [95%] | recall |
+|---|---|---|---|
+| none (paper schedule) | 20.29 | | 0.420 |
+| t < 1 (9 slices) | 20.36 | +0.06 [+0.04, +0.08] | 0.419 |
+| 1 < t < 3.4 (24 slices) | 20.55 | +0.26 [+0.03, +0.58] | 0.413 |
+| 3.4 < t < 5 (16 slices) | 20.51 | +0.21 [-0.05, +0.59] | 0.434 |
+
+- **What a finer grid could gain.** The interpolation error scales as h^2, so halving the spacing everywhere would
+  gain at most about 0.1-0.2 FID in total. Below t = 1 it would gain about 0.02. That is far below the seed SD (0.5).
+- **Galleries.** All three thinned versions keep every digit and shape.
+- **Decision.** The time-grid direction is closed in both directions. `--time-grid` stays as an option, but no pilot
+  is needed.
+
+**2. Early 2x steps (slices 0-30) helps for all three seeds.**
+
+| | seed 1 | seed 2 | seed 3 | mean |
+|---|---|---|---|---|
+| FID, 1x | 20.25 | 20.14 | 19.36 | 19.92 +- 0.49 |
+| FID, early 2x | 18.56 | 18.74 | 18.29 | **18.53 +- 0.23** |
+| paired early 2x - 1x [95%] | -1.69 [-2.79, -0.30] | -1.40 [-2.56, -0.50] | -1.07 [-2.53, +0.11] | **-1.39** |
+| recall, 1x / early 2x | 0.418 / 0.470 | 0.464 / 0.470 | 0.482 / 0.510 | +0.029 |
+| lost states at t = 0, 1x / early 2x | 136 / 72 | 140 / 73 | 120 / 72 | |
+| lost states at slice 19, 1x / early 2x | 192 / 71 | 205 / 79 | 190 / 76 | |
+| validation at slice 99, 1x / early 2x | -146,392 / -147,024 | -146,488 / -147,121 | -146,826 / -147,265 | |
+
+- **The FID gain is established.** All three seed-paired differences are negative, -1.39 +- 0.31 on average
+  (t = -7.8 with 2 dof). That is about 55-65% of the full 2x-steps gain (seed 1: -1.69 of -2.56), for about 21%
+  more steps instead of 100%.
+- **Recall gains a little,** +0.03 on average with all three positive, but this is within the 1x seed spread.
+- **State survival is remarkably reproducible:** 72-73 lost states at t = 0 with early 2x, against 120-140 with 1x.
+- **Less seed dependence.** The early-2x FIDs scatter half as much as the 1x ones (SD 0.23 vs 0.49). In the gallery
+  the three early-2x runs agree on more digits than the three 1x seeds do (columns 11-12): with more states alive,
+  the outcome depends less on the seed.
+
+### How Potts states die in the early slices (2026-11-12 13:40; CPU job 4228312, `state_death.py`)
+
+Script `state_death.py` (new). The data: 4096 fixed training images, noised with fixed noise at each slice's t.
+Every state is followed through slices 0-40 and 99. Runs: the three 1x seeds and the three early-2x seeds. Report:
+`out/latent_physical_SGM/state_death/4228312/report.txt`; pictures `dying_<run>.png` (dying states, their W before
+death, and the states that take over).
+
+| | 1x seeds 1 / 2 / 3 | early 2x seeds 1 / 2 / 3 |
+|---|---|---|
+| dead at slices 10 / 15 / 19 / 30 / 99 | 56/179/192/116/132, 49/193/206/122/141, 55/167/190/107/118 | 49/88/71/31/58, 42/92/80/34/68, 44/92/76/36/72 |
+| alive at slice 5, dead at slice 30 | 116 / 122 / 107 | 31 / 34 / 36 |
+| death slice, p10 / p50 / p90 | 8-9 / 11 / 14 (t about 4.3-4.6) | 6-7 / 9 / 11-14 |
+
+- **Starving, not merging.**
+  - No dying state is a near-copy of its winner. Its W has cos 0.4-0.65 (median) with the state that takes its
+    data, below the typical nearest-neighbour cos of living states (0.79-0.82).
+  - The data near it go to many states: the top one takes only about 10%.
+  - It is beaten by about 9 T on all data, a fairly uniform gap (SD about 1.4 T).
+  - Not one dying state used the merging/shadowing route (concentration >= 0.8 and cos >= 0.9).
+- **The dying states never had a niche.** At slice 5 (t = 4.85) none of them wins a single one of the 4096 images
+  (argmax). Their mean occupation is already about 10x below the others' (log10 -3.96 vs -3.03, seed 1). At that
+  noise only about 200 of the 784 states win any image at all.
+- **In the pictures,** the dying states are sharp, specific digit shapes (a particular 2, a particular 0). The states
+  that take their data are smooth, generic class templates. At t of about 4.5 the data only support broad templates.
+- **They are not frozen.** After death their W still moves as fast as the living states' (relative change 0.08 per
+  slice vs 0.084). Per-element Adam divides out their tiny gradients, so they keep taking full-size steps but never
+  win data back. So a per-state step rule (the visit-count rule) is unlikely to help: the dead states already get
+  normal-size steps.
+- **Revival happens in one window.** Between slices 19 and 30 (t 4.0 -> 3.5) at least 76 of the dead states come back
+  by themselves (dead 192 -> 116, seed 1), as the data begin to support more modes. Almost none come back after
+  slice 30 (2-6 by slice 99).
+- **Early 2x saves the same states.** With the same seed and initialisation, 85 / 88 / 71 of the 116 / 122 / 107
+  states that die at 1x are alive at slice 30 with early 2x. The ones it cannot save were the most starved at slice 5
+  (median log10 occupation -4.28 vs -3.86).
+- **Interpretation.** At high noise the data support only a few hundred distinguishable modes. The other states are
+  redundant there. They do not become harmless copies; they starve, because each starts as a distinct, specific
+  prototype. Most of them would be needed at lower t, but by then few can come back. This looks like deterministic
+  annealing in reverse: mixture components should coincide at high "temperature" (here t) and split as it falls.
+- **Candidate fixes** (not built):
+  1. **Free-energy-preserving splits.** Re-seed dead states as copies of busy states, both with bias b - T log 2.
+     That leaves F exactly unchanged, so training is not disturbed, and the copies then specialise. Do this in or
+     after the revival window (slices 20-40). This differs from the two earlier fixes that failed: the homeostatic
+     bias floor, which diverged, and Ising re-seeding, a different unit type and mechanism.
+  2. **Coarse-to-fine initialisation.** Start the redundant states as near-copies of the high-t winners, so that they
+     share occupation instead of starving, and let them split as t falls.
+  3. **More early steps.** Proven, but it costs steps.
+
+### Free-energy-preserving splits of dead states (2026-11-12 14:00-14:40)
+
+**What `train_latent.py --split-dead K1,K2,...` does** (opt-in; with `--split-spread s`, default 0.5):
+- At the start of each listed slice, every state with mean occupation below 1e-6 becomes a copy of one of the busiest
+  states, one dead state per donor.
+- Both copies get the donor's bias minus T log 2, and W_j +- eps v.
+  - v is the leading principal direction of the donor's posterior-weighted data.
+  - eps is chosen so that the two copies' field difference has SD s T over the donor's data.
+- The free energy changes only at second order (by -T log cosh).
+- Recorded in `config.json`; in the `--init-from` free set.
+
+**Unit test** (`test_latent.py` block 15, CPU job 4228381, 6/6):
+- At spread 0 the score-matching loss is unchanged to every digit, and the free energy to 7e-16.
+- At spread 0.5 all dead states come back, the donors are the busiest states, the loss changes by 5e-6 relative,
+  and F only decreases.
+
+**Test on the GPU** (jobs 4228382-85). Each run reuses a 1x seed run's slices 0-19, then trains slices 20-40 with
+splits at 20 / 25 / 30 / 35 / 40.
+
+| slice 40 | 1x seeds 1 / 2 / 3 | split, spread 0.5, seeds 1 / 2 / 3 | split, spread 2, seed 1 |
+|---|---|---|---|
+| dead states | 114 / 116 / 101 | **0 / 0 / 0** | 0 |
+| effective states | 519 / 523 / 539 | **696 / 701 / 697** | 665 |
+| validation loss | -19,135.0 / -19,133.6 / -19,137.9 | -19,138.2 / -19,134.1 / -19,139.5 | -19,139.9 |
+
+- **States stay alive.** Splitting re-seeds 192 states at slice 20 (seed 1). Between splits some die again (22-55 by
+  slice 25-26 at spread 0.5, 0-8 at spread 2). The split at slice 30 re-seeds them (68 for seed 1), and after slice
+  30 (t < 3.5) almost none die any more (0-3).
+- **The validation loss is unchanged or slightly better** (slice 40: 0.5-3 units better for all three seeds; seed
+  spread about 4 units). Slice 30 is 1.5 worse.
+- **Next** (submitted 14:40): full runs with splits every 5 slices from 20 to 95, seeds 1-3 (pipelines 4228447-49:
+  `--init-from` the 1x seed runs at slice 20, then sampling and evaluation). They are compared with the 1x seeds
+  (paired by seed) and with early 2x: FID job 4228450, gallery 4228451
+  (`out/latent_physical_SGM/convergence_study/gallery_split/`).
