@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """What do the Potts states of a trained run represent, slice by slice?
 
-For each run and slice: data x ~ p_tau (the training distribution of that slice, fixed key), the state posteriors
+For each run and slice: data x ~ p_tau (the training distribution of that slice at the run's slice time tau, i.e. on
+its --time-grid; fixed key per slice index), the state posteriors
 p(m | x), and for the states that carry the most data (by mean occupation):
   * the mean training image (clean, t = 0 pixels) of the samples whose most likely state is m, and its class mix;
   * the coupling W_m and, with the spring, Q_m (as images).
@@ -45,7 +46,6 @@ def main():
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     lines = [f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; inspect_states; job {os.environ.get('SLURM_JOB_ID', 'manual')}"]
-    taus = lm.forward_time_pts()
     probs = {}
     for spec in args.runs:
         run, _, sl = spec.partition(":")
@@ -55,6 +55,9 @@ def main():
         if cfg.get("hidden") != "potts" or cfg.get("K", 0) == 0:
             lines.append(f"{run}: not a Potts run; skipped")
             continue
+        # the run's slice times (train_latent.py --time-grid; 'uniform' = lm.forward_time_pts() for older runs),
+        # checked against its hidden_history.npz 't' when the run is finished
+        tgrid, taus = lm.run_time_grid(os.path.join(lm.OUT_ROOT, run), cfg)
         pname = cfg.get("problem", "mnist28")
         if pname not in probs:
             probs[pname] = lm.make_problem(pname, cfg.get("radius"), cfg.get("neighbourhood", "chebyshev"))
@@ -64,7 +67,7 @@ def main():
         n_cls = int(labels.max()) + 1
         lines.append("")
         lines.append(f"{run} ({pname}, {cfg['K']} states, quad {cfg.get('quad', False)}, local {cfg.get('local', False)}, "
-                     f"fixed {cfg.get('hidden_fixed', False)})")
+                     f"fixed {cfg.get('hidden_fixed', False)}" + (f", time grid {tgrid}" if tgrid != "uniform" else "") + ")")
         for k in slices:
             z = np.load(os.path.join(lm.OUT_ROOT, run, "slices", f"slice_{k:03d}.npz"))
             W, b = z["W"], z["b"]

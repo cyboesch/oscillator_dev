@@ -4,7 +4,8 @@ units and skips everything else.)
 
 The unit tree is rebuilt from the run's config (latent_model.split_reference with the run's K, --seed and
 --proto-init; an old K = 1 run is the Fisher unit, i.e. the perclass tree with K = 1) and compared with the run's
-split_tree.npz, if there is one. For each run and slice: data x ~ p_tau (fixed key), the fields
+split_tree.npz, if there is one. For each run and slice: data x ~ p_tau (at the run's slice time tau, i.e. on its
+--time-grid, as is the tree's reference W*(tau); fixed key per slice index), the fields
 a_j = b_j + W_j.x + Q_j.x^2 and m_j = tanh(a_j / T), and
   * the summary numbers of latent_model.ising_unit_stats (as in the training log);
   * per unit: its node (depth, child sizes and purity), the class mix of the samples on either side (sign a_j), its
@@ -109,7 +110,6 @@ def main():
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     T = lm.TEMP
-    taus = lm.forward_time_pts()
     lines = [f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; inspect_units; job {os.environ.get('SLURM_JOB_ID', 'manual')}"]
     probs = {}
     for spec in args.runs:
@@ -122,6 +122,9 @@ def main():
         if cfg.get("hidden", "ising") != "ising" or K == 0:
             lines.append(f"{run}: not an Ising run with K >= 1; skipped")
             continue
+        # the run's slice times (train_latent.py --time-grid; 'uniform' = lm.forward_time_pts() for older runs),
+        # checked against its hidden_history.npz 't' when the run is finished
+        tgrid, taus = lm.run_time_grid(run_dir, cfg)
         pname = cfg.get("problem", "mnist28")
         if pname not in probs:
             probs[pname] = lm.make_problem(pname, cfg.get("radius"), cfg.get("neighbourhood", "chebyshev"))
@@ -136,7 +139,8 @@ def main():
                                          n_min=lm.tree_n_min(len(data), K))
         lines.append("")
         lines.append(f"{run} ({pname}, {K} Ising units, init {cfg.get('init')}, proto_init {proto}, seed {seed}, quad "
-                     f"{cfg.get('quad', False)}, local {cfg.get('local', False)}, fixed {cfg.get('hidden_fixed', False)})")
+                     f"{cfg.get('quad', False)}, local {cfg.get('local', False)}, fixed {cfg.get('hidden_fixed', False)}"
+                     + (f", time grid {tgrid}" if tgrid != "uniform" else "") + ")")
         tpath = os.path.join(run_dir, "split_tree.npz")
         if os.path.exists(tpath):
             zt = np.load(tpath)

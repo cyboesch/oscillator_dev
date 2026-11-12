@@ -13,10 +13,17 @@
   8. sampler on the paper checkpoint (4 trajectories)  vs  the saved states of job 4187940; K = 1 sampler smoke
   ...
   13. the opt-in fast paths: stencil / dense_skip visible energy vs dense; the mixed-precision loss (float32 at
-      HIGHEST) vs float64; --step-impl lean against the default runner (bitwise for pixels only, equal up to
-      rounding with hidden units) and the default runner's reproducibility over two compilations; --steps-schedule;
-      the GPU k-means (--ref-kmeans gpu) vs numpy; the history assembly from memory (--assemble memory) vs from the
-      slice files
+      HIGHEST) vs float64; --step-impl lean against the default runner (on the GPU bitwise for pixels only; equal up
+      to rounding with hidden units, and on the CPU) and the default runner's reproducibility over two compilations;
+      --steps-schedule; the GPU k-means (--ref-kmeans gpu) vs numpy; the history assembly from memory (--assemble
+      memory) vs from the slice files
+  14. the time grids (train_latent.py --time-grid): 'uniform' through the new code = the old slice times, learning
+      rates and step counts bit for bit; 'power:1' = uniform to 1e-15; 'power:1.5' against hand-computed values (and
+      the per-slice table and total steps); invalid specs; the knots the samplers take from a run (config 'time_grid'
+      against hidden_history.npz 't'; a mismatch is refused); the fast sampler's interval weights, interpolated
+      parameters and drift at the power:1.5 knots against jnp.interp and sample_latent.make_drift
+Usage (from latent_physical_SGM/):  sbatch jobs/run_gpu_neuronic.sh test_latent.py [13|14]   ('13' / '14': that block
+alone; both also run on the CPU, where block 13's bitwise comparisons test XLA:CPU's compilation instead of the GPU's).
 Writes out/latent_physical_SGM/tests/<job>/report.txt and checks.json; exit code 1 if any check fails.
 """
 
@@ -128,13 +135,14 @@ def block_13(key, data, taus):
     check(f"13 mixed precision: every product is float32 at HIGHEST ({len(dots)} dot_general)", n_bad + (not dots), 0.5)
 
     # --step-impl lean (best_params skipped under --select ema, theta masks, batches per chunk) against the default
-    # runner: bitwise for a pixels-only model; with hidden units (GEMMs) XLA compiles the changed step with other
-    # fusions, so the results differ at rounding level, amplified by Adam over the steps (speed_check.py section 6:
-    # float64 about 1e-12, mixed precision about 1e-4 in the parameters after 301 steps; a bug would be order 1)
+    # runner: on the GPU bitwise for a pixels-only model; with hidden units (GEMMs), and on the CPU also without, XLA
+    # compiles the changed step with other fusions, so the results differ at rounding level, amplified by Adam over
+    # the steps (speed_check.py section 6, GPU: float64 about 1e-12, mixed precision about 1e-4 in the parameters
+    # after 301 steps; a bug would be order 1)
     lean = {"track_best": False, "theta_masks": True, "chunk_batches": True}
 
-    def run_variant(loss_, p0, **kw):
-        run_, adam_ = train_latent.build_runner(loss_, data, lm.N, 1000.0, "quartic", P_s, zero_slices=zs, **kw)
+    def run_variant(loss_, p0, visible="quartic", zero=zs, **kw):
+        run_, adam_ = train_latent.build_runner(loss_, data, lm.N, 1000.0, visible, P_s, zero_slices=zero, **kw)
         c = train_latent.init_carry(p0, adam_, jr.PRNGKey(4))
         lr_ = {g: (1e-3 if g == "theta" else 3e-5) for g in p0}
         ls = []
@@ -154,24 +162,44 @@ def block_13(key, data, taus):
     loss_k0 = lm.make_loss(vis_st, lm.TEMP, 0, compute_dtype=jnp.float32)
     (c0, l0), (c1, l1) = run_variant(loss_k0, p_k0), run_variant(loss_k0, p_k0, **lean)
     same = np.array_equal(l0, l1) and all(np.array_equal(x, y) for x, y in zip(leaves(c0), leaves(c1)))
-    check("13 lean vs default runner, pixels only (stencil mixed, 101 steps): bitwise equal (losses, parameters, Adam "
-          "state, key, best loss and step, EMA; differing)", 0.0 if same else 1.0, 0.5)
+    if jax.default_backend() == "gpu":        # bitwise on the L40 (speed_check.py section 6, jobs 4222690, 4222847)
+        check("13 lean vs default runner, pixels only (stencil mixed, 101 steps): bitwise equal (losses, parameters, "
+              "Adam state, key, best loss and step, EMA; differing)", 0.0 if same else 1.0, 0.5)
+    else:                                     # XLA:CPU fuses the changed step otherwise (job 4223239): rounding level
+        d0 = max([rel_groups(c1, c0, (g,)) for g in (0, 1, 7)] + [float(np.max(np.abs(l1 - l0) / np.abs(l0)))])
+        check(f"13 lean vs default runner, pixels only (stencil mixed, 101 steps; on the {jax.default_backend()} equal "
+              f"up to rounding, bitwise {same}): largest relative difference of parameters, Adam state, EMA, losses",
+              d0, 1e-8)
     c0, l0 = run_variant(loss_m, pq)
     c2, l2 = run_variant(loss_m, pq)                          # a second build and compilation of the default runner
     same = np.array_equal(l0, l2) and all(np.array_equal(x, y) for x, y in zip(leaves(c0, range(8)), leaves(c2, range(8))))
     check("13 default runner reproducible over two compilations (Potts 8 --quad --local, stencil mixed; differing)",
           0.0 if same else 1.0, 0.5)
-    for lab, loss_, tol in (("stencil mixed", loss_m, 1e-2), ("dense f64", loss_d, 1e-8)):
-        cd_, ld_ = (c0, l0) if lab == "stencil mixed" else run_variant(loss_, pq)
-        cl_, ll_ = run_variant(loss_, pq, **lean)
-        dp, da, de = (rel_groups(cl_, cd_, (g,)) for g in (0, 1, 7))
+    # lean vs default, also on paths the sweep does not use by default (added 2026-11-11 after review): Ising units,
+    # --select best (track_best kept: best_params compared too) and the paper's sextic visible energy (the k_6 floor
+    # as a mask; the k_6 start around K6_FLOOR, so about half are floored at once; no quartic floors may act).
+    # Tolerances: mixed 1e-5 (float32 rounding 6e-8; observed 0 on the GPU, 3.9e-12 on the CPU), float64 1e-8.
+    k8, k9, key = jr.split(key, 3)                            # vis_d is the full sextic dense energy already
+    th_6 = lm.paper_theta_layout(P_s)[0] + 0.3 * jr.normal(k8, th_q.shape)
+    th_6 = th_6.at[lm.k6_slice(lm.N)].set(lm.K6_FLOOR + 0.01 * jr.normal(k9, (lm.N,)))
+    cases = (("stencil mixed, Potts 8", loss_m, pq, 1e-5, {}, {}),
+             ("dense f64, Potts 8", loss_d, pq, 1e-8, {}, {}),
+             ("dense f64, Ising 8", lm.make_loss(vis_d, lm.TEMP, Kp, "ising", True), pq, 1e-8, {}, {}),
+             ("dense f64, Potts 8, --select best", loss_d, pq, 1e-8, {}, {"track_best": True}),
+             ("dense f64, Potts 8, sextic visible", loss_d, dict(pq, theta=th_6), 1e-8,
+              {"visible": "sextic", "zero": ()}, {}))
+    for lab, loss_, p0, tol, base, opt in cases:
+        cd_, ld_ = (c0, l0) if lab.startswith("stencil mixed") else run_variant(loss_, p0, **base)
+        cl_, ll_ = run_variant(loss_, p0, **base, **dict(lean, **opt))
+        names = ("parameters", "Adam state", "EMA") + (("best_params",) if opt.get("track_best") else ())
+        ds = [rel_groups(cl_, cd_, (g,)) for g in (0, 1, 7, 4)[:len(names)]]
         dl = float(np.max(np.abs(ll_ - ld_) / np.abs(ld_)))
         same_kb = all(np.array_equal(x, y) for x, y in zip(leaves(cl_, (2, 3)), leaves(cd_, (2, 3))))
-        report(f"   lean vs default ({lab}, Potts 8, 101 steps): relative differences parameters {dp:.1e}, Adam state "
-               f"{da:.1e}, EMA {de:.1e}, losses max {dl:.1e}; key and step equal: {same_kb}")
-        check(f"13 lean vs default runner ({lab}, Potts 8 --quad --local, 101 steps): equal up to rounding (largest "
-              f"relative difference of parameters, Adam state, EMA, losses; key and step equal)",
-              max(dp, da, de, dl) + (not same_kb), tol)
+        report(f"   lean vs default ({lab}, 101 steps): relative differences "
+               f"{', '.join(f'{n} {d:.1e}' for n, d in zip(names, ds))}, losses max {dl:.1e}; key and step equal: "
+               f"{same_kb}")
+        check(f"13 lean vs default runner ({lab}; --quad --local, 101 steps): equal up to rounding (largest relative "
+              f"difference of {', '.join(names)}, losses; key and step equal)", max(ds + [dl]) + (not same_kb), tol)
 
     # --steps-schedule: no schedule = the old step counts; a schedule gives counts 100 m + 1 near the target
     old = [max(1, int(round(lm.paper_steps(k) * sc))) for sc in (1.0, 0.1, 2.0) for k in range(lm.N_TIME_STEPS)]
@@ -250,10 +278,337 @@ def block_13(key, data, taus):
     report(f"   block 13: {time.time() - t13:.0f} s")
 
 
+def block_14():
+    """14: the time grids of train_latent.py --time-grid (2026-11-11); CPU-sized. 'uniform' through the new code is the
+    old grid and schedules bit for bit; 'power:1' is the uniform grid up to rounding; 'power:1.5' against
+    hand-computed values; invalid specs; the knots the samplers take from a run (config.json 'time_grid' against
+    hidden_history.npz 't', through sample_latent.load_params); the fast sampler's interval widths and weights,
+    interpolated parameters and drift at the power:1.5 knots against jnp.interp (interpolate_parameters) and
+    sample_latent.make_drift, on a small synthetic history (8x8 lattice, Potts 4 --quad --local)."""
+    import math
+    import sample_fast as sf
+    from physical_diffusion_fns.helper_fns import interpolate_parameters
+    t14 = time.time()
+    n_sl = lm.N_TIME_STEPS
+    uni = lm.forward_time_pts()
+
+    def same(a, b):                                           # bit for bit: dtype, shape and bytes
+        a, b = np.asarray(a), np.asarray(b)
+        return a.dtype == b.dtype and a.shape == b.shape and a.tobytes() == b.tobytes()
+
+    # 'uniform' through the new code = the old grid, learning rates, patience and step counts, bit for bit
+    bad = int(not same(lm.time_grid_pts("uniform"), uni)) + int(not same(lm.time_grid_lr("uniform"), lm.lr_schedule()))
+    bad += int(not same(lm.time_grid_patience("uniform"), lm.patience_schedule()))
+    bad += sum(lm.time_grid_steps(k, "uniform") != lm.paper_steps(k) for k in range(n_sl))
+    check("14 'uniform' = lm.forward_time_pts(), lr_schedule(), patience_schedule() and paper_steps(k), bit for bit "
+          "(differing items)", bad, 0.5)
+
+    def old_slice_steps(k, sc, sch):                          # train_latent.slice_steps before --time-grid
+        if not sch:
+            return max(1, int(round(lm.paper_steps(k) * sc)))
+        x = lm.paper_steps(k) * sc * train_latent.steps_factor(sch, k)
+        return 100 * max(1, int(round((x - 1.0) / 100.0))) + 1
+
+    bad = 0
+    for sch in ((), train_latent.parse_steps_schedule("30:0.5,70:1,80:2"),
+                train_latent.parse_steps_schedule("0:0.01,50:0.02")):
+        for sc in (1.0, 0.1, 2.0, 0.37):
+            for k in range(n_sl):
+                ref = old_slice_steps(k, sc, sch)
+                bad += int(train_latent.slice_steps(k, sc, sch) != ref)
+                bad += int(train_latent.slice_steps(k, sc, sch, "uniform") != ref)
+    check("14 train_latent.slice_steps on 'uniform' (grid omitted and explicit) = the old rule (3 schedules x 4 "
+          "scales x 100 slices; differing)", bad, 0.5)
+
+    # 'power:1': the uniform grid up to rounding, with the same step counts
+    p1 = lm.time_grid_pts("power:1")
+    d_t = float(np.max(np.abs(p1 - uni)))
+    d_lr = float(np.max(np.abs(lm.time_grid_lr("power:1") - lm.lr_schedule()) / lm.lr_schedule()))
+    n_st = sum(lm.time_grid_steps(k, "power:1") != lm.paper_steps(k) for k in range(n_sl))
+    report(f"   power:1 vs uniform: slice times max |diff| {d_t:.2e} ({int(np.sum(p1 != uni))} of {n_sl} not bitwise "
+           f"equal); learning rates max relative diff {d_lr:.2e}; step counts differing {n_st}")
+    check("14 'power:1' slice times = the uniform grid to 1e-15 (max |diff|)", d_t, 1e-15)
+    check("14 'power:1' learning rates = the uniform grid's (max relative diff)", d_lr, 1e-14)
+    check("14 'power:1' step counts = paper_steps(k) (slices differing)", n_st, 0.5)
+
+    # 'power:1.5' against hand-computed values (t_k = 5 ((99 - k)/99)^1.5; lr and patience linear in t)
+    g15 = lm.time_grid_pts("power:1.5")
+    lr15, pat15 = lm.time_grid_lr("power:1.5"), lm.time_grid_patience("power:1.5")
+    st15 = [lm.time_grid_steps(k, "power:1.5") for k in range(n_sl)]
+    st_u = [lm.paper_steps(k) for k in range(n_sl)]
+    lr_u = lm.lr_schedule()
+    ks = (0, 1, 7, 15, 30, 50, 70, 90, 98, 99)
+    steps_hand = {0: 10901, 1: 11301, 7: 13001, 15: 15301, 30: 19301, 50: 24001, 70: 27801, 90: 30401, 98: 30901,
+                  99: 30901}                                  # worked out by hand from the formulas above
+    bad = int(not (g15[0] == lm.T_FORWARD and g15[-1] == 0.0)) + int(not np.all(np.diff(g15) < 0.0))
+    bad += int(not (lr15[0] == lm.LR_AT_T5 and lr15[-1] == lm.LR_AT_T0 and pat15[0] == lm.PATIENCE_AT_T5
+                    and pat15[-1] == lm.PATIENCE_AT_T0))
+    worst_t, worst_lr = 0.0, 0.0
+    for k in ks:
+        t_h = 5.0 * ((99 - k) / 99.0) ** 1.5
+        lr_h = 2e-5 + (2e-3 - 2e-5) * t_h / 5.0
+        st_h = 1001 + 100 * (math.ceil(300.0 - 40.0 * t_h) - 1)
+        worst_t, worst_lr = max(worst_t, abs(g15[k] - t_h)), max(worst_lr, abs(lr15[k] - lr_h) / lr_h)
+        bad += int(st15[k] != st_h) + int(st15[k] != steps_hand[k])
+        bad += int(train_latent.slice_steps(k, 1.0, (), "power:1.5") != st15[k])
+    last, first = g15[-2] - g15[-1], g15[0] - g15[1]
+    rel_last = abs(last - 5.0 / 99.0 ** 1.5) / (5.0 / 99.0 ** 1.5)
+    frac = pat15[1:-1] - np.floor(pat15[1:-1])
+    near_int = float(np.min(np.minimum(frac, 1.0 - frac)))
+    tot15, tot_u = sum(st15), sum(st_u)
+    report(f"   power:1.5: first interval {first:.6f}, last {last:.6g} (5/99^1.5 = {5.0 / 99.0 ** 1.5:.6g}, relative "
+           f"diff {rel_last:.1e}; uniform {uni[0] - uni[1]:.6f}); slice times vs hand max |diff| {worst_t:.1e}, "
+           f"lr max relative diff {worst_lr:.1e}; interior patience closest to an integer: {near_int:.4f} away")
+    report(f"   power:1.5 vs uniform per slice (t, lr, paper steps):")
+    report(f"   {'slice':>5} {'t uniform':>10} {'t power1.5':>11} {'lr uniform':>11} {'lr power1.5':>12} "
+           f"{'steps unif':>11} {'steps p1.5':>11}")
+    for k in ks:
+        report(f"   {k:5d} {uni[k]:10.5f} {g15[k]:11.5f} {lr_u[k]:11.4e} {lr15[k]:12.4e} {st_u[k]:11,d} {st15[k]:11,d}")
+    report(f"   total paper steps: uniform {tot_u:,}, power:1.5 {tot15:,} ({100.0 * (tot15 / tot_u - 1.0):+.2f}%); slices "
+           f"at t >= 3: uniform {int(np.sum(uni >= 3.0))}, power:1.5 {int(np.sum(g15 >= 3.0))}; slice 30 at t = "
+           f"{uni[30]:.3f} (uniform) / {g15[30]:.3f} (power:1.5)")
+    # where the slices and steps go: the window in which the four-digit Potts runs decide which states survive (the
+    # uniform grid's slices 7-30, t = 4.646 ... 3.485), and the late region
+    for lo_t, hi_t, lab in ((uni[30], uni[7], "state-survival window t 3.485-4.646 (uniform slices 7-30)"),
+                            (3.0, 5.0, "t >= 3"), (0.0, 1.0, "t <= 1"), (0.0, 0.1, "t <= 0.1")):
+        cells = []
+        for nm, tt, st in (("uniform", uni, st_u), ("power:1.5", g15, st15)):
+            ks_w = [k for k in range(n_sl) if lo_t - 1e-12 <= tt[k] <= hi_t + 1e-12]
+            cells.append(f"{nm} {len(ks_w)} slices ({ks_w[0]}-{ks_w[-1]}), {sum(st[k] for k in ks_w):,} steps")
+        report(f"   {lab}: " + "; ".join(cells))
+    check("14 'power:1.5': t_0 = 5 and t_99 = 0 exactly, strictly decreasing, lr / patience exact at both ends, steps "
+          "and slice_steps = hand-computed values at slices 0,1,7,15,30,50,70,90,98,99 (failures)", bad, 0.5)
+    check("14 'power:1.5' slice times and learning rates = 5 ((99-k)/99)^1.5 and the linear lr (worst of |dt|, "
+          "relative |dlr|)", max(worst_t, worst_lr), 1e-13)
+    check("14 'power:1.5' last interval = 5 / 99^1.5 (relative diff)", rel_last, 1e-13)
+    check(f"14 total paper steps: uniform = 2,095,000 (|diff|; power:1.5 {tot15:,})", abs(tot_u - 2095000), 0.5)
+    bad = 0
+    for p in (0.5, 1.0, 1.5, 2.0, 3.0, 4.0):
+        sp = f"power:{p}"
+        tp, lp = lm.time_grid_pts(sp), lm.time_grid_lr(sp)
+        bad += int(not (tp[0] == 5.0 and tp[-1] == 0.0 and np.all(np.diff(tp) < 0.0)))
+        bad += int(not (lp[0] == lm.LR_AT_T5 and lp[-1] == lm.LR_AT_T0))
+        bad += int(lm.time_grid_steps(0, sp) != 10901) + int(lm.time_grid_steps(n_sl - 1, sp) != 30901)
+    check("14 power:P for P = 0.5-4: exact endpoints, strictly decreasing, lr 2e-3 / 2e-5 and 10,901 / 30,901 steps "
+          "at t = 5 / 0 (failures)", bad, 0.5)
+
+    # 'power:P@K': the uniform grid's knots, learning rates and step counts for slices 0..K bit for bit, the power law
+    # t_k = t_K ((99 - k) / (99 - K))^P below t_K
+    tail, K0 = "power:1.5@40", 40
+    gt, lr_t, pat_t = lm.time_grid_pts(tail), lm.time_grid_lr(tail), lm.time_grid_patience(tail)
+    st_t = [lm.time_grid_steps(k, tail) for k in range(n_sl)]
+    bad = int(not same(gt[:K0 + 1], uni[:K0 + 1])) + int(not same(lr_t[:K0 + 1], lr_u[:K0 + 1]))
+    bad += int(not same(pat_t[:K0 + 1], lm.patience_schedule()[:K0 + 1]))
+    bad += sum(st_t[k] != st_u[k] for k in range(K0 + 1))
+    bad += int(not (gt[0] == lm.T_FORWARD and gt[-1] == 0.0 and np.all(np.diff(gt) < 0.0)))
+    bad += int(not (lr_t[-1] == lm.LR_AT_T0 and pat_t[-1] == lm.PATIENCE_AT_T0))
+    tail_hand = {41: 19301, 70: 26801, 98: 30901, 99: 30901}   # worked out by hand from t_40 = 5 * 59/99
+    worst_tail = 0.0
+    for k in (41, 55, 70, 90, 98, 99):
+        t_h = float(uni[K0]) * ((99 - k) / (99.0 - K0)) ** 1.5
+        lr_h = 2e-5 + (2e-3 - 2e-5) * t_h / 5.0
+        worst_tail = max(worst_tail, abs(gt[k] - t_h), abs(lr_t[k] - lr_h) / lr_h)
+        bad += int(st_t[k] != 1001 + 100 * (math.ceil(300.0 - 40.0 * t_h) - 1))
+        bad += int(k in tail_hand and st_t[k] != tail_hand[k])
+        bad += int(train_latent.slice_steps(k, 1.0, (), tail) != st_t[k])
+    rel_last_t = abs((gt[-2] - gt[-1]) - float(uni[K0]) / 59.0 ** 1.5) / (float(uni[K0]) / 59.0 ** 1.5)
+    tot_t = sum(st_t)
+    report(f"   {tail}: slices 0-{K0} = the uniform grid (t >= {uni[K0]:.4f}); first interval below the junction "
+           f"{gt[K0] - gt[K0 + 1]:.4f}, last {gt[-2] - gt[-1]:.6f} (= t_40 / 59^1.5, relative diff {rel_last_t:.1e}); "
+           f"steps at slices 41/55/70/90/98: {[st_t[k] for k in (41, 55, 70, 90, 98)]} (uniform "
+           f"{[st_u[k] for k in (41, 55, 70, 90, 98)]}); total {tot_t:,} ({100.0 * (tot_t / tot_u - 1.0):+.2f}%)")
+    check(f"14 '{tail}': slices 0-{K0} bit for bit the uniform grid's (t, lr, patience, steps); exact ends, strictly "
+          f"decreasing; steps below the junction = hand-computed values (failures)", bad, 0.5)
+    check(f"14 '{tail}' slice times, learning rates and last interval below the junction = the formulas (worst of "
+          f"|dt|, relative |dlr|, relative last-interval diff)", max(worst_tail, rel_last_t), 1e-13)
+
+    # specs: canonical forms and rejections
+    canon = {"uniform": "uniform", " UNIFORM ": "uniform", "power:1.5": "power:1.5", "Power:1.50": "power:1.5",
+             " power: 1.5 ": "power:1.5", "power:1": "power:1.0", "power:2e0": "power:2.0",
+             "Power:1.50@040": "power:1.5@40", "power:2@97": "power:2.0@97", "power:1.5@+1": "power:1.5@1",
+             " power :1.5": "power:1.5", "POWER : 2 @ 97": "power:2.0@97", "power:4.8": "power:4.8"}
+    bad = sum(lm.parse_time_grid(s) != c or lm.parse_time_grid(c) != c for s, c in canon.items())
+    rejected = 0
+    invalid = ("", "power", "power:", "power:0", "power:-1", "power:nan", "power:inf", "power:abc", "power:1.5:2",
+               "uniform:1", "linear", "power;1.5", "power:1e-30", "power:5000", None, 1.5,
+               "power:1.5@0", "power:1.5@98", "power:1.5@-1", "power:1.5@x", "power:1.5@40.0", "power:1.5@",
+               "power:@40", "power:1.5@40@1", "power:0@40", "uniform@40",
+               # added after review (2026-11-11): Python float() / int() forms that are typos here, and knots that
+               # would lie closer than MIN_KNOT_GAP (t_98 = 5/99^4.9 = 8e-10; P = 9: s_98 = 5 - t_98 rounds to 5)
+               "power:1_5", "power:１.5", "power:1.5@4_0", "power:4.9", "power:9")
+    for s in invalid:
+        try:
+            lm.parse_time_grid(s)
+        except ValueError:
+            rejected += 1
+    report(f"   specs: canonical forms {canon}; rejected {rejected} of {len(invalid)} invalid specs")
+    check("14 time-grid specs: canonical forms and round trip, every invalid spec rejected with ValueError (failures)",
+          bad + len(invalid) - rejected, 0.5)
+
+    # the knots a sampler takes from a run: config.json 'time_grid' (missing = 'uniform') against hidden_history 't'
+    rng = np.random.default_rng(14)
+    G8, R8, K8 = 8, 1, 4
+    n8, P8 = G8 * G8, lm.connectivity(G8, R8).shape[0]
+    hist = {"theta": np.asarray(lm.paper_theta_layout(P8, n8)[0])[None] + 0.05 * rng.normal(size=(n_sl, 4 * n8 + 3 * P8)),
+            "W": 0.05 * rng.normal(size=(n_sl, K8, n8)), "b": 0.05 * rng.normal(size=(n_sl, K8)),
+            "Q": 0.01 * rng.normal(size=(n_sl, K8, n8)), "wl": 0.3 * rng.normal(size=(n_sl, n8)),
+            "bl": 0.05 * rng.normal(size=(n_sl, n8))}
+    root = os.path.join(OUT, "grid_runs")
+
+    def make_run(name, cfg_grid, t_rec):
+        """A finished run folder as train_latent.py leaves it (write_history with the given recorded t), relative to
+        OUT_ROOT, for sample_latent.load_params."""
+        d = os.path.join(root, name)
+        os.makedirs(os.path.join(d, "slices"), exist_ok=True)
+        held = {k: {g: hist[g][k] for g in ("theta", "W", "b")} for k in range(n_sl)}
+        train_latent.write_history(d, os.path.join(d, "slices"), n_sl, t_rec, False, False, held)
+        cfg = {"problem": "gauss2_8", "hidden": "potts", "K": K8, "radius": R8}
+        if cfg_grid is not None:
+            cfg["time_grid"] = cfg_grid
+        with open(os.path.join(d, "config.json"), "w") as f:
+            json.dump(cfg, f)
+        open(os.path.join(d, "DONE"), "w").close()
+        return os.path.relpath(d, lm.OUT_ROOT)
+
+    old_knots = np.asarray(jnp.asarray(np.sort(lm.T_FORWARD - lm.forward_time_pts())[1:-1]))   # sample() before
+    old_kt = sf.knot_times()
+    r_leg = make_run("legacy_uniform", None, uni)
+    prov = sample_latent.load_params(r_leg)[4]
+    tk = sample_latent.slice_times(prov)
+    bad = int(prov["time_grid"] != "uniform") + int(not same(tk, uni))
+    bad += int(not same(np.asarray(sample_latent.step_knots(tk)), old_knots))
+    bad += int(not same(np.asarray(sample_latent.step_knots()), old_knots))
+    bad += sum(int(not same(a, b)) for a, b in zip(sf.knot_times(tk), old_kt))
+    spec_r, taus_r = lm.run_time_grid(os.path.join(lm.OUT_ROOT, r_leg))
+    bad += int(spec_r != "uniform") + int(not same(taus_r, uni))
+    check("14 knots from a run without 'time_grid' (recorded t = uniform): grid 'uniform'; slice times, step_ts and "
+          "the fast sampler's (order, xp, s) are today's arrays bit for bit (failures)", bad, 0.5)
+    r_pow = make_run("power15", "power:1.5", g15)
+    prov = sample_latent.load_params(r_pow)[4]
+    tk = sample_latent.slice_times(prov)
+    order, xp, s = sf.knot_times(tk)
+    bad = int(prov["time_grid"] != "power:1.5") + int(not same(tk, g15))
+    bad += int(not same(np.asarray(sample_latent.step_knots(tk)), np.sort(lm.T_FORWARD - g15)[1:-1]))
+    bad += int(not (same(xp, np.sort(g15)) and same(s, np.sort(lm.T_FORWARD - g15)) and same(g15[order], xp)))
+    spec_r, taus_r = lm.run_time_grid(os.path.join(lm.OUT_ROOT, r_pow))
+    bad += int(spec_r != "power:1.5") + int(not same(taus_r, g15))
+    report(f"   power:1.5 run: step_ts {np.asarray(sample_latent.step_knots(tk))[:2]} ... "
+           f"{np.asarray(sample_latent.step_knots(tk))[-2:]}; reverse-time knots s[-3:] {s[-3:]}")
+    check("14 knots from a run with 'time_grid' power:1.5 (recorded t = the grid): its slice times, step_ts and the "
+          "fast sampler's knots (failures)", bad, 0.5)
+    outcomes = []
+    for name, cg, tr, expect_ok in (("mismatch_power_cfg", "power:1.5", uni, False),
+                                    ("mismatch_uniform_cfg", None, g15, False),
+                                    ("mismatch_2e-12", "power:1.5", g15 + 2e-12, False),
+                                    ("mismatch_shape", "power:1.5", g15[:-1], False),
+                                    ("within_5e-13", "power:1.5", g15 + 5e-13, True)):
+        rn = make_run(name, cg, tr)
+        try:
+            prov = sample_latent.load_params(rn)[4]
+            ok = expect_ok and same(sample_latent.slice_times(prov), g15)
+            msg = "accepted"
+        except ValueError as e:
+            ok, msg = not expect_ok, f"refused: {str(e)[-150:]}"
+        outcomes.append(ok)
+        report(f"   {name}: {msg}")
+    check("14 a run whose recorded slice times differ from its config's grid by more than 1e-12 is refused, within "
+          "1e-12 accepted (5 cases; failures)", outcomes.count(False), 0.5)
+
+    # the fast sampler at the power:1.5 knots: interval widths and weights, interpolated parameters, drift
+    kw8 = dict(problem="gauss2_8", hidden="potts", local=(hist["wl"], hist["bl"]), quad=hist["Q"], radius=R8,
+               neighbourhood="chebyshev")
+    fs = sf.FastSampler(hist["theta"], hist["W"], hist["b"], taus=g15, **kw8)
+    drift_old, _ = sample_latent.make_drift(hist["theta"], hist["W"], hist["b"], "sde", kw8["problem"], kw8["hidden"],
+                                           kw8["local"], kw8["quad"], R8, "chebyshev", taus=g15)
+    old_batch = jax.jit(jax.vmap(drift_old, in_axes=(None, 0, None)))
+    parts = [hist["theta"], hist["W"].reshape(n_sl, -1), hist["b"], hist["Q"].reshape(n_sl, -1), hist["wl"], hist["bl"]]
+    stacked = np.concatenate(parts, axis=1)
+    interp = interpolate_parameters(jnp.asarray(stacked), jnp.asarray(g15))
+    widths = np.diff(np.sort(g15))                            # width of the interval above xp[lo], lo = 0..98
+    X = 0.5 * rng.normal(size=(6, n8))
+    pts = [(0.0, [0]), (lm.T_FORWARD, [sf.N_INTERVALS - 1])]
+    pts += [(float(fs.s[j]), [j - 1, j]) for j in (1, 2, 50, 90, 97, 98)]
+    pts += [(float(fs.s[j] + f * (fs.s[j + 1] - fs.s[j])), [j]) for j in (0, 1, 30, 70, 96, 97, 98)
+            for f in (0.013, 0.5, 0.987)]
+    pts += [(float(t), [None]) for t in rng.uniform(0.0, lm.T_FORWARD, 8)]
+    w_bad, worst_ip, worst_dr, l_range = 0, 0.0, 0.0, [np.inf, -np.inf]
+    for t, js in pts:
+        tau = lm.T_FORWARD - t
+        ref_p = np.asarray(interp(tau))
+        d_old = np.asarray(old_batch(t, jnp.asarray(X), ()))
+        for j in js:
+            j = fs.interval_of(t) if j is None else j
+            lo = sf.interval_lo(j)
+            k_lo, k_hi = fs.order[lo], fs.order[lo + 1]
+            a = fs.interval_args(j)
+            w_bad += int(float(a["dxp"]) != widths[lo]) + int(float(a["xp_lo"]) != g15[k_lo])
+            w_bad += int(g15[k_hi] - g15[k_lo] != widths[lo])
+            l = (tau - fs.xp[lo]) / (fs.xp[lo + 1] - fs.xp[lo])            # this interval's own width
+            l_range = [min(l_range[0], l), max(l_range[1], l)]
+            mine = stacked[k_lo] + l * (stacked[k_hi] - stacked[k_lo])
+            worst_ip = max(worst_ip, float(np.max(np.abs(mine - ref_p)) / np.max(np.abs(ref_p))))
+            if js == [j] and 0.0 < l < 1.0:                     # strictly inside: jnp.interp's bracket is this one
+                i = int(np.clip(np.searchsorted(fs.xp, tau, side="right"), 1, n_sl - 1))
+                w_bad += int(i - 1 != lo) + int(fs.interval_of(t) != j)
+            d_new = np.asarray(fs.drift_batch(np.full(X.shape[0], t), X, j))
+            worst_dr = max(worst_dr, float(np.max(np.abs(d_new - d_old)) / np.max(np.abs(d_old))))
+    fs_u = sf.FastSampler(hist["theta"], hist["W"], hist["b"], **kw8)          # uniform knots: must not match
+    t_c = float(fs.s[97] + 0.5 * (fs.s[98] - fs.s[97]))
+    d_c = np.asarray(old_batch(t_c, jnp.asarray(X), ()))
+    ctrl = float(np.max(np.abs(np.asarray(fs_u.drift_batch(np.full(X.shape[0], t_c), X, fs_u.interval_of(t_c))) - d_c))
+                 / np.max(np.abs(d_c)))
+    report(f"   fast sampler at the power:1.5 knots: interval widths {widths.min():.4g}-{widths.max():.4g} (ratio "
+           f"{widths.max() / widths.min():.1f}); weights l in [{l_range[0]:.3g}, {l_range[1]:.3g}]; interpolated "
+           f"parameters vs interpolate_parameters max relative diff {worst_ip:.1e}; drift vs make_drift max relative "
+           f"diff {worst_dr:.1e} over {len(pts)} times; control (fast sampler on the uniform knots) {ctrl:.2e}")
+    check("14 fast sampler, power:1.5 knots: each interval's width, lower knot and jnp.interp bracket (failures)",
+          w_bad, 0.5)
+    # rounding: at a knot l is off by about ulp(5) / width = 2e-13 in the narrowest interval (job 4223624: 7e-14), and
+    # these synthetic slices are independent draws, so P_hi - P_lo is as large as P itself
+    check("14 fast sampler, power:1.5 knots: interpolated parameters (own-width weights) = interpolate_parameters "
+          "(max relative diff)", worst_ip, 1e-11)
+    check("14 fast sampler drift at power:1.5 knots = sample_latent.make_drift with the same knots (max relative "
+          "diff)", worst_dr, 1e-11)
+    check("14 control: the fast sampler on the uniform knots differs from the power:1.5 drift (> 1e-3 relative; "
+          "0 = it does)", 0.0 if ctrl > 1e-3 else 1.0, 0.5)
+    fs_t = sf.FastSampler(hist["theta"], hist["W"], hist["b"], taus=gt, **kw8)               # power:1.5@40
+    drift_t, _ = sample_latent.make_drift(hist["theta"], hist["W"], hist["b"], "sde", kw8["problem"], kw8["hidden"],
+                                         kw8["local"], kw8["quad"], R8, "chebyshev", taus=gt)
+    old_t = jax.jit(jax.vmap(drift_t, in_axes=(None, 0, None)))
+    s_j = float(lm.T_FORWARD - gt[K0])                        # reverse time of the junction knot t_40
+    worst_t = 0.0
+    for t in (s_j, s_j - 1e-3, s_j + 1e-3, float(fs_t.s[98] + 0.5 * (fs_t.s[99] - fs_t.s[98])), 0.3, 4.99):
+        d_o = np.asarray(old_t(t, jnp.asarray(X), ()))
+        for j in sorted({fs_t.interval_of(t), fs_t.interval_of(t) - (t == s_j)}):
+            d_n = np.asarray(fs_t.drift_batch(np.full(X.shape[0], t), X, j))
+            worst_t = max(worst_t, float(np.max(np.abs(d_n - d_o)) / np.max(np.abs(d_o))))
+    check(f"14 fast sampler drift at {tail} knots (junction from both sides, last interval) = make_drift (max "
+          f"relative diff)", worst_t, 1e-11)
+
+    # latent_model.interp_history (train_latent's paper comparison on another grid) against interpolate_parameters
+    worst = 0.0
+    for taus_i in (uni, g15):
+        ip = interpolate_parameters(jnp.asarray(stacked), jnp.asarray(taus_i))
+        for t in list(rng.uniform(0.0, lm.T_FORWARD, 12)) + [float(g15[37]), float(uni[63])]:
+            ref_p = np.asarray(ip(t))
+            worst = max(worst, float(np.max(np.abs(lm.interp_history(stacked, taus_i, t) - ref_p)) / np.max(np.abs(ref_p))))
+        worst = max(worst, float(np.max(np.abs(lm.interp_history(stacked, taus_i, float(taus_i[41])) - stacked[41]))))
+    check("14 latent_model.interp_history = interpolate_parameters (uniform and power:1.5 knots, random t and knots; "
+          "max relative diff)", worst, 1e-13)
+    report(f"   block 14: {time.time() - t14:.0f} s")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     t_all = time.time()
     report(f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; jax {jax.__version__}; devices {jax.devices()}")
+    if sys.argv[1:] == ["13"]:          # block 13 alone (e.g. on a CPU node while GPUs are scarce); default: all blocks
+        data, _, _, _ = lm.load_data()
+        block_13(jr.PRNGKey(13), data, lm.forward_time_pts())
+        finish(t_all)
+    if sys.argv[1:] == ["14"]:          # block 14 alone (CPU-sized)
+        block_14()
+        finish(t_all)
     key = jr.PRNGKey(123)
     conn = lm.connectivity()
     connj = jnp.asarray(conn)
@@ -615,7 +970,12 @@ def main():
         check(f"12 quad {hid}: sde drift vs x - 2 grad F (autodiff)", rel(drift(tt, x, ()), ref), 1e-10)
 
     block_13(key, data, taus)
+    block_14()
+    finish(t_all)
 
+
+def finish(t_all):
+    """Summary line, checks.json, and the exit code (1 if any check failed)."""
     n_fail = sum(not c["ok"] for c in CHECKS)
     report(f"=== {len(CHECKS)} checks, {n_fail} failed; total {time.time() - t_all:.0f} s")
     with open(os.path.join(OUT, "checks.json"), "w") as f:

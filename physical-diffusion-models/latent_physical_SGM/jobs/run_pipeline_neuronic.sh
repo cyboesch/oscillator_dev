@@ -13,16 +13,20 @@
 #SBATCH --exclude=neu306
 
 # Generic train -> sample -> evaluate pipeline on one GPU.
-#   sbatch jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA_TRAIN_ARGS" "SELECTIONS" "K_VALUES" [N_SAMPLES]
+#   sbatch jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA_TRAIN_ARGS" "SELECTIONS" "K_VALUES" [N_SAMPLES] ["SAMPLE_ARGS"]
 # e.g. sbatch jobs/run_pipeline_neuronic.sh mnist14 _quartic "--visible quartic" "ema" "0 1"
+# SAMPLE_ARGS (optional, default none) are appended to sample_latent.py's arguments (after --chunk 250, so a --chunk
+# there wins), e.g. "--fast --precision mixed --brownian cached --brownian-tol 1e-8 --chunk 500" for the fast sampler
+# (sample_fast.py; validated against the default sampler, 2026-11-11). They must keep the file name
+# samples/sde_base_n<N>.npy (no --stem-suffix).
 # Runs are named <PROBLEM>_K<K>_<SEL><TAG> (for PROBLEM mnist28: K<K>_<SEL><TAG>). For every selection rule the
 # K values are compared pairwise against K = 0 (same initial states and Brownian keys).
 # Resubmitting resumes unfinished trainings and skips finished trainings and samples.
 # Submit from latent_physical_SGM/.
 
 set -uo pipefail
-P=${1:?problem}; TAG=${2:-}; EXTRA=${3:-}; SELS=${4:-ema}; KS=${5:-"0 1"}; NS=${6:-500}
-echo "Starting job on $(hostname) in $(pwd) at $(date); problem ${P} tag '${TAG}' extra '${EXTRA}' sels '${SELS}' Ks '${KS}' n ${NS}"
+P=${1:?problem}; TAG=${2:-}; EXTRA=${3:-}; SELS=${4:-ema}; KS=${5:-"0 1"}; NS=${6:-500}; SAMPLE_ARGS=${7:-}
+echo "Starting job on $(hostname) in $(pwd) at $(date); problem ${P} tag '${TAG}' extra '${EXTRA}' sels '${SELS}' Ks '${KS}' n ${NS} sample args '${SAMPLE_ARGS}'"
 IMAGE="../../container/container_image.sif"
 HOST_PROJECTS_DIR="$(realpath ..)"
 RUNTIME_ARGS="--nv --bind ${HOST_PROJECTS_DIR}:/physical-diffusion-models"
@@ -44,7 +48,7 @@ done; done
 SETS=(); PAIRS=(); RUNS=()
 for SEL in ${SELS}; do for K in ${KS}; do
   R=$(name ${K} ${SEL}); RUNS+=(${R})
-  [ -f ${OUT}/${R}/samples/sde_base_n${NS}.npy ] || run ${D}/sample_latent.py --run ${R} --n ${NS} --chunk 250 || rc=$((rc | 2))
+  [ -f ${OUT}/${R}/samples/sde_base_n${NS}.npy ] || run ${D}/sample_latent.py --run ${R} --n ${NS} --chunk 250 ${SAMPLE_ARGS} || rc=$((rc | 2))
   SETS+=("K${K}_${SEL}${TAG}=${R}/samples/sde_base_n${NS}.npy")
   [ "${K}" != 0 ] && [[ " ${KS} " == *" 0 "* ]] && PAIRS+=(--pair "K${K}_${SEL}${TAG},K0_${SEL}${TAG}")   # only if K = 0 is in this job
 done; done

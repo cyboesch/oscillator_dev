@@ -22,6 +22,10 @@ RUN is a run folder under out/latent_physical_SGM/. For every group:
                       shared validation images (mean +- 2 SE), against t. Negative = A better.
 --mark NAME:LABEL:F draws a vertical line at the fraction F of every slice of that run (e.g. the paper schedule's
 budget, F = 0.5, in a --steps-scale 2 run).
+Runs on different slice-time grids (train_latent.py --time-grid): the per-slice panels and tables are by slice index
+and show each run's t where they differ; the summaries are against t; --pair pairs only the slices at equal t (the
+validation batch of slice k is drawn at the run's own t_k), i.e. slices 0 and 99 for power:P against uniform, and
+0..K and 99 for power:P@K. The slice ranges 0-29 / 30-79 / 80-99 of the medians are slice indices.
 Writes out/latent_physical_SGM/learning_curves/<job>/ (PNG + report.txt).
 """
 import argparse
@@ -106,6 +110,16 @@ def paired(a, b):
     return d.mean(), d.std(ddof=1) / np.sqrt(len(d))
 
 
+def slice_times_label(data, labels, k):
+    """Slice k's time t ('5.000'), or the distinct times of the runs that have slice k in the order of the labels
+    ('3.485 / 2.909') when they differ (runs on different train_latent.py --time-grid)."""
+    ts = []
+    for l in labels:
+        if k in data[l] and all(abs(data[l][k]["t"] - u) > 1e-9 for u in ts):
+            ts.append(data[l][k]["t"])
+    return " / ".join(f"{u:.3f}" for u in ts)
+
+
 def colours(n):
     if n <= len(CATEGORICAL):
         return CATEGORICAL[:n]
@@ -163,8 +177,7 @@ def do_group(name, runs, sel, window, marks, title):
         if np.isfinite(lo):
             pad = 0.05 * (hi - lo + 1e-9)
             ax.set_ylim(lo - pad, hi + pad)
-        t = next(data[l][k]["t"] for l in labels if k in data[l])
-        ax.set_title(f"slice {k}, t = {t:.3f}", fontsize=8)
+        ax.set_title(f"slice {k}, t = {slice_times_label(data, labels, k)}", fontsize=8)
         ax.set_xlabel("training step in the slice", fontsize=7)
         ax.set_ylabel(f"training loss (running mean, {window} steps)", fontsize=7)
         style(ax)
@@ -186,8 +199,10 @@ def do_group(name, runs, sel, window, marks, title):
     for k in sel:
         if any(k in stats[l] for l in labels):
             t = next(stats[l][k][1] for l in labels if k in stats[l])
+            tt = [stats[l][k][1] for l in labels if k in stats[l]]
             report(f"{k:5d} {t:6.3f}  " + "  ".join(
-                f"{stats[l][k][2]:9.2f} / {stats[l][k][4]:5.1f}" if k in stats[l] else f"{'-':>17}" for l in labels))
+                f"{stats[l][k][2]:9.2f} / {stats[l][k][4]:5.1f}" if k in stats[l] else f"{'-':>17}" for l in labels)
+                + ("" if all(abs(v - t) <= 1e-9 for v in tt) else f"   (t per run: {slice_times_label(data, labels, k)})"))
     for lo_k, hi_k in ((0, 29), (30, 79), (80, 99)):
         report(f"slices {lo_k}-{hi_k}, medians: " + "; ".join(
             f"{l}: f {np.nanmedian([r[2] for kk, r in stats[l].items() if lo_k <= kk <= hi_k]):.2f}, "
@@ -227,7 +242,7 @@ def do_group(name, runs, sel, window, marks, title):
             tail = m[len(m) // 4:]
             ax.set_ylim(min(tail.min(), 0) * 1.1 - 1e-6, max(tail.max(), 0) * 1.1 + 1e-6)
         ax.axhline(0.0, color="0.5", lw=0.6)
-        ax.set_title(f"slice {k}, t = {data[vlabels[0]][k]['t']:.3f}", fontsize=8)
+        ax.set_title(f"slice {k}, t = {slice_times_label(data, vlabels, k)}", fontsize=8)
         ax.set_xlabel("training step in the slice", fontsize=7)
         ax.set_ylabel("validation loss minus its final value", fontsize=7)
         style(ax)
@@ -272,16 +287,23 @@ def do_group(name, runs, sel, window, marks, title):
 
 
 def do_pair(name, a, b, data, title):
-    rows = []
+    rows, other_t = [], 0
     for k in sorted(set(data[a]) & set(data[b])):
         sa, sb = data[a][k], data[b][k]
         if "val" not in sa or "val" not in sb:
+            continue
+        if abs(sa["t"] - sb["t"]) > 1e-9:       # other --time-grid: slice k sits at another t (another batch)
+            other_t += 1
             continue
         _, ia, ib = np.intersect1d(sa["val_idx"], sb["val_idx"], return_indices=True)
         if len(ia) < 10:
             continue
         m, se = paired(sa["val"][ia], sb["val"][ib])
         rows.append((k, sa["t"], m, se, len(ia)))
+    if other_t:
+        report(f"pair {a} - {b}: {other_t} slices not paired, their slice times differ (another --time-grid; runs "
+               f"on different grids share t only where the slice times agree, e.g. 0 and 99 for power:P against "
+               f"uniform, 0..K and 99 for power:P@K); {len(rows)} paired")
     if not rows:
         report(f"pair {a} - {b}: no shared validation samples")
         return

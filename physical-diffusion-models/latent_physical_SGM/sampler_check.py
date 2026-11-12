@@ -17,14 +17,24 @@
      sample_latent.py (sampler_check/orig/sample_latent.py) on the same trajectories, bit for bit; and job 4187940
   7. --brownian cached: increments from cached tree values against VirtualBrownianTree.evaluate at three
      tolerances; a fast solve with 'cached' against 'tree' (steps, final states)
+  8. variants: fast-sampler options (Brownian tolerance, precision, Brownian implementation) against the old sampler
+     at the default tolerance 1e-12 and against the fast float64 sampler at 1e-12, on the same trajectories (final
+     states, steps): how much each option moves a sample, next to what the step sequence alone does
+
+Sections run in the order given by --sections. Speed configurations with BROWNIAN = old time sample_latent's own
+solve (one call, compilation included) as an in-job anchor.
+A run trained with train_latent.py --time-grid is checked on its own knots (load: taus = sample_latent.slice_times,
+passed to make_drift, step_ts and FastSampler) in sections 0, 2-5 and 8; section 6 tests the default path of uniform
+runs (make_drift and sample without taus), section 7 only the Brownian paths.
 
 Usage (from latent_physical_SGM/):
-  sbatch --time=00:45:00 jobs/run_gpu_neuronic.sh sampler_check.py --sections 1,2,3 --runs p784,i784 ...
+  sbatch --time=00:45:00 --mem=64G jobs/run_gpu_neuronic.sh sampler_check.py --sections 1,2,3 --runs p784,i784 ...
 Runs: an alias (p784, p3072, i784, k0, paper) or a run name. Writes out/latent_physical_SGM/sampler_check/<job>/
 (report.txt, results.json, sample files). Exit code 1 if a correctness check fails.
 """
 
 import argparse
+import gc
 import importlib.util
 import json
 import os
@@ -82,17 +92,26 @@ def save_results():
         json.dump(RESULTS, f, indent=1, default=float)
 
 
+def free():
+    """Release the device memory of deleted samplers: collect reference cycles (a FastSampler's jitted methods refer
+    back to it, and so to its knot history on the device) and drop JAX's compilation caches, which keep traced
+    functions alive. Without it a long multi-section job runs out of GPU memory (job 4223294)."""
+    gc.collect()
+    jax.clear_caches()
+
+
 def run_name(alias):
     return ALIASES.get(alias, alias)
 
 
 def load(alias):
-    """sample_latent.load_params plus the arguments of make_drift / FastSampler."""
+    """sample_latent.load_params plus the arguments of make_drift / FastSampler, with taus = the run's slice times
+    (its --time-grid; the uniform grid for older runs and the paper)."""
     th, W, b, run_dir, prov, problem = sample_latent.load_params(run_name(alias))
     prov = dict(prov)
     local, quad = prov.pop("local", None), prov.pop("quad", None)
     kw = dict(problem=problem, hidden=prov.get("hidden", "ising"), local=local, quad=quad, radius=prov.get("radius"),
-              neighbourhood=prov.get("neighbourhood", "chebyshev"))
+              neighbourhood=prov.get("neighbourhood", "chebyshev"), taus=sample_latent.slice_times(prov))
     return th, W, b, run_dir, kw
 
 
@@ -114,13 +133,28 @@ def trajectories(problem, n_set, m, set_name="base"):
     return x0[:m], keys[:m]
 
 
+def old_solve(th, W, b, kw, x0, keys, tol=lm.BROWNIAN_TOL):
+    """The old sampler on trajectories (x0, keys), exactly as sample_latent.sample calls it (make_drift, one solve_SDE
+    over [0, 5] with step_ts = the 98 interior knots, vmapped). Returns (final states, steps, accepted steps,
+    seconds including compilation)."""
+    drift, diffusion = sample_latent.make_drift(th, W, b, "sde", kw["problem"], kw["hidden"], kw["local"], kw["quad"],
+                                                kw["radius"], kw["neighbourhood"], kw["taus"])
+    knots = sample_latent.step_knots(kw["taus"])           # the run's knots (uniform: as before)
+    fn = jax.vmap(lambda y, k: solve_SDE(drift, diffusion, y, k, 0.0, lm.T_FORWARD, 2, lm.DT0, rtol=lm.RTOL_SDE,
+                                         atol=lm.ATOL_SDE, brownian_tolerance=tol, step_ts=knots))
+    t0 = time.time()
+    sol = fn(jnp.asarray(x0), jnp.asarray(keys))
+    x = np.asarray(sol.ys[:, -1, :])
+    return x, np.asarray(sol.stats["num_steps"]), np.asarray(sol.stats["num_accepted_steps"]), time.time() - t0
+
+
 # ------------------------------------------------------------------------------------------------- section 0 --
 def smoke():
     """CPU-sized plumbing test: pixels-only run, drift at two times, 2 trajectories over the first 3 intervals."""
     th, W, b, run_dir, kw = load("k0")
     fs = sf.FastSampler(th, W, b, **kw)
     drift_old, _ = sample_latent.make_drift(th, W, b, "sde", kw["problem"], kw["hidden"], kw["local"], kw["quad"],
-                                           kw["radius"], kw["neighbourhood"])
+                                           kw["radius"], kw["neighbourhood"], kw["taus"])
     x0, keys = trajectories(kw["problem"], 500, 2)
     for t in (0.0, 1.234):
         j = fs.interval_of(t)
@@ -147,14 +181,14 @@ def env():
 def drift_checks(aliases):
     out = {}
     rng = np.random.default_rng(0)
-    order, xp, s = sf.knot_times()
     for alias in aliases:
         log(f"\n--- drift: {alias} ({run_name(alias)})")
         t_load = time.time()
         th, W, b, run_dir, kw = load(alias)
+        order, xp, s = sf.knot_times(kw["taus"])           # the run's knots (uniform: as before)
         K = W.shape[1]
         drift_old, _ = sample_latent.make_drift(th, W, b, "sde", kw["problem"], kw["hidden"], kw["local"], kw["quad"],
-                                               kw["radius"], kw["neighbourhood"])
+                                               kw["radius"], kw["neighbourhood"], kw["taus"])
         # eager vmap: a jit of drift_old would embed its interpolation table (3.9 GB at K = 3072) as a constant
         old_batch = jax.vmap(drift_old, in_axes=(None, 0, None))
         fs = sf.FastSampler(th, W, b, **kw)
@@ -195,7 +229,7 @@ def drift_checks(aliases):
                     + (f"; mixed {line['mixed_rel_maxabs']:.2e} (l2 {line['mixed_rel_l2']:.2e})" if fs_mixed else ""))
         # the interpolation convention itself: theta, b and the local units against interpolate_parameters
         parts = [th] + ([b] if K else []) + ([kw["local"][0], kw["local"][1]] if kw["local"] is not None else [])
-        interp = interpolate_parameters(jnp.asarray(np.concatenate(parts, axis=1)), jnp.asarray(lm.forward_time_pts()))
+        interp = interpolate_parameters(jnp.asarray(np.concatenate(parts, axis=1)), jnp.asarray(kw["taus"]))
         ip_err = 0.0
         for t, js in ts:
             ref = np.asarray(interp(lm.T_FORWARD - t))
@@ -211,6 +245,7 @@ def drift_checks(aliases):
         out[alias] = {"worst_rel": worst, "worst_mixed_rel": worst_mixed, "interp_rel": ip_err, "points": rows_out,
                       "visible": fs.visible}
         del drift_old, old_batch, fs, fs_mixed
+        free()
     RESULTS["sections"]["drift"] = out
 
 
@@ -223,17 +258,7 @@ def trajectory_checks(aliases, m, tol):
         n_saved, saved = saved_samples(alias, run_dir)
         n_set = n_saved if n_saved is not None else 500
         x0, keys = trajectories(kw["problem"], n_set, m)
-        drift, diffusion = sample_latent.make_drift(th, W, b, "sde", kw["problem"], kw["hidden"], kw["local"],
-                                                    kw["quad"], kw["radius"], kw["neighbourhood"])
-        knots = jnp.asarray(np.sort(lm.T_FORWARD - lm.forward_time_pts())[1:-1])
-        fn = jax.vmap(lambda y, k: solve_SDE(drift, diffusion, y, k, 0.0, lm.T_FORWARD, 2, lm.DT0, rtol=lm.RTOL_SDE,
-                                             atol=lm.ATOL_SDE, brownian_tolerance=tol, step_ts=knots))   # as sample_latent
-        t0 = time.time()
-        sol = fn(jnp.asarray(x0), jnp.asarray(keys))
-        x_old = np.asarray(sol.ys[:, -1, :])
-        st_old = np.asarray(sol.stats["num_steps"])
-        acc_old = np.asarray(sol.stats["num_accepted_steps"])
-        t_old = time.time() - t0
+        x_old, st_old, acc_old, t_old = old_solve(th, W, b, kw, x0, keys, tol)
         fs = sf.FastSampler(th, W, b, brownian_tol=tol, **kw)
         t0 = time.time()
         x_new, st_new, acc_new = fs.solve_chunk(x0, keys)
@@ -262,7 +287,8 @@ def trajectory_checks(aliases, m, tol):
         check(f"3 trajectories {alias}: fast (float64) vs old, median max|diff|", np.median(d) < 1e-3,
               f"median {np.median(d):.2e}, {int(np.sum(d > 1e-3))}/{m} above 1e-3")
         out[alias] = res
-        del drift, diffusion, fn, fs
+        del fs
+        free()
     RESULTS["sections"].setdefault("trajectories", {}).update(out)
 
 
@@ -319,11 +345,23 @@ def speed(configs, micro=True):
             loaded.clear()
             loaded[alias] = load(alias)
         th, W, b, run_dir, kw = loaded[alias]
-        fs = sf.FastSampler(th, W, b, precision=prec, brownian_tol=tol, brownian=brownian, **kw)
         set_name = "base"
         if kw["problem"] == "mnist28" and chunk > 500:
             raise SystemExit("mnist28 base set has 500 trajectories")
         x0, keys = trajectories(kw["problem"], max(chunk, 500), chunk, set_name)
+        if brownian == "old":                                 # sample_latent's solve: one call, compilation included
+            x, st, acc, t_chunk = old_solve(th, W, b, kw, x0, keys, tol)
+            res = {"config": cfg, "seconds_chunk_incl_compile": t_chunk, "steps_mean": float(st.mean()),
+                   "steps_max": int(st.max()), "rejected_share": float(1 - acc.sum() / st.sum()),
+                   "loop_iterations": int(st.max()), "n_nonfinite": int(np.sum(~np.isfinite(x).all(1)))}
+            log(f"  old sampler: {t_chunk:.1f} s for the chunk including compilation ({t_chunk / chunk * 1e3:.1f} ms per "
+                f"sample); steps per trajectory mean {res['steps_mean']:.0f} max {res['steps_max']}, rejected "
+                f"{res['rejected_share']:.1%}")
+            out.append(res)
+            RESULTS["sections"].setdefault("speed", []).append(res)
+            save_results()
+            continue
+        fs = sf.FastSampler(th, W, b, precision=prec, brownian_tol=tol, brownian=brownian, **kw)
         t0 = time.time()
         fs.solve_chunk(x0, keys, intervals=1)                 # compilation (and interval 0)
         t_comp = time.time() - t0
@@ -347,6 +385,7 @@ def speed(configs, micro=True):
         RESULTS["sections"].setdefault("speed", []).append(res)
         save_results()
         del fs
+        free()
     return out
 
 
@@ -369,28 +408,59 @@ def dist_samples(specs):
         RESULTS["sections"].setdefault("samples", {})[label] = {"seconds": time.time() - t0, "path": label + ".npy"}
         save_results()
         del fs
+        free()
 
 
 # ------------------------------------------------------------------------------------------------- section 6 --
-def default_unchanged(aliases, m):
+def default_unchanged(aliases, m, module_path=""):
+    """sample_latent's default path (load_params, make_drift, sample; no new flag) of the module under test (the
+    installed sample_latent.py, or the file module_path, e.g. a candidate before it is installed) against the copy of
+    the original module taken before this work (ORIG), on the first m base-set trajectories of each run: final states
+    bit for bit (same process and device), and for the paper checkpoint the saved states of job 4187940 (median
+    max|diff| < 1e-3, as test_latent.py check 8). Writes only to this job's folder (explicit stems)."""
     spec = importlib.util.spec_from_file_location("sample_latent_orig", ORIG)
     orig = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(orig)
-    log(f"original module {ORIG}: sha256 {lm.sha256_file(ORIG)}; current sample_latent.py "
-        f"{lm.sha256_file(os.path.join(HERE, 'sample_latent.py'))}")
+    if module_path:
+        spec = importlib.util.spec_from_file_location("sample_latent_candidate", module_path)
+        mod_test = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod_test)
+    else:
+        module_path, mod_test = os.path.join(HERE, "sample_latent.py"), sample_latent
+    log(f"original module {ORIG}: sha256 {lm.sha256_file(ORIG)}; module under test {module_path}: sha256 "
+        f"{lm.sha256_file(module_path)}")
     for alias in aliases:
         log(f"\n--- default path: {alias}, {m} trajectories")
         res = {}
-        for lab, mod in (("current", sample_latent), ("original", orig)):
+        for lab, mod in (("current", mod_test), ("original", orig)):
             th, W, b, run_dir, prov, problem = mod.load_params(run_name(alias))
             local_p, quad_p = prov.pop("local", None), prov.pop("quad", None)
             drift, diffusion = mod.make_drift(th, W, b, "sde", problem, prov.get("hidden", "ising"), local_p, quad_p,
                                               prov.get("radius"), prov.get("neighbourhood", "chebyshev"))
             args = SimpleNamespace(run=run_name(alias), set="base", n=m, chunk=m, sampler="sde", snapshots=False)
             stem = os.path.join(OUT, f"default_{alias}_{lab}")
+            t0 = time.time()
             res[lab] = mod.sample(args, drift, diffusion, problem, stem, prov, W, time.time())
+            log(f"  {lab}: {m} trajectories in {time.time() - t0:.0f} s")
         d = np.max(np.abs(res["current"] - res["original"]))
-        check(f"6 default path {alias}: current sample_latent == original, bit for bit", d == 0.0, f"max|diff| {d:.3e}")
+        if d == 0.0:
+            check(f"6 default path {alias}: module under test == original, bit for bit", True, "max|diff| 0")
+        else:                                 # the same code twice: is the device itself reproducible (scatter-adds)?
+            args = SimpleNamespace(run=run_name(alias), set="base", n=m, chunk=m, sampler="sde", snapshots=False)
+            th, W, b, run_dir, prov, problem = orig.load_params(run_name(alias))
+            local_p, quad_p = prov.pop("local", None), prov.pop("quad", None)
+            drift, diffusion = orig.make_drift(th, W, b, "sde", problem, prov.get("hidden", "ising"), local_p, quad_p,
+                                               prov.get("radius"), prov.get("neighbourhood", "chebyshev"))
+            again = orig.sample(args, drift, diffusion, problem, os.path.join(OUT, f"default_{alias}_original2"), prov,
+                                W, time.time())
+            d2 = np.max(np.abs(again - res["original"]))
+            dm = float(np.median(np.max(np.abs(res["current"] - res["original"]), axis=1)))
+            # the device's own noise moves some trajectories by ~1e-5 - 1e-4 (rounding amplified by the step-size
+            # control); a changed SDE moves most of them by order 0.1 - 1, so gate on the median trajectory
+            check(f"6 default path {alias}: module under test == original up to the device's own run-to-run noise "
+                  f"(the original is not bit-reproducible here; median per-trajectory max|diff| <= 1e-3)",
+                  d2 > 0.0 and dm <= 1e-3,
+                  f"max|test - original| {d:.3e}, median per trajectory {dm:.3e}; original run twice: max|diff| {d2:.3e}")
         if alias == "paper":
             ref = np.load(lm.UNSPLIT_4187940)[:m]
             dd = np.max(np.abs(res["current"] - ref), axis=1)
@@ -400,7 +470,7 @@ def default_unchanged(aliases, m):
 
 # ------------------------------------------------------------------------------------------------- section 7 --
 def brownian_checks(tols, alias, m, intervals):
-    """--brownian cached against the stock tree: (a) the tree's values (W_t, bar H_t) from the unrolled bisection vs
+    """--brownian cached against the stock tree: (a) the tree's values (W_t, bar H_t) from CachedTree.levy_at vs
     VirtualBrownianTree._evaluate, and the increments over consecutive random times from cached values vs
     VirtualBrownianTree.evaluate(t0, t1, use_levy=True), per tolerance (H = bar H_{s,u} / (u - s) amplifies rounding
     differences of the values by 1 / (u - s), so it is compared as (u - s) H); (b) a fast solve with 'cached' vs
@@ -418,7 +488,7 @@ def brownian_checks(tols, alias, m, intervals):
 
         def one(key, ts_):
             tree = diffrax.VirtualBrownianTree(0.0, lm.T_FORWARD, tol, (lm.N,), key, diffrax.SpaceTimeLevyArea)
-            ct = CachedTree(tree, diffrax.SpaceTimeLevyArea, L)
+            ct = CachedTree(tree)
             ref = jax.vmap(lambda t: tree._evaluate(linear_rescale(tree.t0, t, tree.t1)))(ts_)
             vals = jax.vmap(ct.levy_at)(ts_)
             stock = jax.vmap(lambda a, b: tree.evaluate(a, b, use_levy=True))(ts_[:-1], ts_[1:])
@@ -447,17 +517,72 @@ def brownian_checks(tols, alias, m, intervals):
         log(f"  {alias}, {m} trajectories, {intervals or sf.N_INTERVALS} intervals, brownian {impl}: "
             f"{time.time() - t0:.1f} s, mean steps {res[impl][1].sum(1).mean():.0f}")
         del fs
-    # the steps can differ: during the first tiny steps (dt0 = 1e-8) H over a step is computed from O(1) values at its
-    # ends, so rounding differences of the values change it by percents (in the stock tree as well) and shift the
-    # step sizes; the final states must agree as closely as two runs of the old sampler do (about 1e-5)
+        free()
+    # levy_at is the tree's own _evaluate, so the increments are the stock ones up to how XLA rounds the shared
+    # arithmetic (_levy_diff) in the two programs; bit-identical increments give bit-identical solves. Where rounding
+    # does differ, an accept/reject decision can flip, and from there the final states differ by about 1e-4, as fast
+    # and old sampler do (section 3)
     d = np.max(np.abs(res["tree"][0] - res["cached"][0]), axis=1)
     same = np.all(res["tree"][1] == res["cached"][1], axis=1)
     tot = res["tree"][1].sum(1) - res["cached"][1].sum(1)
     check(f"7 solve with cached Brownian values = stock tree ({alias})", np.median(d) < 1e-3,
-          f"identical steps in every interval for {int(same.sum())}/{m} trajectories (total step differences "
-          f"{np.array2string(tot)}); max|diff| per trajectory median {np.median(d):.2e}, max {np.max(d):.2e}")
+          f"identical steps in every interval for {int(same.sum())}/{m} trajectories, bit-identical final states for "
+          f"{int(np.sum(d == 0.0))}/{m} (total step differences {np.array2string(tot)}); max|diff| per trajectory "
+          f"median {np.median(d):.2e}, max {np.max(d):.2e}")
     RESULTS["sections"]["brownian_solve"] = {"max_diff": d.tolist(), "same_steps": same.tolist(),
                                              "step_diff": tot.tolist()}
+
+
+# ------------------------------------------------------------------------------------------------- section 8 --
+def variant_checks(aliases, m, variants):
+    """Section 8 for each run in aliases (variant_checks_one)."""
+    for alias in aliases:
+        variant_checks_one(alias, m, variants)
+        free()
+
+
+def variant_checks_one(alias, m, variants):
+    """Fast-sampler variants TOL:PRECISION:BROWNIAN on the first m trajectories of the run's base set, against
+    (a) the old sampler at the default Brownian tolerance (1e-12) and (b) the fast float64 sampler at 1e-12 with the
+    stock tree, the reference that differs from the old sampler only by rounding (and the step sequences that
+    rounding changes, section 3). Per variant: per-trajectory max|x - x_old| and max|x - x_ref|, steps.
+    A looser tolerance changes the Brownian path only inside the leaves of the tree (the coarser tree agrees with the
+    finer one at its own dyadic points; the path at t = 5 is the same), so (a) shows whether an option moves the
+    final states by more than the step sequence alone does."""
+    th, W, b, run_dir, kw = load(alias)
+    n_saved, _ = saved_samples(alias, run_dir)
+    x0, keys = trajectories(kw["problem"], n_saved or 500, m)
+    log(f"\n--- variants: {alias}, {m} trajectories of the base set (n {n_saved or 500})")
+    x_old, st_old, _, t_old = old_solve(th, W, b, kw, x0, keys)
+    fs = sf.FastSampler(th, W, b, **kw)
+    x_ref, st_ref, _ = fs.solve_chunk(x0, keys)
+    del fs
+    free()
+    d_ref_old = np.max(np.abs(x_ref - x_old), axis=1)
+    log(f"  old sampler (tol 1e-12) {t_old:.0f} s incl. compilation, steps mean {st_old.mean():.0f}")
+    log(f"  reference fast f64 1e-12 tree vs old: per trajectory {np.array2string(d_ref_old, precision=1, max_line_width=150)}"
+        f"; median {np.median(d_ref_old):.2e}, max {np.max(d_ref_old):.2e}; steps mean {st_ref.sum(1).mean():.0f}")
+    out = {"m": m, "ref_vs_old": d_ref_old.tolist(), "steps_old": st_old.tolist(), "steps_ref": st_ref.sum(1).tolist(),
+           "variants": {}}
+    np.savez(os.path.join(OUT, f"variants_{alias}.npz"), x0=x0, x_old=x_old, x_ref=x_ref)
+    for v in variants:
+        tol, prec, brownian = v.split(":")
+        fs = sf.FastSampler(th, W, b, precision=prec, brownian_tol=float(tol), brownian=brownian, **kw)
+        x, st, acc = fs.solve_chunk(x0, keys)
+        del fs
+        free()
+        d_old = np.max(np.abs(x - x_old), axis=1)
+        d_ref = np.max(np.abs(x - x_ref), axis=1)
+        log(f"  {v}: vs old median {np.median(d_old):.2e} max {np.max(d_old):.2e} ({int(np.sum(d_old > 1e-3))}/{m} "
+            f"above 1e-3); vs fast f64 1e-12 median {np.median(d_ref):.2e} max {np.max(d_ref):.2e}; steps mean "
+            f"{st.sum(1).mean():.0f}; non-finite {int(np.sum(~np.isfinite(x).all(1)))}")
+        log(f"     vs old per trajectory {np.array2string(d_old, precision=1, max_line_width=150)}")
+        out["variants"][v] = {"vs_old": d_old.tolist(), "vs_ref": d_ref.tolist(), "steps": st.sum(1).tolist()}
+        np.save(os.path.join(OUT, f"variants_{alias}_{v.replace(':', '_')}.npy"), x)
+        check(f"8 variant {v} {alias}: median max|x - x_old| below 1e-3", np.median(d_old) < 1e-3,
+              f"median {np.median(d_old):.2e} (reference fast f64 1e-12: {np.median(d_ref_old):.2e})")
+        RESULTS["sections"].setdefault("variants", {})[alias] = out
+        save_results()
 
 
 # ---------------------------------------------------------------------------------------------------- main --
@@ -475,26 +600,33 @@ def main():
     ap.add_argument("--samples", default="", help="section 5: RUN:N:CHUNK:TOL:PRECISION[:BROWNIAN],...")
     ap.add_argument("--default-runs", default="paper,p784", help="section 6")
     ap.add_argument("--default-n", type=int, default=4)
+    ap.add_argument("--default-module", default="", help="section 6: a sample_latent.py to test instead of the installed one")
     ap.add_argument("--b-tols", default="1e-12,1e-8,1e-6", help="section 7")
     ap.add_argument("--b-run", default="p784", help="section 7")
     ap.add_argument("--b-ntraj", type=int, default=16, help="section 7")
     ap.add_argument("--b-intervals", type=int, default=0, help="section 7: 0 = all")
+    ap.add_argument("--var-run", default="p784", help="section 8: RUN,...")
+    ap.add_argument("--var-ntraj", type=int, default=16, help="section 8")
+    ap.add_argument("--variants", default="1e-12:mixed:tree,1e-6:mixed:cached",
+                    help="section 8: TOL:PRECISION:BROWNIAN,...")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     REPORT = os.path.join(OUT, "report.txt")
-    sections = set(args.sections.split(","))
     log(f"=== sampler_check job {JOB} {time.strftime('%Y-%m-%d %H:%M:%S')}; args {vars(args)}")
     RESULTS["args"] = vars(args)
-    todo = [("0", smoke, ()), ("1", env, ()), ("2", drift_checks, (args.runs.split(","),)),
-            ("3", trajectory_checks, (args.traj_runs.split(","), args.ntraj, args.traj_tol)),
-            ("4", speed, ([c for c in args.speed.split(",") if c], not args.no_micro)),
-            ("5", dist_samples, ([c for c in args.samples.split(",") if c],)),
-            ("6", default_unchanged, (args.default_runs.split(","), args.default_n)),
-            ("7", brownian_checks, ([float(t) for t in args.b_tols.split(",")], args.b_run, args.b_ntraj,
-                                    args.b_intervals or None))]
-    for key, fn, fargs in todo:
-        if key not in sections:
-            continue
+    todo = {"0": (smoke, ()), "1": (env, ()), "2": (drift_checks, (args.runs.split(","),)),
+            "3": (trajectory_checks, (args.traj_runs.split(","), args.ntraj, args.traj_tol)),
+            "4": (speed, ([c for c in args.speed.split(",") if c], not args.no_micro)),
+            "5": (dist_samples, ([c for c in args.samples.split(",") if c],)),
+            "6": (default_unchanged, (args.default_runs.split(","), args.default_n, args.default_module)),
+            "7": (brownian_checks, ([float(t) for t in args.b_tols.split(",")], args.b_run, args.b_ntraj,
+                                    args.b_intervals or None)),
+            "8": (variant_checks, (args.var_run.split(","), args.var_ntraj, [v for v in args.variants.split(",") if v]))}
+    for key in args.sections.split(","):                  # in the order given
+        if key not in todo:
+            raise SystemExit(f"unknown section {key!r}")
+    for key in args.sections.split(","):
+        fn, fargs = todo[key]
         t0 = time.time()
         log(f"\n===== section {key}: {fn.__name__}")
         try:

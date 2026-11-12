@@ -2214,6 +2214,39 @@ FID level off with K for a training reason (larger models may need more steps).
     and 4x lr together match 16x lr at slices 80-85 (the run is still going). 16x lr is stable and still clearly ahead of
     4x, so the best learning rate is above 16x and the late slices are not yet converged. Each learning-rate run takes
     2.8 h (training plus 500 samples). Sample quality: pending (FID jobs above).
+  - **Quick FID (job 4222886, n = 500, 18:30): the large late-slice loss gains barely move FID.** FID paper 20.29,
+    2x steps 17.69, 4x lr 19.91, 16x lr 19.35. Paired (same slices 0-79 and the same sampling noise): 4x lr - paper
+    -0.38 [-0.48, -0.27], 16x lr - paper -0.94 [-1.15, -0.72], 16x - 4x lr -0.56; all p < 0.005, but small next to 2x
+    steps - paper (-2.6). 4x lr - 2x steps +2.21 [+0.94, +3.47]: the 4x-lr run is the better one at every late slice
+    on held-out loss, yet the 2x run has the better FID. Precision/recall (features): paper 0.94 / 0.42, 2x 0.93 / 0.47,
+    4x lr 0.94 / 0.42, 16x lr 0.95 / 0.43. Class shares identical (0:26 1:28 2:21 3:25%): each trajectory keeps
+    its digit, which is decided before slice 80.
+    - So the 2x run's FID gain does not come from slices 80-99. It comes either from slices 0-79 (whose loss
+      changed by only a few units) or from run-to-run variation between two independent trainings (the 2x run was
+      trained from scratch, the late runs share slices 0-79 with the paper run, so their difference has no such
+      variation). The run-to-run FID spread is not yet measured (the other chat's `conv_seed*` jobs may measure it).
+    - The late-slice loss (dominated by t -> 0) is therefore a poor guide to FID. Before trusting it as a
+      convergence criterion, look at the images: the late slices may set fine grain the CNN features hardly see.
+    - Gallery with all late runs: job 4223112 (after 4221035 and 4221038), four-digit 28x28 gallery.
+  - **Full result (2026-11-12 01:45; FID 4221039, curves `learning_curves/4221040/`, gallery 4223112).**
+    - FID (n = 500; paired vs paper): 4x steps 20.05 (-0.25 [-0.33, -0.16]), 4x lr 19.91 (-0.38), 16x lr 19.35 (-0.94
+      [-1.14, -0.72]), 4x steps and 4x lr 19.63 (-0.67 [-0.81, -0.50]); 2x steps (all slices) 17.69. Recall (features)
+      0.42-0.43 for every late run (paper 0.42, 2x 0.47); precision 0.94-0.95.
+    - Held-out loss minus paper at slices 90 / 95 / 98 / 99: 4x steps -302 / -1,542 / -7,504 / -26,857; 4x steps and
+      4x lr -466 / -2,635 / -15,675 / -52,095 (16x lr: -480 / -2,492 / -12,653 / -34,115). Every late run is still
+      falling at the end of slices 95-99 (late slope z -3 to -22; 19-20 of 20 late slices still improving N/2 -> N).
+      The late slices do not converge within 4x steps or 16x the learning rate.
+    - Images: the paper run and all four late runs look the same, sample by sample (same digit, same shape, the
+      same speckle and stray pixels). The 2x-steps run differs visibly: about one trajectory in fifteen ends as another
+      digit or shape (e.g. a 2 that became a 3 or a 1), and a few messy samples are cleaner.
+    - Conclusion: **the late slices (t < 1) are not what limits sample quality.** Their loss keeps falling by large
+      amounts (mostly the t -> 0 term), but this changes neither the images nor the recall, and FID by at most 1. The
+      grain is not under-training of the late slices; it stays with 4x steps and 16x lr. Whatever made the 2x run
+      better acts at t > 1 (shapes are decided there) or is run-to-run variation; to tell these apart, the run-to-run
+      FID spread is needed (several seeds at the paper schedule).
+    - Recipe for "trained to convergence": keep the paper schedule for slices 80-99 (optionally 16x lr there: cheap,
+      -0.9 FID). Test convergence where the shapes are decided (slices 0-79), with a seed-spread measurement as the
+      reference, rather than at the late slices.
 
 ## Caveats
 

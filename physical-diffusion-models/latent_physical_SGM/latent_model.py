@@ -14,6 +14,7 @@ functions. Everything is float64, as in the paper.
 """
 
 import hashlib
+import json
 import math
 import os
 import re
@@ -105,6 +106,195 @@ def paper_steps(k):
     check (epochs 1000, 1100, ...), and the loop breaks after epoch 1000 + 100*(ceil(patience) - 1).
     """
     return WINDOW + 1 + 100 * (int(math.ceil(float(patience_schedule()[k]))) - 1)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Time grids (train_latent.py --time-grid): the slice times, and each slice's learning rate and step count
+# ---------------------------------------------------------------------------------------------------------------
+TIME_GRID_TOL = 1e-12            # largest |difference| allowed between a run's recorded slice times and its grid's
+MIN_KNOT_GAP = 1e-9              # smallest interval between neighbouring knots a power grid may have (parse_time_grid)
+
+
+def parse_time_grid(spec):
+    """Canonical form of a time-grid spec (train_latent.py --time-grid; config.json 'time_grid', see
+    config_time_grid). Every grid keeps N_TIME_STEPS = 100 slices, slice 0 at t = 5 and slice 99 at t = 0 exactly,
+    strictly decreasing in between:
+      'uniform'    the paper's grid, forward_time_pts(): t_k = 5 (1 - k/99), spacing 5/99 = 0.0505 (the default)
+      'power:P'    t_k = 5 (1 - k/99)^P with P > 0 (time_grid_pts). P > 1 puts the knots denser near t = 0 and sparser
+                   near t = 5: P = 1.5 has the last interval 5/99^1.5 = 0.00508 and the first 5 (1 - (98/99)^1.5) =
+                   0.0756. P = 1 is the uniform grid up to rounding, but a different spec. Canonical form
+                   'power:' + repr(float(P)), e.g. 'power:1.5', 'power:2.0'.
+      'power:P@K'  the uniform grid's slices 0..K (K = 1..97: their times, learning rates and step counts bit for bit)
+                   and the power law below t_K = 5 (1 - K/99): t_k = t_K ((99 - k) / (99 - K))^P for k = K..99. With
+                   100 slices the knots below t_K are only redistributed: P > 1 refines near t = 0 and widens the
+                   intervals just below t_K (power:1.5@40: slices 0-40 at t >= 2.98 as on the uniform grid, then
+                   0.0754 below the junction down to 2.98/59^1.5 = 0.0066 at t = 0). Canonical 'power:1.5@40'.
+    Case and blanks (anywhere) are ignored. P is a plain decimal number (digits, an optional point and exponent; no
+    underscores or other digit forms, so a typo such as 'power:1_5' is refused rather than read as 15), K a plain
+    integer. Raises ValueError for anything else (another family, P missing, not a number > 0, K not an integer in
+    1..97, extra fields) and for a P so extreme that two neighbouring knots would be closer than MIN_KNOT_GAP = 1e-9
+    in forward or reverse time s = 5 - t (the samplers' step_ts and diffrax's 1e-10 clipping need distinct knots;
+    power:P alone allows P up to about 4.8)."""
+    if not isinstance(spec, str):
+        raise ValueError(f"time grid {spec!r}: expected a string, 'uniform', 'power:P' or 'power:P@K' (e.g. 'power:1.5')")
+    s = re.sub(r"\s+", "", spec).lower()
+    if s == "uniform":
+        return "uniform"
+    kind, sep, arg = s.partition(":")
+    if kind != "power" or not sep:
+        raise ValueError(f"time grid {spec!r}: expected 'uniform', 'power:P' or 'power:P@K' with a number P > 0 "
+                         f"(e.g. 'power:1.5')")
+    p_arg, at, k_arg = arg.partition("@")
+    if not re.fullmatch(r"\+?([0-9]+\.?[0-9]*|\.[0-9]+)(e[-+]?[0-9]+)?", p_arg):   # ASCII digits only
+        raise ValueError(f"time grid {spec!r}: P in 'power:P' must be one plain number > 0, e.g. 'power:1.5'")
+    p = float(p_arg)
+    if not (math.isfinite(p) and p > 0.0):
+        raise ValueError(f"time grid {spec!r}: P in 'power:P' must be a finite number > 0")
+    k0 = 0
+    if at:
+        if not re.fullmatch(r"\+?[0-9]+", k_arg) or not 1 <= int(k_arg) <= N_TIME_STEPS - 3:
+            raise ValueError(f"time grid {spec!r}: K in 'power:P@K' must be a slice index 1..{N_TIME_STEPS - 3}")
+        k0 = int(k_arg)
+    t = _power_time_pts(p, k0)
+    gap = min(float(np.min(-np.diff(t))), float(np.min(np.diff(T_FORWARD - t))))
+    if not gap > MIN_KNOT_GAP:
+        raise ValueError(f"time grid {spec!r}: with P = {p!r} two neighbouring knots are {gap:.3g} apart (forward or "
+                         f"reverse time; at least {MIN_KNOT_GAP:g} needed); choose a less extreme P")
+    return f"power:{p!r}" + (f"@{k0}" if k0 else "")
+
+
+def _power_params(spec):
+    """(P, K) of a canonical 'power:P' (K = 0) or 'power:P@K' spec."""
+    p_arg, _, k_arg = spec.split(":", 1)[1].partition("@")
+    return float(p_arg), int(k_arg or 0)
+
+
+def _power_time_pts(p, k0=0):
+    """In numpy float64. k0 = 0: 5 s^p for s = (99 - k) / 99, k = 0..99; s is exactly 1 at k = 0 and exactly 0 at
+    k = 99, so t_0 = 5 and t_99 = 0 exactly. k0 > 0: forward_time_pts() for k <= k0, and t_k0 r^p below with
+    r = (99 - k) / (99 - k0), exactly 1 at k0 (t_k0 unchanged) and exactly 0 at k = 99.
+    The powers are taken one by one with math.pow (the C library's pow), not numpy's array power, whose vectorised
+    kernels differ by an ulp between CPU types (AVX-512 or not): so a power grid is the same bit for bit on every
+    node, e.g. when a run is resumed or sampled on another node type."""
+    if k0 == 0:
+        s = np.arange(N_TIME_STEPS - 1, -1, -1, dtype=np.float64) / (N_TIME_STEPS - 1)
+        return T_FORWARD * np.array([math.pow(float(x), p) for x in s], dtype=np.float64)
+    t = np.array(forward_time_pts(), dtype=np.float64)
+    m = N_TIME_STEPS - 1 - k0
+    r = np.arange(m, -1, -1, dtype=np.float64) / m
+    t[k0:] = t[k0] * np.array([math.pow(float(x), p) for x in r], dtype=np.float64)
+    return t
+
+
+def time_grid_pts(spec="uniform"):
+    """Slice times of a time grid (parse_time_grid) in slice order (t = 5 first), float64 (N_TIME_STEPS,).
+    'uniform' returns forward_time_pts() itself, i.e. the same float64 values as always; 'power:P' and 'power:P@K'
+    are computed in numpy (_power_time_pts)."""
+    spec = parse_time_grid(spec)
+    if spec == "uniform":
+        return forward_time_pts()
+    return _power_time_pts(*_power_params(spec))
+
+
+def time_grid_lr(spec="uniform"):
+    """Learning rate of the visible parameters per slice (before --lr-scale): lr_schedule() itself for 'uniform';
+    otherwise the paper's linear function of t, LR_AT_T0 = 2e-5 at t = 0 to LR_AT_T5 = 2e-3 at t = 5, at the grid's
+    slice times (np.interp: exactly 2e-5 at t = 0 and 2e-3 at t = 5); 'power:P@K' keeps lr_schedule()'s values for
+    its uniform slices 0..K."""
+    spec = parse_time_grid(spec)
+    if spec == "uniform":
+        return lr_schedule()
+    lr = np.interp(time_grid_pts(spec), [0.0, T_FORWARD], [LR_AT_T0, LR_AT_T5])
+    k0 = _power_params(spec)[1]
+    if k0:
+        lr[:k0 + 1] = lr_schedule()[:k0 + 1]
+    return lr
+
+
+def time_grid_patience(spec="uniform"):
+    """The paper's early-stopping patience per slice: patience_schedule() itself for 'uniform'; otherwise its linear
+    function of t, PATIENCE_AT_T0 = 300 at t = 0 to PATIENCE_AT_T5 = 100 at t = 5, at the grid's slice times (np.interp:
+    exactly 300 and 100 at the two ends); 'power:P@K' keeps patience_schedule()'s values for slices 0..K."""
+    spec = parse_time_grid(spec)
+    if spec == "uniform":
+        return patience_schedule()
+    pat = np.interp(time_grid_pts(spec), [0.0, T_FORWARD], [float(PATIENCE_AT_T0), float(PATIENCE_AT_T5)])
+    k0 = _power_params(spec)[1]
+    if k0:
+        pat[:k0 + 1] = patience_schedule()[:k0 + 1]
+    return pat
+
+
+def time_grid_steps(k, spec="uniform"):
+    """paper_steps(k) on a time grid: paper_steps(k) itself for 'uniform' (and for the uniform slices k <= K of
+    'power:P@K'); otherwise the same rule with the grid's patience, WINDOW + 1 + 100 (ceil(patience_k) - 1), where the
+    ceil ignores rounding errors below 1e-9, so that a patience that should be an integer (100 at t = 5, 300 at t = 0)
+    cannot round up to one more 100-step check (10,901 steps at t = 5 and 30,901 at t = 0, as in the paper's
+    schedule)."""
+    spec = parse_time_grid(spec)
+    if spec == "uniform":
+        return paper_steps(k)
+    k = range(N_TIME_STEPS)[k]                    # the slice index (IndexError outside the grid, as paper_steps)
+    k0 = _power_params(spec)[1]
+    if k0 and k <= k0:
+        return paper_steps(k)
+    return WINDOW + 1 + 100 * (int(math.ceil(float(time_grid_patience(spec)[k]) - 1e-9)) - 1)
+
+
+def config_time_grid(cfg):
+    """A run's time grid from its config dict (train_latent.py's config.json): the canonical form of cfg['time_grid'],
+    or 'uniform' for the runs from before the option, whose config has no such key."""
+    return parse_time_grid(cfg.get("time_grid", "uniform"))
+
+
+def checked_time_pts(spec, t_saved=None, where="run"):
+    """time_grid_pts(spec). With t_saved (the slice times a run recorded, e.g. the 't' of its hidden_history.npz)
+    raises ValueError unless it has the same shape and agrees to TIME_GRID_TOL everywhere: a run's samples and
+    diagnostics must use the slice times it was trained at."""
+    taus = time_grid_pts(spec)
+    if t_saved is not None:
+        t_saved = np.asarray(t_saved, dtype=np.float64)
+        if t_saved.shape != taus.shape or not np.all(np.abs(t_saved - taus) <= TIME_GRID_TOL):
+            diff = (f"max |difference| {float(np.max(np.abs(t_saved - taus))):.3g}" if t_saved.shape == taus.shape
+                    else f"shape {t_saved.shape} instead of {taus.shape}")
+            raise ValueError(f"{where}: the slice times it recorded (hidden_history.npz 't') do not match its time grid "
+                             f"{spec!r} ({diff}); refusing to use other slice times than its training did")
+    return taus
+
+
+def run_time_grid(run_dir, cfg=None):
+    """(spec, taus) of a run folder of train_latent.py: config_time_grid of its config.json (or of cfg, if given) and
+    its slice times, checked (checked_time_pts) against the 't' of its hidden_history.npz if that file exists (it is
+    written when the last slice is done; a run in progress is checked against its config only)."""
+    if cfg is None:
+        with open(os.path.join(run_dir, "config.json")) as f:
+            cfg = json.load(f)
+    spec = config_time_grid(cfg)
+    t_saved = None
+    path = os.path.join(run_dir, "hidden_history.npz")
+    if os.path.exists(path):
+        with np.load(path) as z:
+            if "t" in z.files:
+                t_saved = z["t"]
+    return spec, checked_time_pts(spec, t_saved, run_dir)
+
+
+def interp_history(hist, taus, t):
+    """hist[k] (an array per slice k at forward time taus[k], e.g. the paper's params_history.npy as a memmap) at
+    forward time t: linear in t between the two slices whose times enclose t, as helper_fns.interpolate_parameters
+    (jnp.interp) interpolates; a slice time returns that slice itself. Reads only those one or two slices."""
+    taus = np.asarray(taus, dtype=np.float64)
+    hit = np.flatnonzero(taus == t)
+    if hit.size:
+        return np.array(hist[int(hit[0])], dtype=np.float64)
+    order = np.argsort(taus)
+    xp = taus[order]
+    if not xp[0] < t < xp[-1]:
+        raise ValueError(f"t = {t!r} is outside the slice times [{xp[0]}, {xp[-1]}]")
+    i = int(np.searchsorted(xp, t))                 # xp[i - 1] < t < xp[i]
+    lo = np.array(hist[int(order[i - 1])], dtype=np.float64)
+    hi = np.array(hist[int(order[i])], dtype=np.float64)
+    return lo + ((t - xp[i - 1]) / (xp[i] - xp[i - 1])) * (hi - lo)
 
 
 # ---------------------------------------------------------------------------------------------------------------

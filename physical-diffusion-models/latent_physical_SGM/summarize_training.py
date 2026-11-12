@@ -5,7 +5,11 @@ Usage:  python summarize_training.py RUN [RUN ...] [--ref RUN]
 For every run: validation loss per slice (fixed validation batch per slice, identical for runs on the same data),
 the paper checkpoint's loss on the same batch, and for K = 1 runs the hidden unit's diagnostics
 (|W| / |W*|, cos(W, W*), class accuracy of sign(a) on the noisy validation samples, <|m|>, softening v|W|^2/T).
---ref: the run whose validation loss is subtracted in the 'difference' panel (default: the paper checkpoint).
+--ref: the run whose validation loss is subtracted in the 'difference' panel (default: the paper checkpoint). Runs
+are plotted against their slice times t; with --ref, a slice is compared only where both runs' slice sits at the same
+t (runs on different train_latent.py --time-grid: only the slices at equal t, e.g. 0 and 99 for power:P against
+uniform, 0..K and 99 for power:P@K).
+--states (Potts runs): the effective and lost states and the validation loss against t (states_by_t; states.png).
 Writes out/latent_physical_SGM/summary/<job id>/: training_summary.png and summary.txt. CPU only, seconds.
 """
 
@@ -40,22 +44,86 @@ def load(run):
 
 
 def paired(run, ref, k):
-    """Per-sample paired difference of the validation loss at slice k (same batch), or None if not stored."""
+    """Per-sample paired difference of the validation loss at slice k (same batch), or None if not stored, or if
+    slice k of the two runs sits at different times (runs on different --time-grid: the batch of slice k is drawn at
+    each run's own t_k, so they share it only where the slice times agree: slices 0 and 99 for power:P against
+    uniform, 0..K and 99 for power:P@K)."""
     try:
         a = np.load(os.path.join(lm.OUT_ROOT, run, "slices", f"slice_{k:03d}.npz"))
         b = np.load(os.path.join(lm.OUT_ROOT, ref, "slices", f"slice_{k:03d}.npz"))
         d = a["val_per_sample"].astype(np.float64) - b["val_per_sample"].astype(np.float64)
         if not np.array_equal(a["val_idx"], b["val_idx"]):
             return None
+        if "record" in a.files and "record" in b.files and \
+                abs(json.loads(str(a["record"]))["t"] - json.loads(str(b["record"]))["t"]) > 1e-9:
+            return None
     except (FileNotFoundError, KeyError):
         return None
     return float(np.mean(d)), float(np.std(d) / np.sqrt(d.size)), float(np.median(d))
+
+
+def time_grid(run):
+    """The run's time grid (config.json 'time_grid'; 'uniform' for runs without it or without a readable config)."""
+    try:
+        with open(os.path.join(lm.OUT_ROOT, run, "config.json")) as f:
+            return lm.config_time_grid(json.load(f))
+    except (OSError, ValueError):
+        return "uniform"
+
+
+def states_by_t(logs, out):
+    """--states: per run the Potts state counts of every slice against its t, from the train_log.jsonl records
+    (eff_states = exp(H(pbar)) and states_below_1e-6 = 'lost' states, both on the slice's validation batch), so that
+    runs on different --time-grid can be compared at equal t: a table (the slices nearest to t = 4.7 ... 0, where the
+    four-digit Potts 784 runs decide which states survive at t about 3.5-4.7) and states.png."""
+    fig, (ax_e, ax_s) = plt.subplots(1, 2, figsize=(11, 3.8))
+    targets = (4.7, 4.3, 4.0, 3.5, 3.0, 2.0, 1.0, 0.5, 0.1, 0.0)
+    out("")
+    out("Potts states against t (eff = exp(H(pbar)), lost = states with mean occupation < 1e-6, val = validation loss; "
+        "on each slice's validation batch), at the slices nearest to t = " + ", ".join(f"{v:g}" for v in targets) + ":")
+    for i, (run, rows) in enumerate(logs.items()):
+        rs = [r for r in rows if "eff_states" in r]
+        if not rs:
+            out(f"  {run}: no Potts state records")
+            continue
+        t = np.array([r["t"] for r in rs])
+        eff = np.array([r["eff_states"] for r in rs])
+        lost = np.array([r.get("states_below_1e-6", np.nan) for r in rs], dtype=np.float64)
+        col = COLORS[i % len(COLORS)]
+        ax_e.plot(t, eff, color=col, label=run)
+        ax_s.plot(t, lost, color=col, label=run)
+        k = int(np.nanargmax(lost)) if np.isfinite(lost).any() else 0
+        out(f"  {run} (time grid {time_grid(run)}, {len(rs)} slices): most lost {lost[k]:.0f} at t = {t[k]:.3f} "
+            f"(slice {rs[k]['slice']}); last slice t = {t[-1]:.3f}: eff {eff[-1]:.1f}, lost {lost[-1]:.0f}")
+        cells = []
+        for tq in targets:
+            j = int(np.argmin(np.abs(t - tq)))
+            cells.append(f"t {t[j]:.3f} (s{rs[j]['slice']}): val {rs[j]['val_loss']:.6g}, eff {eff[j]:.1f}, lost {lost[j]:.0f}")
+        for c in cells:
+            out(f"    {c}")
+    for ax, title in ((ax_e, "effective number of Potts states exp(H(pbar))"),
+                      (ax_s, "lost Potts states (mean occupation < 1e-6)")):
+        ax.set_xlim(5.05, -0.05)
+        ax.set_xlabel("forward time t of the slice (generation runs left to right)")
+        ax.set_title(title, fontsize=9)
+        ax.grid(color="#e5e5e5", linewidth=0.8)
+        for sp in ("top", "right"):
+            ax.spines[sp].set_visible(False)
+        if ax.get_legend_handles_labels()[0]:
+            ax.legend(frameon=False, fontsize=7)
+    fig.tight_layout()
+    fig.savefig(os.path.join(OUT, "states.png"), dpi=140)
+    plt.close(fig)
 
 
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("runs", nargs="+")
     ap.add_argument("--ref", default=None)
+    ap.add_argument("--states", action="store_true",
+                    help="Potts runs: also the effective and the lost states (and the validation loss) per slice "
+                         "against t (a table at the slices nearest to t = 4.7 ... 0, and states.png), to compare runs "
+                         "on different train_latent.py --time-grid at equal t")
     args = ap.parse_args()
     os.makedirs(OUT, exist_ok=True)
     logs = {r: load(r) for r in args.runs}
@@ -71,6 +139,11 @@ def main():
         for run in args.runs:
             if run == args.ref:
                 continue
+            if time_grid(run) != time_grid(args.ref):
+                eq = np.flatnonzero(lm.time_grid_pts(time_grid(run)) == lm.time_grid_pts(time_grid(args.ref)))
+                out(f"  {run}: time grid {time_grid(run)} vs {time_grid(args.ref)}: only the {eq.size} slices at equal t "
+                    f"are paired (" + (f"slices 0-{eq[-2]} and 99" if eq.size > 2 and np.all(eq[:-1] == np.arange(eq.size - 1))
+                                       else f"slices {', '.join(map(str, eq.tolist()))}") + ")")
             rows = []
             for r in logs[run]:
                 p = paired(run, args.ref, r["slice"])
@@ -94,9 +167,10 @@ def main():
         val = np.array([r["val_loss"] for r in rows])
         col = COLORS[i % len(COLORS)]
         ax_l.plot(t, val, color=col, label=run)
-        if args.ref and args.ref in logs:
-            ref = {r["slice"]: r["val_loss"] for r in logs[args.ref]}
-            d = np.array([r["val_loss"] - ref.get(r["slice"], np.nan) for r in rows])
+        if args.ref and args.ref in logs:            # slice by slice where both sit at the same t (--time-grid)
+            ref = {r["slice"]: (r["t"], r["val_loss"]) for r in logs[args.ref]}
+            d = np.array([r["val_loss"] - ref[r["slice"]][1] if r["slice"] in ref and abs(ref[r["slice"]][0] - r["t"])
+                          <= 1e-9 else np.nan for r in rows])
             lab = f"{run} - {args.ref}"
         else:
             d = np.array([r["val_loss"] - r.get("val_loss_paper", np.nan) for r in rows])
@@ -141,6 +215,8 @@ def main():
     fig.tight_layout()
     fig.savefig(os.path.join(OUT, "training_summary.png"), dpi=140)
     plt.close(fig)
+    if args.states:
+        states_by_t(logs, out)
     with open(os.path.join(OUT, "summary.txt"), "w") as f:
         f.write("\n".join(lines) + "\n")
 

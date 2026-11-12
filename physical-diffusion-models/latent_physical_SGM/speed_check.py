@@ -12,10 +12,11 @@
   5. speed of the training step (train_latent.build_runner) for dense / dense_skip / stencil x f64 / mixed at
      K = 0 (pixels only), 784, 3072, 6144 (Potts --quad --local), and of loss + gradient alone (the difference is
      sampling and optimizer bookkeeping); rows 'nobest' (track_best=False, as under --select ema) and 'lean'
-     (--step-impl lean) and its parts for the stencil mixed path
+     (--step-impl lean) and its parts for the stencil mixed path, and the rows of EXPERIMENTS (none at present)
   6. the per-step trims of build_runner (track_best=False, theta_masks, chunk_batches) against the default runner:
      carries and losses bitwise equal after 301 steps (stencil mixed at K = 0, 784, 3072; dense f64 at K = 784);
-     kernels per step in the compiled scan bodies; the optimized HLO of each variant at K = 784
+     kernels per step in the compiled scan bodies; the optimized HLO of each variant at K = 784; and how far the rows
+     of EXPERIMENTS (which change the arithmetic) move the carry
 
 Usage (from latent_physical_SGM/):  sbatch --time=02:00:00 jobs/run_gpu_neuronic.sh speed_check.py
 Optional arguments: the sections, e.g. '1,4' (default all), and for section 5 a comma list of row-name substrings,
@@ -46,8 +47,7 @@ import train_latent  # noqa: E402
 
 T = lm.TEMP
 JOB = os.environ.get("SLURM_JOB_ID", "manual")
-OUT = os.path.join(lm.OUT_ROOT, "speed_check", JOB + os.environ.get("SPEED_CHECK_SUFFIX", ""))
-os.makedirs(OUT, exist_ok=True)
+OUT = os.path.join(lm.OUT_ROOT, "speed_check", JOB + os.environ.get("SPEED_CHECK_SUFFIX", ""))   # made in main()
 REPORT = os.path.join(OUT, "report.txt")
 RESULTS = {"job": JOB, "checks": {}, "sections": {}}
 FAILED = []
@@ -457,6 +457,18 @@ TRIMS = {"base": {}, "nobest": {"track_best": False},
          "lean": {"track_best": False, "theta_masks": True, "chunk_batches": True}}
 # (2026-11-11, job 4222847: scan_unroll=4 on top of lean was 2-3% slower at K = 784-6144 and 2% faster at K = 0;
 #  XLA flags: command buffers off 5-13% slower, CONDITIONALS / graph_min_graph_size=1 within +-2%; none kept)
+# Rows that change the arithmetic beyond rounding of the same operations (build_runner options; not in section 6's
+# bitwise check). None at present. Tried 2026-11-11 and removed: Adam's moments stored in float32 on top of lean
+# ('lean+m32'). With the moment recursions in float32 (b2 = 0.999 rounds to 0.99900001 there, which biases every
+# step by -6.5e-6): 0 / 1.6 / 5.0 / 1.9% less time per step at K 0 / 784 / 3072 / 6144 (job 4223301; 0 / 1.7 / 4.6 /
+# 1.4% in 4223404). With the recursions in float64 and float32 storage only (unbiased): 0 / -0.5 / 2.3 / -0.3%
+# (4223427), so the gain came from the float32 arithmetic, not from the halved storage.
+EXPERIMENTS = {}
+
+
+def build_variant(trim, *args, **kw):
+    """train_latent.build_runner with the options of a row of TRIMS or EXPERIMENTS."""
+    return train_latent.build_runner(*args, **kw, **(TRIMS[trim] if trim in TRIMS else EXPERIMENTS[trim]))
 
 
 def speed():
@@ -482,7 +494,7 @@ def speed():
     variants = [("dense", "f64", "base"), ("dense_skip", "f64", "base"), ("stencil", "f64", "base"),
                 ("dense", "mixed", "base"), ("stencil", "mixed", "base"), ("stencil", "mixed", "nobest"),
                 ("stencil", "mixed", "nobest+masks"), ("stencil", "mixed", "nobest+chunk"),
-                ("stencil", "mixed", "lean")]
+                ("stencil", "mixed", "lean")] + [("stencil", "mixed", e) for e in EXPERIMENTS]
     out = {}
     log("  ms per step (full training step: sampling, loss + gradient, Adam, update, EMA, best) | loss + gradient "
         "+ a plain update only | first call (compile + 100 steps)")
@@ -495,8 +507,7 @@ def speed():
                 vis = lm.make_visible(conn, n, impl, terms, sextic=False)
                 loss = lm.make_loss(vis, T, K, "potts", K > 0,
                                     compute_dtype=jnp.float32 if prec == "mixed" else None)
-                run, adam = train_latent.build_runner(loss, data, n, 1000.0, "quartic", P, zero_slices=zero_slices,
-                                                      **TRIMS[trim])
+                run, adam = build_variant(trim, loss, data, n, 1000.0, "quartic", P, zero_slices=zero_slices)
                 params = make_params(K)
                 state = {"carry": train_latent.init_carry(params, adam, jr.PRNGKey(1))}
                 lrs = {g: 1e-6 for g in params}
@@ -622,7 +633,7 @@ def trims():
     fusions, and with them other fused multiply-adds."""
     conn, n, data, P, terms, zero_slices, t_bench, make_params = bench_setup()
     out = {}
-    variants = dict(TRIMS, base2={})
+    variants = list(TRIMS) + ["base2"] + list(EXPERIMENTS)
     for K, impl, prec in ((0, "stencil", "mixed"), (784, "stencil", "mixed"), (784, "dense", "f64"),
                           (3072, "stencil", "mixed")):
         vis = lm.make_visible(conn, n, impl, terms, sextic=False)
@@ -631,11 +642,13 @@ def trims():
         lrs = {g: (1e-3 if g == "theta" else 3e-5) for g in params}      # large enough to move every group
         cfg = f"K{K} {impl} {prec}"
         res = {}
-        for trim, kw in variants.items():
+        for trim in variants:
             if impl == "dense" and trim not in ("base", "base2", "nobest", "lean"):
                 continue
+            kw = {} if trim == "base2" else (TRIMS[trim] if trim in TRIMS else EXPERIMENTS[trim])
             try:
-                run, adam = train_latent.build_runner(loss, data, n, 1000.0, "quartic", P, zero_slices=zero_slices, **kw)
+                run, adam = build_variant("base" if trim == "base2" else trim, loss, data, n, 1000.0, "quartic", P,
+                                          zero_slices=zero_slices)
                 carry = train_latent.init_carry(params, adam, jr.PRNGKey(3))
                 ls = []
                 for nsteps in (100, 100, 100, 1):
@@ -698,14 +711,16 @@ def trims():
         same_base = any("base" in cl and "base2" in cl for cl in classes)
         check(f"trims {cfg}: a second compilation of the default runner is bitwise equal to the first", same_base,
               f"classes {classes}")
-        if K == 0:
-            check(f"trims {cfg}: every trim bitwise equal to the default runner (no GEMMs)", len(classes) == 1,
-                  f"classes {classes}")
+        if K == 0:                                # the rows of TRIMS (EXPERIMENTS rows change the arithmetic)
+            base_cl = next(cl for cl in classes if "base" in cl)
+            check(f"trims {cfg}: every trim bitwise equal to the default runner (no GEMMs)",
+                  all(t in base_cl for t in TRIMS if t in res), f"classes {classes}")
         out[cfg] = r
     return out
 
 
 def main():
+    os.makedirs(OUT, exist_ok=True)       # not at import (import checks left empty folders)
     # optional argument: the sections to run, e.g. "1,4" (default: all)
     todo = set(sys.argv[1].split(",")) if len(sys.argv) > 1 else {"1", "2", "3", "4", "5", "6"}
     log(f"speed_check job {JOB}, {time.strftime('%Y-%m-%d %H:%M:%S')}; sections {sorted(todo)}"

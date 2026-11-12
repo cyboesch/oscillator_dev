@@ -11,6 +11,8 @@ case's own) under a new name, in a subprocess (train_latent.py as the pipelines 
      rounding (relative differences and the logged numbers)
   3. 'fast': --step-impl lean --ref-kmeans gpu (the reference changes at rounding level or more): start-up time and
      the per-slice records against the reference's
+(Jobs 4223404 and 4223427 also ran a case 'm32', --step-impl lean --adam-moments f32, an option tried and removed
+on 2026-11-11; see speed_check.py, EXPERIMENTS.)
 Wall times of every case from the process start to its end (2 slices, start-up included).
 
 Usage (from latent_physical_SGM/):  sbatch --time=00:30:00 jobs/run_gpu_neuronic.sh train_checks.py [cases]

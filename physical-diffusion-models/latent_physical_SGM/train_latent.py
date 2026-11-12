@@ -49,8 +49,18 @@ Option --hidden-rule cd1: the hidden parameters are trained with the local CD-1 
 of the exact gradient (release length --cd1-dt, or kappa^2 T / S per slice; --cd1-releases per sample).
 --cd1-hidden-samples S measures the hidden statistics of the CD-1 terms from S sampled hidden states per released
 configuration; with --hidden-samples as well, the visible gradient's clamp force is measured too.
+Option --time-grid power:P: slice times t_k = 5 (1 - k/99)^P instead of the paper's t_k = 5 (1 - k/99) (P > 1: knots
+denser near t = 0; latent_model.parse_time_grid), each slice's learning rate and step count the paper's linear
+functions of t at t_k (latent_model.time_grid_lr, time_grid_steps; --steps-scale, --steps-schedule and --lr-scale
+act on top). Everything per slice follows the grid: the data, the validation batch and the hidden-unit references
+at t_k, the logs, hidden_history.npz 't', and the paper comparison (the paper's slices interpolated in t). Recorded in
+config.json as 'time_grid' ('uniform' by default and for runs without the key): a run resumes only on its own grid,
+--init-from takes a source run on another grid only if the linked slices sit at identical times (e.g. slices 0..K of
+a uniform run for power:P@K, init slices <= K + 1), and the samplers read the knots from it.
 Every slice file also stores the per-sample losses on the fixed validation batch (and the paper checkpoint's, for
-mnist28), for paired comparisons between runs.
+mnist28), for paired comparisons between runs (the validation batch of slice k is drawn with the key of k at the
+slice's t, so runs on different grids share it only where their slice times agree: slices 0 and 99 for power:P
+against uniform, 0..K and 99 for power:P@K).
 
 Writes out/latent_physical_SGM/<name>/ (never the paper's folder, never deletes anything); resumes from the last
 finished slice. Run under Slurm: cd physical-diffusion-models/latent_physical_SGM && sbatch jobs/run_train_latent_neuronic.sh
@@ -154,13 +164,26 @@ def parse():
                          "each chunk's 100 batches are drawn before the scan from the same keys; the theta "
                          "projection and k_6 gradient zeroing are constant masks. The same arithmetic, but with "
                          "hidden units XLA compiles the changed step with other fusions (fused multiply-adds), so "
-                         "results differ from default at rounding level (bitwise equal for pixels-only models; "
-                         "speed_check.py section 6). 2-11%% faster per step (K 784-6144)")
+                         "results differ from default at rounding level (on the GPU bitwise equal for pixels-only "
+                         "models; speed_check.py section 6). 2-11%% faster per step (K 784-6144)")
     ap.add_argument("--steps-schedule", default="",
                     help="step factors per slice range, 'k0:f0,k1:f1,...': slice k >= k_i (the last such entry) runs "
                          "paper_steps(k) x --steps-scale x f_i steps, rounded to the nearest 100 m + 1 (no "
-                         "recompilation); slices before the first entry factor 1. E.g. '30:0.5,70:1,80:2'. Empty "
-                         "(default): the paper's schedule, rounded as before")
+                         "recompilation); slices before the first entry factor 1. With a schedule every slice is "
+                         "rounded that way, so at --steps-scale != 1 the factor-1 slices change too (by up to 50 "
+                         "steps, or up to at least 101). E.g. '30:0.5,70:1,80:2'. Empty (default): the paper's schedule, rounded as before")
+    ap.add_argument("--time-grid", default="uniform",
+                    help="slice times: 'uniform' (default: the paper's t_k = 5 (1 - k/99), k = 0..99) or 'power:P', "
+                         "t_k = 5 (1 - k/99)^P with P > 0 (P > 1 puts the knots denser near t = 0: power:1.5 has the "
+                         "last interval 0.0051 instead of 0.0505), or 'power:P@K': the uniform slices 0..K, then the "
+                         "power law from t_K down to 0 (latent_model.parse_time_grid; e.g. power:1.5@40 keeps slices "
+                         "0-40, t >= 2.98, as on the uniform grid). Each slice's learning rate and step count are the "
+                         "paper's linear functions of t at t_k (2e-5 and 30,901 steps at t = 0, 2e-3 and 10,901 at "
+                         "t = 5; latent_model.time_grid_lr / time_grid_steps), with --steps-scale, --steps-schedule "
+                         "and --lr-scale on top. Recorded in config.json ('time_grid'; runs without it are uniform): "
+                         "a run resumes only on its own grid, --init-from takes a source on another grid only if the "
+                         "linked slices sit at identical times (e.g. a uniform run's slices 0..K for power:P@K), and "
+                         "the samplers take the knots from it")
     ap.add_argument("--ref-kmeans", choices=["cpu", "gpu"], default="cpu",
                     help="Potts units: the k-means of the prototype reference (latent_model.prototype_reference) in "
                          "numpy (cpu, default) or on the GPU (latent_model.kmeans_jax: the same seeding draws and "
@@ -290,15 +313,18 @@ def steps_factor(schedule, k):
     return f
 
 
-def slice_steps(k, steps_scale=1.0, schedule=()):
+def slice_steps(k, steps_scale=1.0, schedule=(), grid="uniform"):
     """Adam steps of slice k. Without a schedule, as before: max(1, round(paper_steps(k) * steps_scale)). With one
     (--steps-schedule): paper_steps(k) * steps_scale * factor(k), rounded to the nearest count of the form 100 m + 1
     with m >= 1 (at least 101), the form of every paper_steps(k), so that every slice runs m chunks of 100 steps and
     one single step, the two lengths the jitted run is compiled for (each further remainder length costs one more
-    compilation of a few seconds; e.g. --steps-scale 2 alone gives 2 x (100 m + 1) = 100 (2m) + 2 steps)."""
+    compilation of a few seconds; e.g. --steps-scale 2 alone gives 2 x (100 m + 1) = 100 (2m) + 2 steps).
+    grid (--time-grid): paper_steps(k) is that grid's, latent_model.time_grid_steps(k, grid) (the paper's rule at the
+    slice's t; also of the form 100 m + 1); 'uniform' (default) is lm.paper_steps(k) itself."""
+    base = lm.time_grid_steps(k, grid)            # 'uniform': lm.paper_steps(k), as before
     if not schedule:
-        return max(1, int(round(lm.paper_steps(k) * steps_scale)))
-    x = lm.paper_steps(k) * steps_scale * steps_factor(schedule, k)
+        return max(1, int(round(base * steps_scale)))
+    x = base * steps_scale * steps_factor(schedule, k)
     return 100 * max(1, int(round((x - 1.0) / 100.0))) + 1
 
 
@@ -443,7 +469,7 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
     batches drawn before the scan from the same keys (the per-step split of the key chain, then one vmapped
     sample_forward_process). The arithmetic is the same, but XLA compiles a changed graph with other fusions and
     fused multiply-adds: with hidden units (GEMMs) the results differ at rounding level, without them they are
-    bitwise equal (speed_check.py section 6).
+    bitwise equal on the L40 (speed_check.py section 6; XLA:CPU differs at rounding level there too).
     zero_slices (--pair-terms): slices of the flat visible parameters set to exactly zero after every step (dropped
     pair-coupling groups); empty by default, which leaves every step unchanged.
 
@@ -485,6 +511,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
     if visible == "quartic":
         kd, cd = lm.kduff_slice(n_vis), lm.cduff_slice(n_vis, n_pairs)
     if theta_masks:                       # project() and the k_6 gradient zeroing below as constant masks
+        if n_pairs is None:
+            raise ValueError("theta_masks needs n_pairs (the visible model's number of pairs, vis.P)")
         n_theta = 4 * n_vis + 3 * n_pairs
         zero_m, floor_v, k6_m = np.zeros(n_theta, bool), np.full(n_theta, -np.inf), np.zeros(n_theta, bool)
         k6_m[k6] = True
@@ -678,6 +706,7 @@ def main():
                          "with the float32 fields)")
     pair_terms = lm.parse_pair_terms(args.pair_terms)          # raises on an invalid list
     steps_sched = parse_steps_schedule(args.steps_schedule)    # raises on an invalid schedule
+    time_grid = lm.parse_time_grid(args.time_grid)             # canonical spec; raises on an invalid one
     if args.ref_kmeans == "gpu" and not (args.hidden == "potts" and args.K > 0):
         raise ValueError("--ref-kmeans gpu is the k-means of the Potts prototype reference (--hidden potts, --K > 0)")
     if args.neighbourhood != "chebyshev" and args.radius is None:
@@ -720,6 +749,7 @@ def main():
         "init_from": args.init_from, "init_slices": args.init_slices, "lr_scale": args.lr_scale,
         "visible_impl": args.visible_impl, "precision": args.precision, "step_impl": args.step_impl,
         "steps_schedule": steps_schedule_str(steps_sched), "ref_kmeans": args.ref_kmeans, "assemble": args.assemble,
+        "time_grid": time_grid,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -737,13 +767,15 @@ def main():
                 "ising_reseed": False, "ising_weak_boost": 1.0, "val_every": 0,
                 "init_from": None, "init_slices": 0, "lr_scale": 1.0,
                 "visible_impl": "dense", "precision": "f64", "step_impl": "default",
-                "steps_schedule": "", "ref_kmeans": "cpu", "assemble": "files"}   # runs started before these options existed
+                "steps_schedule": "", "ref_kmeans": "cpu", "assemble": "files",
+                "time_grid": "uniform"}   # runs started before these options existed
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
         with open(cfg_path) as f:
             old = json.load(f)
-        diff = {k: (old.get(k, defaults.get(k)), v) for k, v in config.items() if old.get(k, defaults.get(k)) != v}
+        diff = {k: (old.get(k, defaults.get(k)), v) for k, v in config.items()
+                if k != "assemble" and old.get(k, defaults.get(k)) != v}   # --assemble: the same bytes either way
         if diff:
             raise RuntimeError(f"existing run {out_dir} has a different config: {diff}")
         if old.get("sha256") != code_sha:
@@ -763,7 +795,7 @@ def main():
         return
     log(logf, f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; job {os.environ.get('SLURM_JOB_ID', 'manual')}; "
               f"jax {jax.__version__}; devices {jax.devices()}; code {code_sha}; config "
-              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision', 'step_impl', 'steps_schedule', 'ref_kmeans', 'assemble')})}"
+              f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision', 'step_impl', 'steps_schedule', 'ref_kmeans', 'assemble', 'time_grid')})}"
               + (f"; cd1 kappa {args.cd1_kappa}, dt {args.cd1_dt}, releases {args.cd1_releases}, "
                  f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else ""))
 
@@ -790,9 +822,18 @@ def main():
     for s in zero_slices:
         theta0 = theta0.at[s].set(0.0)
     K = args.K
-    taus = lm.forward_time_pts()
-    lr_v = lm.lr_schedule()
+    taus = lm.time_grid_pts(time_grid)           # slice times; 'uniform': lm.forward_time_pts(), as before
+    lr_v = lm.time_grid_lr(time_grid)            # 'uniform': lm.lr_schedule(), as before
     n_slices = min(args.max_slices, lm.N_TIME_STEPS)
+    if time_grid != "uniform":                   # --time-grid: the grid against the paper's (uniform) one
+        t_uni, dts = lm.forward_time_pts(), -np.diff(taus)
+        n_grid = [lm.time_grid_steps(k, time_grid) for k in range(lm.N_TIME_STEPS)]
+        log(logf, f"time grid {time_grid}: slice times {taus[0]:.4f}, {taus[1]:.4f}, {taus[2]:.4f}, ..., {taus[-3]:.5f}, "
+                  f"{taus[-2]:.5f}, {taus[-1]:.4f}; intervals {dts[0]:.4g} (first) to {dts[-1]:.4g} (last; uniform "
+                  f"{t_uni[0] - t_uni[1]:.4g}); {int(np.sum(taus >= 3.0))} slices at t >= 3 (uniform "
+                  f"{int(np.sum(t_uni >= 3.0))}); paper steps {n_grid[0]:,} (t = 5) to {n_grid[-1]:,} (t = 0), "
+                  f"{sum(n_grid):,} in all (uniform {sum(lm.paper_steps(k) for k in range(lm.N_TIME_STEPS)):,}), "
+                  f"before --steps-scale / --steps-schedule; lr {lr_v[0]:.4g} (t = 5) to {lr_v[-1]:.4g} (t = 0)")
     jk = (2 if args.hidden_jackknife_order == 2 else True) if args.hidden_jackknife else False
     loss_fn = lm.make_loss(vis, lm.TEMP, K, args.hidden, args.local, samples=args.hidden_samples,
                            jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt)
@@ -904,9 +945,18 @@ def main():
         src = os.path.join(args.out_root, args.init_from)
         with open(os.path.join(src, "config.json")) as f:
             scfg = json.load(f)
+        src_grid = lm.config_time_grid(scfg)          # 'uniform' for runs from before --time-grid
+        if src_grid != time_grid:                     # allowed only where the linked slices sit at the same times
+            n_link = min(args.init_slices, lm.N_TIME_STEPS)
+            if not np.array_equal(lm.time_grid_pts(src_grid)[:n_link], np.asarray(taus)[:n_link]):
+                raise RuntimeError(f"--init-from {src}: its slices were trained on the time grid {src_grid!r}, this run "
+                                   f"uses {time_grid!r}, and the {n_link} linked slices would sit at other times than "
+                                   f"this run's (power:P@K shares slices 0..K with the uniform grid)")
+            log(logf, f"--init-from {src}: source grid {src_grid!r}, this run {time_grid!r}; the {n_link} linked slices "
+                      f"sit at identical times (t >= {float(taus[n_link - 1]):.4f})")
         free = {"name", "steps_scale", "val_every", "lr_scale", "init_from", "init_slices", "max_slices",
                 "visible_impl", "precision", "step_impl", "steps_schedule", "ref_kmeans",
-                "assemble"}                          # numerics of the new slices only: a continuation may differ
+                "assemble", "time_grid"}             # numerics of the new slices only (time_grid: checked above)
         bad = {k: (scfg.get(k, defaults.get(k)), v) for k, v in config.items()
                if k not in free and k in defaults and scfg.get(k, defaults.get(k)) != v}
         bad.update({k: (scfg.get(k), config[k]) for k in ("K", "cls", "hidden_lr_scale", "freeze_hidden_slices")
@@ -979,7 +1029,7 @@ def main():
         t0 = time.time()
         t_curr = float(taus[k])
         optimization_key, optimization_subkey = jr.split(optimization_key)
-        n_steps = slice_steps(k, args.steps_scale, steps_sched)          # without a schedule: as before
+        n_steps = slice_steps(k, args.steps_scale, steps_sched, time_grid)   # no schedule, uniform grid: as before
         if args.hidden_fixed:                    # hidden couplings = this slice's closed-form reference, not trained
             params = dict(params)
             if K > 0:
@@ -1105,7 +1155,11 @@ def main():
                        val_gain_second_half=float(np.mean(dd)), val_gain_second_half_se=float(np.std(dd) / np.sqrt(dd.size)))
         extra = {}
         if paper is not None:
-            pp = {"theta": jnp.asarray(np.array(paper[k], dtype=np.float64)), "W": jnp.zeros((0, n_vis)), "b": jnp.zeros((0,))}
+            # the paper's model at this slice's t: its slice k on the uniform grid (as before); on another --time-grid
+            # its slices interpolated linearly in t, as its sampler does (exactly its slice at t = 5 and t = 0)
+            th_paper = (np.array(paper[k], dtype=np.float64) if time_grid == "uniform"
+                        else lm.interp_history(paper, lm.forward_time_pts(), t_curr))
+            pp = {"theta": jnp.asarray(th_paper), "W": jnp.zeros((0, n_vis)), "b": jnp.zeros((0,))}
             val_ps_paper = np.asarray(loss_ps_k0(pp, Xv))
             d = val_ps - val_ps_paper
             rec.update({"val_loss_paper": float(np.mean(val_ps_paper)), "val_diff_paper": float(np.mean(d)),

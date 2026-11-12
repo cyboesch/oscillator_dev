@@ -8,6 +8,9 @@ trajectory (key from latent_model.trajectory_set, SpaceTimeLevyArea, tolerance -
 every parameter linearly interpolated in forward time tau = 5 - t between the 100 slice knots exactly as
 physical_diffusion_fns.helper_fns.interpolate_parameters (jnp.interp) does it:
     P(tau) = P_lo + l (P_hi - P_lo),   l = (tau - tau_lo) / (tau_hi - tau_lo),   tau_lo <= tau <= tau_hi neighbours.
+The knots are the run's slice times (FastSampler taus; sample_latent.slice_times reads the run's time grid,
+train_latent.py --time-grid): the uniform grid t_k = 5 (1 - k/99) by default, or e.g. power:1.5. On any grid each
+interval's weight l uses that interval's own width tau_hi - tau_lo, as jnp.interp does.
 What changes is how the drift is evaluated and how the knots are handled:
 
 1. Knot intervals. The 99 intervals between consecutive knots are integrated one after the other, all trajectories
@@ -26,10 +29,14 @@ What changes is how the drift is evaluated and how the knots are handled:
    (sampler_check.py section 2).
 2. Step sizes. The solve over [0, 5] with step_ts = knots (sample_latent) steps onto every knot, and the controller
    then proposes the next step from the clipped step (made_jump is False for step_ts). Each interval solve here ends
-   on the knot the same way, and the next one starts from the final PIDController state of the previous one
-   (SaveAt(controller_state=True); dt0 = the step it proposed), so the step sequence is the same as in the single
-   solve; only rounding-level differences of the drift can change it. The first interval starts at dt0 = 1e-8 with
-   the state PIDController.init gives. SRA1 has no solver state.
+   on the knot the same way (diffrax clips the last step to t1; it also extends a proposal that ends less than 1e-10
+   before the knot, where step_ts would add a tiny extra step), and the next one starts from the final PIDController
+   state of the previous one (SaveAt(controller_state=True); dt0 = the step it proposed), so the step rule is the
+   same as in the single solve. The first interval starts at dt0 = 1e-8 with the state PIDController.init gives.
+   SRA1 has no solver state. Any rounding-level difference of the drift flips an accept/reject decision somewhere in
+   nearly every trajectory's ~4,000 steps; from there the steps differ and the final states differ by about 1e-4
+   (sampler_check.py section 3), rarely by a different digit (1 of 500 at K = 3072). Scaling the old drift by
+   1 + 1e-15 does the same (job 4223512), while the old sampler run twice agrees to about 1e-15 in most trajectories.
 3. Diagonal noise: ControlTerm with a lineax.DiagonalLinearOperator (sqrt(2T) * dW elementwise), instead of the
    dense sqrt(2T) * eye(784) matrix and its three matrix-vector products per step (the same numbers: the dense
    product only adds exact zeros).
@@ -38,13 +45,19 @@ What changes is how the drift is evaluated and how the knots are handled:
 5. --precision mixed: the two hidden-unit GEMMs in float32 at HIGHEST precision (as latent_model.in_compute_dtype;
    XLA may use TF32 for float32 products otherwise); M is cast once per interval. Time, state, Brownian path,
    visible force, softmax and everything else stay float64.
-6. --brownian-tol: the VirtualBrownianTree tolerance (the depth of its bisection: 43 levels at 1e-12, 29 at 1e-8,
-   23 at 1e-6, two descents per step). The path is the same random function of the key at every tolerance, resolved
-   to a different depth.
+6. --brownian-tol: the VirtualBrownianTree tolerance, i.e. the depth of its bisection over [0, 5] (43 levels at
+   1e-12, 29 at 1e-8, 23 at 1e-6; leaves of 5 * 2^-levels = 5.7e-13, 9.3e-9, 6.0e-7 time units), the cost of one
+   descent. A coarser tree is the finer one stopped early: the paths agree at the dyadic points of the coarser level
+   (and at t = 0 and 5), and inside a leaf the coarser tree interpolates with the leaf's own random bridge (Foster's
+   'sqrt' spline). Solver steps much longer than a leaf see Brownian increments of the right law either way.
+7. --brownian cached: the same tree and path, but SRA1 keeps the tree's value at the current time as its solver
+   state, so a step descends the tree once (to its end) instead of twice (_cached_brownian_classes; diffrax 0.6.0
+   internals). The values come from the tree's own _evaluate, so they are the stock ones bit for bit, and a cached
+   solve repeats a 'tree' solve bit for bit (sampler_check.py section 7).
 
 Only the reverse SDE (--sampler sde) has this path; the PF-ODE, --quench and --snapshots stay on sample_latent.py's
 code. Use through sample_latent.py --fast (writes <run>/samples/sde_<set>_n<n><suffix>.npy, refuses to overwrite),
-or FastSampler directly (sampler_check.py).
+or FastSampler directly (sampler_check.py). Choose --chunk dividing --n: the last chunk is padded to full size.
 """
 
 import json
@@ -86,23 +99,23 @@ def tree_levels(tol, t0=0.0, t1=lm.T_FORWARD):
 
 
 def _cached_brownian_classes():
-    """The classes of --brownian cached, built on diffrax 0.6.0's VirtualBrownianTree internals (imported here, so
-    that the default path never touches them):
-      CachedTree      the stock tree plus levy_at(t), its value (W_t, H, bar H_t) at one time, the same bisection as
-                      VirtualBrownianTree._evaluate_leaf (SpaceTimeLevyArea, 'sqrt' spline) with the loop unrolled to
-                      its fixed depth, and increment(v0, v1) = VirtualBrownianTree.evaluate(t0, t1, use_levy=True)
-                      computed from the two values (the same _levy_diff and rescaling);
+    """The classes of --brownian cached, built on diffrax 0.6.0's VirtualBrownianTree (private parts imported here,
+    so that the default path never touches them):
+      CachedTree      the stock tree plus levy_at(t), its value (W_t, H_t, bar H_t) at one time, computed by the tree's
+                      own VirtualBrownianTree._evaluate (the stock while-loop bisection, so the same numbers), and
+                      increment(v0, v1) = VirtualBrownianTree.evaluate(t0, t1, use_levy=True) computed from the two
+                      values with the same _levy_diff, transposition and rescaling as evaluate;
       CachedSRA1      SRA1 whose solver state is the tree's value at the current time: a step evaluates the tree once
-                      (at its end) instead of twice. diffrax keeps the solver state of accepted steps only, so after a
-                      rejection the state is still the value at the step's start;
-      GivenIncrement  a control path that returns one precomputed increment (the step's)."""
-    import math
+                      (at its end) instead of twice (evaluate(t0, t1) descends the tree for t0 and for t1). diffrax
+                      keeps the solver state of accepted steps only, so after a rejection the state is still the
+                      value at the step's start;
+      GivenIncrement  a control path that returns one precomputed increment (the step's): SRA1 queries the path once
+                      per step, over the whole step (diffrax _solver/srk.py)."""
     import equinox as eqx
-    import jax.random as jr
     import jax.tree_util as jtu
     if diffrax.__version__ != "0.6.0":
         raise RuntimeError(f"--brownian cached is written against diffrax 0.6.0 internals, not {diffrax.__version__}")
-    from diffrax._brownian.tree import _LevyVal, _State, _levy_diff, _split_interval
+    from diffrax._brownian.tree import _levy_diff
     from diffrax._custom_types import levy_tree_transpose
     from diffrax._misc import linear_rescale
     from diffrax._term import WrapTerm               # diffeqsolve wraps every term (time direction)
@@ -123,8 +136,11 @@ def _cached_brownian_classes():
 
     class CachedTree(diffrax.AbstractBrownianPath):
         tree: diffrax.VirtualBrownianTree
-        levy_area: type = eqx.field(static=True)
-        n_levels: int = eqx.field(static=True)
+        levy_area: type = eqx.field(static=True)               # an abstract attribute of AbstractBrownianPath
+
+        def __init__(self, tree):
+            self.tree = tree
+            self.levy_area = tree.levy_area
 
         @property
         def t0(self):
@@ -138,58 +154,16 @@ def _cached_brownian_classes():
             return self.tree.evaluate(t0, t1, left, use_levy)
 
         def levy_at(self, t):
+            """The tree's value at time t, as VirtualBrownianTree.evaluate computes it for each end of a step."""
             tr = self.tree
-            r = linear_rescale(tr.t0, t, tr.t1)
-            return jtu.tree_map(lambda key, struct: self._leaf(key, r, struct), tr.key, tr.shape)
+            assert tr.levy_area is diffrax.SpaceTimeLevyArea
+            return tr._evaluate(linear_rescale(tr.t0, t, tr.t1))
 
         def increment(self, v0, v1):
+            """evaluate(t0, t1, use_levy=True) from the values at t0 and t1."""
             tr = self.tree
             out = levy_tree_transpose(tr.shape, jtu.tree_map(_levy_diff, tr.shape, v0, v1))
             return tr._denormalise_bm_inc(out)
-
-        def _leaf(self, key, r, struct):
-            tr = self.tree
-            assert tr.levy_area is diffrax.SpaceTimeLevyArea and tr._spline == "sqrt"
-            shape, dtype = struct.shape, struct.dtype
-            r = jnp.asarray(r, dtype)
-            state_key, init_key_w, init_key_hh = jr.split(key, 3)
-            bhh_1 = jr.normal(init_key_hh, shape, dtype) / math.sqrt(12)
-            bhh_0 = jnp.zeros_like(bhh_1)
-            w_0 = jnp.zeros(shape, dtype)
-            w_1 = jr.normal(init_key_w, shape, dtype)
-            st = _State(level=0, s=jnp.zeros((), dtype), w_s_u_su=(w_0, w_1, w_1), key=state_key,
-                        bhh_s_u_su=(bhh_0, bhh_1, bhh_1), bkk_s_u_su=None)
-            for _ in range(self.n_levels):                        # VirtualBrownianTree's while loop, unrolled
-                _t, _w_stu, _w_st_tu, _keys, _bhh_stu, _bhh_st_tu, _, _ = tr._brownian_arch(st, shape, dtype)
-                _cond = r > _t
-                st = _State(level=st.level + 1, s=jnp.where(_cond, _t, st.s),
-                            w_s_u_su=_split_interval(_cond, _w_stu, _w_st_tu),
-                            key=jnp.where(_cond, _keys[0], _keys[1]),
-                            bhh_s_u_su=_split_interval(_cond, _bhh_stu, _bhh_st_tu), bkk_s_u_su=None)
-            s = st.s
-            su = jnp.asarray(2.0 ** -st.level, dtype=dtype)
-            sr = jax.nn.relu(r - s)
-            ru = jax.nn.relu(su - sr)
-            w_s, w_u, w_su = st.w_s_u_su
-            bhh_s, bhh_u, bhh_su = st.bhh_s_u_su
-            sr3, ru3, su3 = jnp.power(sr, 3), jnp.power(ru, 3), jnp.power(su, 3)
-            key1, key2 = jr.split(st.key, 2)
-            x1 = jr.normal(key1, shape, dtype)
-            x2 = jr.normal(key2, shape, dtype)
-            sr_ru_half = jnp.sqrt(sr * ru)
-            d = jnp.sqrt(sr3 + ru3)
-            d_prime = 1 / (2 * su * d)
-            a = d_prime * sr3 * sr_ru_half
-            b = d_prime * ru3 * sr_ru_half
-            with jax.numpy_dtype_promotion("standard"):
-                w_sr = sr / su * w_su + 6 * sr * ru / su3 * bhh_su + 2 * (a + b) / su * x1
-                w_r = w_s + w_sr
-                c = jnp.sqrt(3 * sr3 * ru3) / (6 * d)
-                bhh_sr = sr3 / su3 * bhh_su - a * x1 + c * x2
-                bhh_r = bhh_s + bhh_sr + 0.5 * (r * w_s - s * w_r)
-                inverse_r = 1 / jnp.where(jnp.abs(r) < jnp.finfo(r).eps, jnp.inf, r)
-                hh_r = inverse_r * bhh_r
-            return _LevyVal(dt=r, W=w_r, H=hh_r, bar_H=bhh_r, K=None, bar_K=None)
 
     def control_term(term):
         """(the ControlTerm, the WrapTerm direction or None) of the diffusion term as diffeqsolve passes it."""
@@ -214,13 +188,14 @@ def _cached_brownian_classes():
     return CachedTree, CachedSRA1
 
 
-def knot_times():
-    """(order, xp, s). xp: the forward knot times in increasing order, exactly the grid jnp.interp sees in
-    interpolate_parameters (lm.forward_time_pts()[order], order = argsort). s: the reverse-time knots
-    sort(T_FORWARD - forward_time_pts()) (s[0] = 0, s[-1] = 5; s[1:-1] are sample_latent's step_ts).
+def knot_times(taus=None):
+    """(order, xp, s) for the run's slice times taus (forward time, slice order, t = 5 first; default
+    lm.forward_time_pts(), the uniform grid; a --time-grid run: sample_latent.slice_times). xp: the forward knot times
+    in increasing order, exactly the grid jnp.interp sees in interpolate_parameters (taus[order], order = argsort).
+    s: the reverse-time knots sort(T_FORWARD - taus) (s[0] = 0, s[-1] = 5; s[1:-1] are sample_latent's step_ts).
     Reverse-time interval j = [s[j], s[j+1]] (j = 0..98) lies between the forward knots xp[lo] and xp[lo + 1],
-    lo = 98 - j: the bracket jnp.interp uses for every t inside it."""
-    taus = lm.forward_time_pts()
+    lo = 98 - j: the bracket jnp.interp uses for every t inside it (for any strictly monotone grid)."""
+    taus = lm.forward_time_pts() if taus is None else np.asarray(taus, dtype=np.float64)
     order = np.argsort(taus)
     return order, taus[order], np.sort(lm.T_FORWARD - taus)
 
@@ -247,16 +222,18 @@ class FastSampler:
       visible_impl  'auto' (stencil up to STENCIL_MAX_OFFSETS lattice offsets, else dense), 'stencil', 'dense'
       brownian_tol  VirtualBrownianTree tolerance (default lm.BROWNIAN_TOL = 1e-12, sample_latent's)
       brownian      'tree' (default): the stock tree, evaluate(t0, t1) per step (two bisections); 'cached': the same
-                    tree and path, one bisection per step, unrolled (_cached_brownian_classes)
+                    tree and path, one descent of the tree per step instead of two (_cached_brownian_classes)
       rtol, atol, dt0  PIDController tolerances and the first step (default the paper's SDE settings)
       max_steps     per interval and trajectory
+      taus          the run's slice times (forward time, slice order, t = 5 first, strictly decreasing to 0; default
+                    lm.forward_time_pts(), the uniform grid; a --time-grid run: sample_latent.slice_times(prov))
     sampler 'ode' builds the PF-ODE drift (for checks; solve_chunk integrates the SDE only).
     """
 
     def __init__(self, theta_hist, W_hist, b_hist, problem="mnist28", hidden="ising", local=None, quad=None,
                  radius=None, neighbourhood="chebyshev", sampler="sde", precision="f64", visible_impl="auto",
                  brownian_tol=lm.BROWNIAN_TOL, rtol=lm.RTOL_SDE, atol=lm.ATOL_SDE, dt0=lm.DT0,
-                 max_steps=MAX_STEPS_INTERVAL, brownian="tree"):
+                 max_steps=MAX_STEPS_INTERVAL, brownian="tree", taus=None):
         if precision not in PRECISIONS:
             raise ValueError(f"precision must be one of {PRECISIONS}, not {precision!r}")
         if visible_impl not in VISIBLE_IMPLS:
@@ -288,7 +265,14 @@ class FastSampler:
         self.brownian, self.n_levels = brownian, tree_levels(self.brownian_tol)
         if brownian == "cached":
             self._CachedTree, self._CachedSRA1 = _cached_brownian_classes()
-        self.order, self.xp, self.s = knot_times()
+        # the knots: the run's slice times (default the uniform grid), t = 5 first, strictly decreasing to t = 0
+        self.taus = lm.forward_time_pts() if taus is None else np.asarray(taus, dtype=np.float64)
+        if (self.taus.shape != (N_KNOTS,) or abs(self.taus[0] - lm.T_FORWARD) > lm.TIME_GRID_TOL
+                or abs(self.taus[-1]) > lm.TIME_GRID_TOL or not np.all(np.diff(self.taus) < 0.0)):
+            raise ValueError(f"taus must be {N_KNOTS} slice times decreasing strictly from {lm.T_FORWARD} to 0")
+        self.order, self.xp, self.s = knot_times(self.taus)
+        if not np.all(np.diff(self.s) > 0.0):         # reverse-time knots s = 5 - t distinct too (zero-width intervals)
+            raise ValueError("taus: two reverse-time knots 5 - t coincide in float64 (see latent_model.MIN_KNOT_GAP)")
 
         # visible energy: only the pair groups (and k_6) that are nonzero somewhere in the history; the others are
         # exactly zero (--pair-terms, the quartic projection), so leaving them out is exact
@@ -329,6 +313,7 @@ class FastSampler:
                 "levy_area": "SpaceTimeLevyArea", "diffusion": "diagonal (lineax.DiagonalLinearOperator)",
                 "interp": "linear (jnp.interp convention), hidden fields and forces mixed from the two knots",
                 "step_ts": "knot intervals solved in sequence, PIDController state carried over",
+                "knots_t": [float(v) for v in self.taus],
                 "max_steps_interval": self.max_steps, "progress_meter": "none"}
 
     # ---------------------------------------------------------------------------------------------- the drift --
@@ -403,7 +388,7 @@ class FastSampler:
         tree = diffrax.VirtualBrownianTree(0.0, lm.T_FORWARD, self.brownian_tol, (self.n,), key,
                                            diffrax.SpaceTimeLevyArea)
         if self.brownian == "cached":
-            return self._CachedTree(tree, diffrax.SpaceTimeLevyArea, self.n_levels)
+            return self._CachedTree(tree)
         return tree
 
     def _levy0(self, key):

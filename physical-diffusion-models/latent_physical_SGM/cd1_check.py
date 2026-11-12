@@ -90,7 +90,7 @@ def main():
     data, n = prob["data"], prob["n"]
     T = lm.TEMP
     vis = lm.DenseVisible(prob["conn"], n)
-    taus = lm.forward_time_pts()
+    grid, taus = lm.run_time_grid(run_dir, cfg)       # the run's slice times (--time-grid; older runs: uniform)
     slices = [int(s) for s in args.slices.split(",")]
     dts = [float(s) for s in args.dts.split(",")]
     Rs = [int(s) for s in args.releases.split(",")]
@@ -123,7 +123,8 @@ def main():
 
     say(f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; cd1_check; job {job}; run {args.run}; "
         f"problem {cfg.get('problem', 'mnist28')}, hidden {hidden}, K {K}, quad {cfg.get('quad', False)}, local {local}, "
-        f"visible {cfg.get('visible', 'sextic')}; batch {args.batch}; draws {args.draws}; T {T}")
+        f"visible {cfg.get('visible', 'sextic')}; batch {args.batch}; draws {args.draws}; T {T}"
+        + (f"; time grid {grid}" if grid != "uniform" else ""))
     say("rel = |g_hat - g| / |g| on the same batch; 'minibatch' = exact gradient on an independent batch; "
         "'one' = one CD-1 estimate; 'mean' = mean of the draws (bias + noise/sqrt(draws)); cos of one estimate")
     metrics = {"run": args.run, "job": job, "slices": {}}
