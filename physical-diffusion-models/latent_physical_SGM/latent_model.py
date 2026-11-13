@@ -11,6 +11,22 @@ Implementation note: the paper computes grad E^v and the Laplacian per sample wi
 Here the three pair-coupling groups are scattered into dense 784x784 matrices once per step, and gradient and
 Laplacian are batched matrix products. Same model, same loss; test_latent.py checks both against the paper's
 functions. Everything is float64, as in the paper.
+
+Optional (train_latent.py --harmonic R, 2026-11-12): R harmonic hidden modes, linear oscillators integrated out
+exactly, F_h = -1/2 sum_j (v_j . x + c_j)^2 (harmonic_terms; parameters 'V' (R x N) and 'c' (R) in the params dict),
+with a closed-form reference per slice time from the data's principal components (harmonic_reference: the Gaussian
+part of the forward distribution), or from those of the Potts prototypes' within-cluster covariance (--harmonic-ref
+within; prototype_reference(..., return_stats=True), harmonic_within_spectrum). Without the 'V' key every function
+below is exactly as before.
+
+Optional (train_latent.py --patch SIDE:STRIDE:STATES, 2026-11-13): P per-patch Potts hidden units, unit p coupled only
+to the SIDE x SIDE pixels x_p of patch p of a regular grid of overlapping patches (PatchGeometry), integrated out
+exactly (the units are independent given x): F_patch = -T sum_p log sum_s exp(a_ps / T), a_ps = bp_ps + Wp_ps . x_p
+(+ Qp_ps . x_p^2 with --quad) (patch_terms; parameters 'Wp' (P, S, d), 'bp' (P, S) and 'Qp' (P, S, d) in the params
+dict, d = SIDE^2). The geometry follows from the shapes (patch_geometry), so the 'Wp' key alone switches the term on,
+added after every other term; strided slices and pads only (no gather or scatter), deterministic on the GPU.
+Reference per patch: prototype_reference's pooled branch on the patch vectors (patch_clusters, patch_reference).
+Without the 'Wp' key every function below is exactly as before.
 """
 
 import hashlib
@@ -19,7 +35,7 @@ import math
 import os
 import re
 import sys
-from functools import partial
+from functools import lru_cache, partial
 
 import numpy as np
 
@@ -29,6 +45,7 @@ jax.config.update("jax_enable_x64", True)
 import jax.numpy as jnp  # noqa: E402
 import jax.random as jr  # noqa: E402
 from jax import flatten_util  # noqa: E402
+from jax import lax  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PKG = os.path.dirname(HERE)
@@ -900,6 +917,189 @@ def hidden_terms_quad(W, Q, b, X, T, hidden="ising", stat=None):
     return -gbar, lap, A, p
 
 
+HARMONIC_KEYS = ("V", "c")       # parameters of the harmonic hidden modes (train_latent.py --harmonic)
+
+
+def harmonic_terms(V, c, X):
+    """Contributions of R harmonic hidden modes (train_latent.py --harmonic) to grad F and to the Laplacian of F.
+
+    Mode j is a linear oscillator, a continuous hidden variable h_j with energy kappa_j h_j^2 / 2 - h_j (u_j . x + c'_j).
+    Integrated out exactly (a Gaussian integral over h_j, so no hidden statistics are needed):
+      F_h(x) = -1/2 sum_j (v_j . x + c_j)^2 + const,    v_j = u_j / sqrt(kappa_j),  c_j = c'_j / sqrt(kappa_j)
+    (V (R, N) with rows v_j and c (R,) are the free parameters; the mode's mean displacement is (v_j . x + c_j) /
+    sqrt(kappa_j)). With s = V x + c:
+      grad F_h = -sum_j s_j v_j,    lap F_h = -sum_j |v_j|^2   (constant in x).
+    The modes only add variance along their v_j (anti-springs, a negative-definite quadratic form); the visible
+    springs supply the isotropic part, and the quartic (k_duff >= K4_FLOOR) or sextic visible self terms keep F
+    confining at large |x|. X: (B, N). Returns (grad (B, N), lap (a scalar: the same for every sample), s (B, R))."""
+    S = X @ V.T + c
+    return -(S @ V), -jnp.sum(V * V), S
+
+
+def harmonic_free_energy(V, c, X):
+    """F_h(x) = -1/2 sum_j (v_j . x + c_j)^2 of the harmonic modes (harmonic_terms), per sample (B,)."""
+    S = X @ V.T + c
+    return -0.5 * jnp.sum(S * S, axis=1)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Per-patch Potts hidden units (train_latent.py --patch SIDE:STRIDE:STATES; 2026-11-13)
+# ---------------------------------------------------------------------------------------------------------------
+PATCH_KEYS = ("Wp", "bp", "Qp")  # parameters of the per-patch Potts units (train_latent.py --patch)
+PATCH_SEED0 = 20000              # k-means seed of patch p for --seed s: PATCH_SEED0 + 1000 (s - KEY_SEED) + p
+
+
+def parse_patch_spec(spec, grid):
+    """train_latent.py --patch 'SIDE:STRIDE:STATES' on a grid x grid lattice -> (side, stride, S); '' -> None (no patch
+    units). Valid if and only if 2 <= SIDE <= grid, 1 <= STRIDE <= SIDE, (grid - SIDE) % STRIDE == 0 and STATES >= 2;
+    anything else raises ValueError. The canonical form is patch_spec_str((side, stride, S))."""
+    spec = (spec or "").strip()
+    if not spec:
+        return None
+    rule = (f"--patch {spec!r}: expected SIDE:STRIDE:STATES (integers) with 2 <= SIDE <= {grid}, 1 <= STRIDE <= SIDE, "
+            f"({grid} - SIDE) % STRIDE == 0 and STATES >= 2 on the {grid}x{grid} grid (e.g. 7:3:32 on 28x28)")
+    parts = spec.split(":")
+    try:
+        vals = [int(p) for p in parts]
+    except ValueError:
+        raise ValueError(rule) from None
+    if len(vals) != 3:
+        raise ValueError(rule)
+    side, stride, S = vals
+    if not (2 <= side <= grid and 1 <= stride <= side and (grid - side) % stride == 0 and S >= 2):
+        raise ValueError(rule)
+    return side, stride, S
+
+
+def patch_spec_str(patch):
+    """Canonical form of a parsed --patch spec ('' for None), as recorded in config.json 'patch'."""
+    return "" if patch is None else f"{patch[0]}:{patch[1]}:{patch[2]}"
+
+
+class PatchGeometry:
+    """Overlapping square patches on a G x G grid (train_latent.py --patch): side s, stride r, n_p = (G - s) / r + 1
+    patches per row and column, P = n_p^2. Patch p = pi n_p + pj; its entry j = u s + v (row-major inside the patch)
+    is pixel (pi r + u) G + pj r + v. Attributes G, s, r, n_p, P, d = s^2, N = G^2, idx (P, d) int64 (the pixels of
+    each patch), coverage (N,) (the number of patches containing each pixel), central (P,) bool (the patch centre in
+    rows and columns 6-21 of 28, scaled for other grids).
+    unfold / fold use strided slices and pads only (no gather, no scatter-add): deterministic on the GPU in the forward
+    and the reverse pass (the transpose of a slice is a pad, and of a pad a slice)."""
+
+    def __init__(self, grid, side, stride):
+        G, s, r = int(grid), int(side), int(stride)
+        if not (2 <= s <= G and 1 <= r <= s and (G - s) % r == 0):
+            raise ValueError(f"invalid patch geometry side {s}, stride {r} on a {G}x{G} grid: needs 2 <= side <= {G}, "
+                             f"1 <= stride <= side and ({G} - side) % stride == 0")
+        self.G, self.s, self.r = G, s, r
+        self.n_p = (G - s) // r + 1
+        self.P, self.d, self.N = self.n_p * self.n_p, s * s, G * G
+        pi, pj = np.divmod(np.arange(self.P), self.n_p)
+        u, v = np.divmod(np.arange(self.d), s)
+        self.idx = ((pi[:, None] * r + u[None, :]) * G + pj[:, None] * r + v[None, :]).astype(np.int64)
+        self.coverage = np.bincount(self.idx.ravel(), minlength=self.N)
+        ci, cj = pi * r + (s - 1) / 2.0, pj * r + (s - 1) / 2.0
+        lo, hi = 6.0 * G / 28.0, 21.0 * G / 28.0
+        self.central = (ci >= lo) & (ci <= hi) & (cj >= lo) & (cj <= hi)
+
+    def unfold(self, X):
+        """X (B, N) -> the patch vectors (P, B, d), patch-major: one strided slice per entry (u, v) of the patch."""
+        B, G, s, r, n_p = X.shape[0], self.G, self.s, self.r, self.n_p
+        Xg = X.reshape(B, G, G)
+        hi = r * (n_p - 1) + 1
+        cols = [lax.slice(Xg, (0, u, v), (B, u + hi, v + hi), (1, r, r)) for u in range(s) for v in range(s)]
+        st = jnp.stack(cols, axis=-1)                                     # (B, n_p, n_p, d)
+        return jnp.transpose(st, (1, 2, 0, 3)).reshape(self.P, B, self.d)
+
+    def fold(self, Gp):
+        """Gp (P, B, d) -> (B, N): the adjoint of unfold (the sum over the patches that contain a pixel), one pad per
+        entry (u, v) of the patch."""
+        B, G, s, r, n_p = Gp.shape[1], self.G, self.s, self.r, self.n_p
+        Gq = jnp.transpose(Gp.reshape(n_p, n_p, B, self.d), (2, 0, 1, 3))    # (B, n_p, n_p, d)
+        zero = jnp.zeros((), Gp.dtype)
+        acc = None
+        for u in range(s):
+            for v in range(s):
+                t = lax.pad(lax.index_in_dim(Gq, u * s + v, axis=3, keepdims=False), zero,
+                            ((0, 0, 0), (u, G - u - r * (n_p - 1) - 1, r - 1), (v, G - v - r * (n_p - 1) - 1, r - 1)))
+                acc = t if acc is None else acc + t
+        return acc.reshape(B, G * G)
+
+
+@lru_cache(maxsize=None)
+def patch_geometry(n, P, d):
+    """The PatchGeometry of P patches of d pixels on n pixels, from the shapes alone (n = G^2, d = side^2, P = n_p^2;
+    stride = (G - side) / (n_p - 1), = side for n_p = 1), so that the presence of 'Wp' in params switches the patch
+    term on without new arguments. ValueError if the shapes describe no valid geometry."""
+    n, P, d = int(n), int(P), int(d)
+    G, side, n_p = math.isqrt(n), math.isqrt(d), math.isqrt(P)
+    if G * G != n or side * side != d or n_p * n_p != P or n_p < 1:
+        raise ValueError(f"patch units of shapes P = {P}, d = {d} on n = {n} pixels: not a square patch grid")
+    if n_p == 1:
+        stride = side
+        ok = side == G
+    else:
+        stride = (G - side) // (n_p - 1)
+        ok = stride >= 1 and stride * (n_p - 1) == G - side
+    if not ok:
+        raise ValueError(f"patch units of shapes P = {P}, d = {d} on a {G}x{G} grid: no stride gives {n_p} x {n_p} "
+                         f"patches of side {side}")
+    return PatchGeometry(G, side, stride)
+
+
+def _pdot(a, w):
+    """(P, B, d) x (P, S, d) -> (P, B, S): a batched product over the patches (one dot_general)."""
+    return lax.dot_general(a, w, (((2,), (2,)), ((0,), (0,))))
+
+
+def _pdot_t(p, w):
+    """(P, B, S) x (P, S, d) -> (P, B, d)."""
+    return lax.dot_general(p, w, (((2,), (1,)), ((0,), (0,))))
+
+
+def patch_terms(Wp, Qp, bp, X, T, with_lap=True):
+    """Contributions of P per-patch Potts units (train_latent.py --patch) to grad F and to the Laplacian of F: the
+    Potts branch of hidden_terms_quad applied to each patch. Unit p has S states with fields
+      a_ps = bp_ps + Wp_ps . x_p (+ Qp_ps . x_p^2),   pi_ps = softmax_s(a_ps / T),   G_ps = Wp_ps + 2 Qp_ps * x_p,
+      gbar_p = sum_s pi_ps G_ps:
+      grad F_patch = -fold(gbar)   (fold: the sum over the patches that contain a pixel; PatchGeometry.fold),
+      lap F_patch  = sum_p [ -(sum_s pi_ps |G_ps|^2 - |gbar_p|^2) / T - 2 sum_s pi_ps sum_j Qp_psj ],
+      |G_ps|^2 = |Wp_ps|^2 + 4 x_p . (Wp_ps * Qp_ps) + 4 x_p^2 . Qp_ps^2.
+    The Hessian is a sum of per-patch blocks, so overlapping patches add no cross terms. Wp (P, S, d), Qp (P, S, d) or
+    None (no squared-pixel couplings), bp (P, S), X (B, N); the geometry follows from the shapes (patch_geometry).
+    Returns (grad (B, N), lap (B,) or None if not with_lap, fields A (P, B, S), posteriors pi (P, B, S)).
+    Strided slices, pads, batched dot_generals, softmax and reductions only (no gather, no scatter)."""
+    geom = patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
+    Xp = geom.unfold(X)                                                   # (P, B, d)
+    A = _pdot(Xp, Wp) + bp[:, None, :]
+    if Qp is not None:
+        X2p = Xp * Xp
+        A = A + _pdot(X2p, Qp)
+    p = jax.nn.softmax(A / T, axis=-1)
+    gbar = _pdot_t(p, Wp)
+    if Qp is not None:
+        gbar = gbar + 2.0 * Xp * _pdot_t(p, Qp)
+    grad = -geom.fold(gbar)
+    if not with_lap:
+        return grad, None, A, p
+    GG = jnp.sum(Wp * Wp, axis=-1)[:, None, :]
+    if Qp is not None:
+        GG = GG + 4.0 * _pdot(Xp, Wp * Qp) + 4.0 * _pdot(X2p, Qp * Qp)
+    lap = -(jnp.sum(p * GG, axis=(0, 2)) - jnp.sum(gbar * gbar, axis=(0, 2))) / T
+    if Qp is not None:
+        lap = lap - 2.0 * jnp.sum(p * jnp.sum(Qp, axis=-1)[:, None, :], axis=(0, 2))
+    return grad, lap, A, p
+
+
+def patch_free_energy(Wp, Qp, bp, X, T):
+    """F_patch(x) = -T sum_p logsumexp_s(a_ps / T) of the per-patch units (patch_terms), per sample (B,)."""
+    geom = patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
+    Xp = geom.unfold(X)
+    A = _pdot(Xp, Wp) + bp[:, None, :]
+    if Qp is not None:
+        A = A + _pdot(Xp * Xp, Qp)
+    return -T * jnp.sum(jax.scipy.special.logsumexp(A / T, axis=-1), axis=0)
+
+
 def in_compute_dtype(fn, dtype):
     """--precision mixed: fn(params, X, key) evaluated with the parameters and X cast to `dtype` (float32) and every
     matrix product at full float32 precision (HIGHEST: XLA may otherwise use TF32 for float32 products, whose
@@ -935,7 +1135,13 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     draws (keys split from `key`). It keeps the bias of one S-draw estimate and divides its variance by R, which
     separates bias from noise (R S draws pooled into one estimate would have the smaller bias of S' = R S).
     compute_dtype = jnp.float32 (--precision mixed): the loss and its parameter gradient in float32 with full-float32
-    products (in_compute_dtype); None (default) leaves the function exactly as before. Exact statistics only."""
+    products (in_compute_dtype); None (default) leaves the function exactly as before. Exact statistics only.
+    If params contains 'V' (and 'c'), the R harmonic hidden modes are added last (harmonic_terms; train_latent.py
+    --harmonic): exact Gaussian integrals, the same in every sampled-statistics variant; in --precision mixed their two
+    products are float32 at HIGHEST like the hidden units'. Without 'V' every path is exactly as before.
+    If params contains 'Wp' (and 'bp', optionally 'Qp'), the per-patch Potts units (patch_terms; train_latent.py
+    --patch) are added after everything else, with exact statistics only (samples = 0; ValueError otherwise); in
+    --precision mixed their products are float32 at HIGHEST too. Without 'Wp' every path is exactly as before."""
     terms = hidden_terms if hidden == "ising" else potts_terms
     if replicates < 1 or (replicates > 1 and samples < 1):
         raise ValueError("replicates must be >= 1, and > 1 only with samples > 0")
@@ -946,6 +1152,8 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
         raise ValueError("jackknife must be False / 0, True / 1, or 2 (2 needs samples divisible by 4)")
 
     def loss(params, X, key=None):
+        if "Wp" in params and samples > 0:       # trace time only: the default jaxpr is unchanged
+            raise ValueError("patch units need exact hidden statistics")
         gv, lapv = vis.grad_lap(params["theta"], X)
 
         def per_sample(st_h, st_l):              # summation order as before (exact path bit-identical)
@@ -962,6 +1170,14 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
                 gl, lapl, _, _ = local_terms(params["wl"], params["bl"], X, T, stat=st_l)
                 g = g + gl
                 lap = lap + lapl
+            if "V" in params:                    # harmonic modes (--harmonic), last: the terms above keep their order
+                gm, lapm, _ = harmonic_terms(params["V"], params["c"], X)
+                g = g + gm
+                lap = lap + lapm
+            if "Wp" in params:                   # per-patch Potts units (--patch), after the modes
+                gp, lapp, _, _ = patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T)
+                g = g + gp
+                lap = lap + lapp
             return -lap / T + jnp.sum(g * g, axis=1) / (2.0 * T * T)
 
         if samples == 0:
@@ -1014,7 +1230,8 @@ HIDDEN_KEYS = ("W", "b", "Q", "wl", "bl")
 
 
 def make_force(vis, T, K, hidden="ising", local=False):
-    """grad F (B, N) of the model of make_loss_per_sample: visible part plus the averaged-out hidden units."""
+    """grad F (B, N) of the model of make_loss_per_sample: visible part plus the averaged-out hidden units (and the
+    harmonic modes, if params contains 'V', and the per-patch Potts units, if it contains 'Wp')."""
     terms = hidden_terms if hidden == "ising" else potts_terms
 
     def force(params, X):
@@ -1025,6 +1242,10 @@ def make_force(vis, T, K, hidden="ising", local=False):
             g = g + terms(params["W"], params["b"], X, T)[0]
         if local:
             g = g + local_terms(params["wl"], params["bl"], X, T)[0]
+        if "V" in params:                        # harmonic modes (--harmonic)
+            g = g + harmonic_terms(params["V"], params["c"], X)[0]
+        if "Wp" in params:                       # per-patch Potts units (--patch)
+            g = g + patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, with_lap=False)[0]
         return g
 
     return force
@@ -1061,6 +1282,8 @@ def make_hidden_hebb_sampled(T, K, hidden="ising", local=False):
     unbiased for any S >= 1; as S -> infinity it equals jax.grad(make_hidden_free_energy(...))."""
 
     def surrogate(hp, X, key, S):
+        if "Wp" in hp:                           # per-patch units (--patch): exact rule only (trace time)
+            raise NotImplementedError("make_hidden_hebb_sampled does not support per-patch Potts units (--patch)")
         k_h, k_l = jr.split(key)
         f = 0.0
         if K > 0:
@@ -1099,6 +1322,9 @@ def make_cd1_hidden_grad(vis, T, K, hidden="ising", local=False, samples=0):
     hebb = make_hidden_hebb_sampled(T, K, hidden, local) if samples > 0 else None
 
     def grad(params, X, key, dt, releases=1):
+        if "Wp" in params:                       # per-patch units (--patch): exact rule only (trace time)
+            raise NotImplementedError("the CD-1 rule (make_cd1_hidden_grad) does not support per-patch Potts units "
+                                      "(--patch)")
         hp = {k: params[k] for k in HIDDEN_KEYS if k in params}
         B = X.shape[0]
         drift = X - 0.5 * dt * force(params, X)
@@ -1134,6 +1360,8 @@ def force_matching_local_grad(params, X, T, vis, local=False):
     The non-local inputs of c_m are the projections G_m . psi and G_m . Gbar (the change of state m's input field
     when the pixels are nudged along psi or Gbar) and |G_m|^2; everything else is a product of quantities at one
     state, one pixel and their coupler. Returns a dict over W, b, Q (if present), wl, bl (if local)."""
+    if "Wp" in params:                           # per-patch units (--patch): their force is not in psi here
+        raise NotImplementedError("force_matching_local_grad does not support per-patch Potts units (--patch)")
     W, b = params["W"], params["b"]
     Q = params.get("Q", jnp.zeros_like(W))
     X2 = X * X
@@ -1244,6 +1472,170 @@ def local_reference(data, taus, T, pixel_threshold, min_count=20):
     return np.stack(ws), np.stack(cs)
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Closed-form reference of the harmonic hidden modes (train_latent.py --harmonic R; 2026-11-12)
+# ---------------------------------------------------------------------------------------------------------------
+def harmonic_reference_strengths(lam, t, R, T=TEMP, s2=None):
+    """The strengths w_i = |v_i|^2 (i = 1..R) of the closed-form harmonic modes at forward time t (harmonic_reference)
+    and the isotropic variance iso_t of the visible springs they assume.
+
+    lam: the eigenvalues of the data covariance C, descending (sample_latent.data_stats). The forward distribution at
+    t has the covariance Sigma_t = e^2 C + sigma_t^2 I (e = exp(-t / s2), sigma_t^2 = T s2 (1 - e^2), s2 =
+    SIGMA_FORWARD^2 by default), with eigenvalues e^2 lam_i + sigma_t^2. For any isotropic level iso_t no larger than
+    the smallest of them,
+        T Sigma_t^-1 = (T / iso_t) I - sum_i w_i e_i e_i^T,     w_i = T / iso_t - T / (e^2 lam_i + sigma_t^2) >= 0.
+    The reference takes the largest level, iso_t = sigma_t^2 + e^2 lam_0, lam_0 = max(min_i lam_i, 0) (for the MNIST
+    problems: the variance of the N(0, 0.01^2) pixel noise the paper adds, in normalised units), so that
+        w_i = T e^2 (lam_i - lam_0) / (iso_t (e^2 lam_i + sigma_t^2)),
+    the weakest axis needs no mode, and iso_t > 0 down to t = 0. With lam_0 = 0 this is the plain formula
+    w_i^plain = T e^2 lam_i / (sigma_t^2 (e^2 lam_i + sigma_t^2)), which diverges at t = 0 (slice 99), where
+    sigma_0 = 0; for t > 0, w_i = w_i^plain (1 - lam_0 / lam_i) / (1 + b) with b = e^2 lam_0 / sigma_t^2, a relative
+    difference of (lam_0 / lam_i + b) / (1 + b), at most lam_0 / lam_i + b. Returns (w (R,), iso_t)."""
+    s2 = SIGMA_FORWARD ** 2 if s2 is None else float(s2)
+    lam = np.asarray(lam, dtype=np.float64)
+    if not 1 <= int(R) <= lam.size:
+        raise ValueError(f"R = {R}: expected 1 <= R <= {lam.size} harmonic modes")
+    e2 = math.exp(-2.0 * float(t) / s2)
+    sig2 = T * s2 * (1.0 - e2)
+    lam0 = max(float(lam.min()), 0.0)
+    iso = sig2 + e2 * lam0
+    if not iso > 0.0:
+        raise ValueError(f"harmonic reference at t = {t}: the isotropic level is {iso} (a singular data covariance at "
+                         f"t = 0)")
+    top = lam[:int(R)]
+    return T * e2 * np.maximum(top - lam0, 0.0) / (iso * (e2 * top + sig2)), iso
+
+
+def harmonic_reference(mu, lam, U, R, t, T=TEMP, s2=None):
+    """The closed-form harmonic modes at forward time t: the Gaussian part of the forward distribution p_t.
+
+    p_t has the mean m_t = e mu and the covariance Sigma_t = e^2 C + sigma_t^2 I (mu and C = U diag(lam) U^T of the
+    run's training data, sample_latent.data_stats; e = exp(-t / s2)). Its Gaussian approximation N(m_t, Sigma_t) has
+    the energy (p ~ exp(-F / T))
+        F_G(x) = T/2 (x - m_t)^T Sigma_t^-1 (x - m_t)
+               = T / (2 iso_t) |x - m_t|^2 - 1/2 sum_i (v_i . (x - m_t))^2,       v_i = sqrt(w_i) e_i
+    (w_i, iso_t: harmonic_reference_strengths). The reference modes are its R strongest: the rows of V_ref are
+    sqrt(w_i) e_i (i = 1..R) and c_ref = -V_ref m_t, so that v_i . x + c_i = v_i . (x - m_t). The isotropic and linear
+    parts, T / (2 iso_t) |x - m_t|^2, belong to the visible energy (per-pixel springs k_lin = T / iso_t, bias
+    -T m_t / iso_t), which the model already has. With R = N the decomposition is exact. With R < N the precision is
+    exact on the span of e_1..e_R, T / (e^2 lam_i + sigma_t^2), and T / iso_t on the rest (where p_t's is
+    T / (e^2 lam_i + sigma_t^2) <= T / iso_t). The reference energy is always confining: its precision is positive
+    along every axis. mu (N,), lam (N,) descending, U (N, N) with the eigenvectors of C as columns.
+    Within-cluster reference (train_latent.py --harmonic-ref within): with lam, U of the Potts prototypes' shared
+    component covariance S_w instead of C (prototype_reference(..., return_stats=True), harmonic_within_spectrum) the
+    same formulas give the modes of S(t) = e^2 S_w + sigma_t^2 I, and then the prototype reference's Potts unit
+    (W*(t), b*(t)) plus these modes (R = N) plus the isotropic visible part T / (2 iso_t) |x - m_t|^2 is, up to a
+    constant, exactly the energy -T log sum_m pi_m N(x; e c_m, S(t)) of the prototypes' Gaussian mixture, with mu the
+    mixture's mean sum_m pi_m c_m (which equals the data mean up to the k-means stopping tolerance; any difference is
+    a linear term, which the visible bias absorbs): the modes carry only the covariance the prototypes do not, instead
+    of counting the between-cluster part twice (the full reference's modes carry all of C, and the prototypes carry
+    their spread).
+    Returns (V_ref (R, N), c_ref (R,), iso_t), float64."""
+    s2 = SIGMA_FORWARD ** 2 if s2 is None else float(s2)
+    w, iso = harmonic_reference_strengths(lam, t, R, T, s2)
+    V = np.ascontiguousarray((np.asarray(U, dtype=np.float64)[:, :int(R)] * np.sqrt(w)).T)
+    return V, -(V @ (math.exp(-float(t) / s2) * np.asarray(mu, dtype=np.float64))), iso
+
+
+def harmonic_lr_scales(mu, lam, U, R, taus, T=TEMP, s2=None):
+    """Per-slice magnitudes of the harmonic reference, which set the modes' learning rates (train_latent.py --harmonic,
+    as the hidden units' sW / sb set theirs): the root-mean-square entry of V_ref(t_k), sqrt(sum_i w_i / (R N)), and
+    that of c_ref(t_k), floored at T (as sb is). Returns (sV, sc), each of shape (len(taus),). train_latent.py
+    --harmonic-lr-tmin t0 passes max(t_k, t0) for t_k, so that below t0 the scales stay at their value at t0."""
+    s2 = SIGMA_FORWARD ** 2 if s2 is None else float(s2)
+    mu = np.asarray(mu, dtype=np.float64)
+    proj = np.asarray(U, dtype=np.float64)[:, :int(R)].T @ mu            # e_i . mu
+    sV, sc = [], []
+    for t in np.asarray(taus, dtype=np.float64):
+        w, _ = harmonic_reference_strengths(lam, t, R, T, s2)
+        sV.append(math.sqrt(float(np.sum(w)) / (int(R) * mu.size)))
+        sc.append(max(math.sqrt(float(np.mean(w * (math.exp(-t / s2) * proj) ** 2))), T))
+    return np.asarray(sV), np.asarray(sc)
+
+
+def harmonic_within_spectrum(Sw):
+    """The eigen-decomposition of the Potts prototypes' within-cluster covariance S_w (prototype_reference(...,
+    return_stats=True)) in the form harmonic_reference takes for the within-cluster reference (train_latent.py
+    --harmonic-ref within): (lam (N,) descending, U (N, N) with the eigenvectors as columns), float64. S_w is
+    symmetrised first (its two triangles agree to rounding)."""
+    S = np.asarray(Sw, dtype=np.float64)
+    lam, U = np.linalg.eigh(0.5 * (S + S.T))
+    return lam[::-1].copy(), np.ascontiguousarray(U[:, ::-1])
+
+
+def visible_hessian_at_zero(theta, conn, n):
+    """Hessian of the visible energy at x = 0 (n x n, numpy): diag(k_lin) + 2 (diag(C 1) - C), C the symmetric matrix of
+    the linear pair springs c_lin (the k_duff, k_6, c_om and c_duff terms are of order >= 3 in x: no curvature at 0)."""
+    th = np.asarray(theta, dtype=np.float64)
+    conn = np.asarray(conn)
+    C = np.zeros((n, n))
+    np.add.at(C, (conn[:, 0], conn[:, 1]), th[clin_slice(n, conn.shape[0])])
+    C = C + C.T
+    return np.diag(th[:n] + 2.0 * C.sum(axis=1)) - 2.0 * C
+
+
+def harmonic_unit_stats(V, c, V_ref, c_ref, U_R, iso, T=TEMP, theta=None, conn=None):
+    """Per-slice diagnostics of the harmonic modes (train_latent.py --harmonic) against the slice's closed-form
+    reference (harmonic_reference: V_ref, c_ref, iso; U_R (N, R): its principal axes). numpy, float64:
+      harm_V_norm, harm_Vref_norm, harm_c_norm, harm_cref_norm: Frobenius / Euclidean norms;
+      harm_cos_V_Vref: cosine of the flattened V and V_ref (row by row: meaningful while the modes keep the reference's
+        order, which they start from);
+      harm_cos_M_Mref: cosine of the anti-spring matrices V^T V and V_ref^T V_ref, on which F_h's curvature depends
+        (invariant under rotations of the modes among themselves);
+      harm_in_ref_subspace: the share of |V|^2 inside the span of the reference's R axes;
+      harm_strength_top5, harm_strength_ref_top5: the largest eigenvalues mu_j of V^T V (the anti-spring constants
+        along the modes' principal directions) and the reference's w_i = |v_i|^2;
+      harm_added_var, harm_added_var_ref: the variance the modes add along their principal directions on top of the
+        reference's isotropic springs T / iso, sum_j [T / (T / iso - mu_j) - iso] over the modes with mu_j < T / iso
+        (for the reference e^2 sum_i (lam_i - lam_0): the excess variance of p_t along its R axes);
+        harm_added_var_top, harm_added_var_ref_top: the strongest mode alone (None beyond T / iso);
+        harm_n_beyond_iso: modes with mu_j >= T / iso (they cancel the reference's isotropic springs at second order;
+        T / iso is the reference's, 1 at t = 5 but 24.5 at t = 0 for mnist28_d0123, far above a trained run's springs,
+        so at low t this count cannot flag modes that outgrow the run's own springs: harm_n_beyond_vis does);
+      harm_iso_spring: T / iso;
+      with theta and conn (the visible parameters and pairs): harm_vis_curv_min, the smallest eigenvalue of the visible
+        Hessian H at x = 0 (visible_hessian_at_zero), harm_curv_min, that of H - V^T V (the springs plus the modes at
+        x = 0; negative: along some direction the modes outgrow the springs, and only the higher-order visible terms
+        and the hidden units confine there), and harm_n_beyond_vis, the modes whose strength mu_j reaches the springs'
+        curvature u_j^T H u_j along their own principal direction u_j. H alone is already indefinite at low t in
+        trained runs (the plain seed-1 study run: smallest eigenvalue -0.09 at slice 70, -0.24 at slice 99; the
+        quartic, Q and hidden-unit terms confine there), so judge harm_curv_min against harm_vis_curv_min (the modes'
+        own effect is the difference) and against plain runs, not against 0.
+    Returns a dict of floats (lists for the top-5 values)."""
+    V, V_ref = np.asarray(V, dtype=np.float64), np.asarray(V_ref, dtype=np.float64)
+    nV, nR = float(np.linalg.norm(V)), float(np.linalg.norm(V_ref))
+    G, Gr, M = V @ V.T, V_ref @ V_ref.T, V @ V_ref.T
+    mu = np.sort(np.linalg.eigvalsh(G))[::-1]
+    w = np.sort(np.diag(Gr))[::-1]               # the reference's rows are orthogonal: their |v_i|^2 are the eigenvalues
+    k_iso = T / iso
+
+    def added(m):
+        ok = m < k_iso
+        return T / (k_iso - m[ok]) - iso, ok
+
+    a, ok = added(mu)
+    ar, okr = added(w)
+    out = {"harm_V_norm": nV, "harm_Vref_norm": nR, "harm_c_norm": float(np.linalg.norm(np.asarray(c, np.float64))),
+           "harm_cref_norm": float(np.linalg.norm(np.asarray(c_ref, np.float64))),
+           "harm_cos_V_Vref": float(np.sum(V * V_ref) / (nV * nR + 1e-300)),
+           "harm_cos_M_Mref": float(np.sum(M * M) / (np.linalg.norm(G) * np.linalg.norm(Gr) + 1e-300)),
+           "harm_in_ref_subspace": float(np.sum((V @ np.asarray(U_R, dtype=np.float64)) ** 2) / (nV * nV + 1e-300)),
+           "harm_strength_top5": [float(v) for v in mu[:5]], "harm_strength_ref_top5": [float(v) for v in w[:5]],
+           "harm_iso_spring": float(k_iso),
+           "harm_added_var": float(np.sum(a)), "harm_added_var_ref": float(np.sum(ar)),
+           "harm_added_var_top": float(a[0]) if ok[0] else None, "harm_added_var_ref_top": float(ar[0]) if okr[0] else None,
+           "harm_n_beyond_iso": int(np.sum(~ok))}
+    if theta is not None:
+        H = visible_hessian_at_zero(theta, conn, V.shape[1])
+        out["harm_vis_curv_min"] = float(np.linalg.eigvalsh(H)[0])
+        out["harm_curv_min"] = float(np.linalg.eigvalsh(H - V.T @ V)[0])
+        mu_j, Q_j = np.linalg.eigh(G)            # principal directions of the modes, u_j = V^T q_j / sqrt(mu_j)
+        pos = mu_j > 1e-12 * max(float(np.max(mu_j, initial=0.0)), 1e-300)
+        U_j = (V.T @ Q_j[:, pos]) / np.sqrt(mu_j[pos])
+        out["harm_n_beyond_vis"] = int(np.sum(mu_j[pos] >= np.einsum("ij,ik,kj->j", U_j, H, U_j)))
+    return out
+
+
 def kmeans(X, k, seed, iters=50):
     """Plain Lloyd's k-means with k-means++ seeding (numpy). Returns (centres (k, d), assignment (n,))."""
     rng = np.random.default_rng(seed)
@@ -1320,7 +1712,7 @@ def kmeans_jax(X, k, seed, iters=50):
     return np.asarray(C), np.asarray(assign)
 
 
-def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False, kmeans_fn=None):
+def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False, kmeans_fn=None, return_stats=False):
     """W*(tau), b*(tau) of one Potts unit with M states: the Gaussian-mixture solution for M k-means prototypes
     (M/2 per class; pooled=True: M prototypes of all images together, without labels) with their pooled
     within-cluster covariance S_w and weights pi_m:
@@ -1329,7 +1721,11 @@ def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False, kmeans_f
     The common part of the W_m (their weighted mean) is moved out of the hidden unit, since a uniform linear tilt
     belongs to the visible bias. Returns W (len(taus), M, N), b (len(taus), M), state class (M,); with pooled=True
     the state class is the majority label of the cluster and is used for diagnostics only.
-    kmeans_fn: the k-means, kmeans (numpy; default) or kmeans_jax (--ref-kmeans gpu)."""
+    kmeans_fn: the k-means, kmeans (numpy; default) or kmeans_jax (--ref-kmeans gpu).
+    return_stats=True (train_latent.py --harmonic-ref within, 2026-11-12) also returns a fourth item, the dict
+    {'Sw': S_w (N, N), 'pi': pi (M,), 'centres': c_m (M, N), 'counts': cluster sizes (M,)}: S_w is the shared
+    covariance of the mixture's components, the part of the data covariance the prototypes do not carry (the same
+    array the W_m above are computed from). The default (False) returns the three items above, computed as before."""
     km = kmeans if kmeans_fn is None else kmeans_fn
     classes = np.unique(np.asarray(labels))
     n_cls = classes.size
@@ -1369,7 +1765,126 @@ def prototype_reference(data, labels, taus, T, M, seed=0, pooled=False, kmeans_f
         W = W - pi @ W                       # remove the weighted-mean tilt (a visible bias)
         Ws.append(W)
         bs.append(b - (b @ pi))
+    if return_stats:                         # --harmonic-ref within: the components' shared covariance as well
+        return np.stack(Ws), np.stack(bs), np.array(cls), {"Sw": Sw, "pi": pi, "centres": C, "counts": counts}
     return np.stack(Ws), np.stack(bs), np.array(cls)
+
+
+# ---------------------------------------------------------------------------------------------------------------
+# Reference, learning-rate scales and diagnostics of the per-patch Potts units (train_latent.py --patch)
+# ---------------------------------------------------------------------------------------------------------------
+def patch_clusters(data, geom, S, seed0, kmeans_fn=None):
+    """The k-means half of the per-patch prototype reference: for every patch p of geom (PatchGeometry), the pooled
+    branch of prototype_reference on the patch vectors Xp = data[:, idx_p] (no labels), in its order of operations:
+      C, assign = km(Xp, S, seed0 + p);  R = Xp - C[assign];  counts = bincount(assign, S);  Sw = R^T R / (n - S);
+      pi = max(counts, 1) / n,
+    km = kmeans (numpy; default) or kmeans_fn (kmeans_jax with --ref-kmeans gpu). Returns dict(C (P, S, d), Sw (P, d,
+    d), pi (P, S), counts (P, S), explained_variance (P,) (1 - |R|^2 / |Xp - mean|^2), seeds (P,), seconds)."""
+    import time as _time
+    km = kmeans if kmeans_fn is None else kmeans_fn
+    X = np.asarray(data, dtype=np.float64)
+    n = X.shape[0]
+    t0 = _time.time()
+    Cs, Sws, pis, cnts, evs = [], [], [], [], []
+    for p in range(geom.P):
+        Xp = X[:, geom.idx[p]]
+        C, assign = km(Xp, S, seed0 + p)
+        R = Xp - C[assign]
+        counts = np.bincount(assign, minlength=S)
+        Sws.append(R.T @ R / (R.shape[0] - S))
+        pis.append(np.maximum(counts, 1) / n)
+        Cs.append(C)
+        cnts.append(counts)
+        evs.append(1.0 - float(np.sum(R * R)) / max(float(np.sum((Xp - Xp.mean(axis=0)) ** 2)), 1e-300))
+    return {"C": np.stack(Cs), "Sw": np.stack(Sws), "pi": np.stack(pis), "counts": np.stack(cnts),
+            "explained_variance": np.asarray(evs), "seeds": seed0 + np.arange(geom.P), "seconds": _time.time() - t0}
+
+
+def _patch_ref_one(C, Sw, pi, tau, T, scale):
+    """One patch's reference at forward time tau: prototype_reference's formula and order of operations (scale 1),
+    or the tempered expert of scale lam (patch_reference)."""
+    e = math.exp(-tau)
+    Sm = e * e * Sw + T * (1.0 - e * e) * np.eye(C.shape[1])
+    mu = e * C
+    Ws = T * np.linalg.solve(Sm, mu.T).T
+    if scale == 1.0:
+        b = T * np.log(pi) - 0.5 * np.sum(Ws * mu, axis=1)
+        W = Ws - pi @ Ws
+    else:
+        b = T * np.log(pi) - 0.5 * scale * np.sum(Ws * mu, axis=1)
+        W = scale * (Ws - pi @ Ws)
+    return W, b - (b @ pi)
+
+
+def patch_reference(clusters, taus, T, scale=1.0):
+    """The per-patch Gaussian-mixture reference (prototype_reference's pooled branch per patch) from patch_clusters, at
+    each forward time tau of taus. Per patch, with e = exp(-tau), S(tau) = e^2 S_w + T (1 - e^2) I_d, mu = e C:
+      W* = T S(tau)^-1 mu;  scale 1: b = T log pi - W*.mu / 2, W = W* - pi W*, b <- b - b . pi (prototype_reference's
+      operations in its order, so equal to it bit for bit);
+      scale lam != 1 (train_latent.py --patch-init-scale): b = T log pi - lam W*.mu / 2, W = lam (W* - pi W*),
+      b <- b - b . pi, a tempered expert (lam times the clusters' log-likelihood, the prior kept).
+    Returns W (len(taus), P, S, d), b (len(taus), P, S), float64."""
+    C, Sw, pi = clusters["C"], clusters["Sw"], clusters["pi"]
+    Ws, bs = [], []
+    for tau in np.asarray(taus, dtype=np.float64):
+        Wt, bt = zip(*[_patch_ref_one(C[p], Sw[p], pi[p], float(tau), T, float(scale)) for p in range(C.shape[0])])
+        Ws.append(np.stack(Wt))
+        bs.append(np.stack(bt))
+    return np.stack(Ws), np.stack(bs)
+
+
+def patch_lr_scales(clusters, taus, T):
+    """Per-slice, per-unit magnitudes of the patch reference at scale 1, which set the units' learning rates
+    (train_latent.py --patch): sWp[k, p] = the root-mean-square entry of patch p's W*(t_k) over (S, d), sbp[k, p] =
+    max(rms of its b*(t_k), T). Computed time by time (no (100, P, S, d) array is kept). Returns (sWp, sbp), each
+    (len(taus), P)."""
+    sW, sb = [], []
+    for tau in np.asarray(taus, dtype=np.float64):
+        W, b = patch_reference(clusters, [tau], T)
+        sW.append(np.sqrt(np.mean(W[0] ** 2, axis=(1, 2))))
+        sb.append(np.maximum(np.sqrt(np.mean(b[0] ** 2, axis=1)), T))
+    return np.stack(sW), np.stack(sb)
+
+
+def patch_unit_stats(Wp, bp, Qp, X, T, W_ref, geom):
+    """Per-slice diagnostics of the per-patch Potts units on the batch X (numpy, one product per patch). W_ref: the
+    scale-1 reference (P, S, d) at the slice's t, or None (no reference entries). Returns (dict, arrays):
+      patch_W_norm, patch_Wref_norm, patch_cos_W_Wref (flattened), patch_Q_norm (with Qp), patch_b_rms;
+      patch_eff_states_median / _min / _central_median: exp of the entropy of each patch's batch-mean occupation
+        (over all patches, and over the central ones);
+      patch_states_below_1e-6: the states with batch-mean occupation below 1e-6, summed over the patches;
+      patch_mean_max_p: the mean over patches and samples of the largest posterior;
+    arrays: {'patch_eff': (P,) float32}."""
+    Wp, bp = np.asarray(Wp, dtype=np.float64), np.asarray(bp, dtype=np.float64)
+    Qp = None if Qp is None else np.asarray(Qp, dtype=np.float64)
+    X = np.asarray(X, dtype=np.float64)
+    eff, dead, maxp = np.zeros(geom.P), 0, 0.0
+    for p in range(geom.P):
+        Xp = X[:, geom.idx[p]]
+        A = Xp @ Wp[p].T + bp[p]
+        if Qp is not None:
+            A = A + (Xp * Xp) @ Qp[p].T
+        Z = A / T
+        Pp = np.exp(Z - Z.max(axis=1, keepdims=True))
+        Pp /= Pp.sum(axis=1, keepdims=True)
+        pbar = Pp.mean(axis=0)
+        eff[p] = float(np.exp(-np.sum(pbar * np.log(pbar + 1e-300))))
+        dead += int(np.sum(pbar < 1e-6))
+        maxp += float(np.mean(Pp.max(axis=1)))
+    nW = float(np.linalg.norm(Wp))
+    out = {"patch_W_norm": nW}
+    if W_ref is not None:
+        W_ref = np.asarray(W_ref, dtype=np.float64)
+        nR = float(np.linalg.norm(W_ref))
+        out.update(patch_Wref_norm=nR, patch_cos_W_Wref=float(np.sum(Wp * W_ref) / (nW * nR + 1e-300)))
+    if Qp is not None:
+        out["patch_Q_norm"] = float(np.linalg.norm(Qp))
+    cen = eff[geom.central]
+    out.update(patch_b_rms=float(np.sqrt(np.mean(bp * bp))), patch_eff_states_median=float(np.median(eff)),
+               patch_eff_states_min=float(np.min(eff)),
+               patch_eff_states_central_median=float(np.median(cen)) if cen.size else None,
+               **{"patch_states_below_1e-6": int(dead)}, patch_mean_max_p=maxp / geom.P)
+    return out, {"patch_eff": eff.astype(np.float32)}
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -1604,6 +2119,8 @@ def ising_force_matching_local_grad(params, X, T, vis, local=False):
     per-pixel units as in force_matching_local_grad. The only non-local inputs are G_j . psi (the change of unit j's
     field when the pixels are nudged along psi) and |G_j|^2; there is no Gbar term, because Ising units do not
     compete. Returns a dict over W, b, Q (if present), wl, bl (if local)."""
+    if "Wp" in params:                           # per-patch units (--patch): their force is not in psi here
+        raise NotImplementedError("ising_force_matching_local_grad does not support per-patch Potts units (--patch)")
     W, b = params["W"], params["b"]
     Q = params.get("Q", jnp.zeros_like(W))
     X2 = X * X

@@ -75,6 +75,9 @@ def main():
     with open(os.path.join(run_dir, "config.json")) as f:
         cfg = json.load(f)
     local, quad = bool(cfg["local"]), bool(cfg["quad"]) and int(cfg["K"]) > 0
+    harm, patch = bool(cfg.get("harmonic")), bool(cfg.get("patch"))     # --harmonic, --patch: their members too
+    patch_quad = patch and bool(cfg.get("quad"))
+    tail = ((["V", "c"] if harm else []) + ((["Wp", "bp"] + (["Qp"] if patch_quad else [])) if patch else []))
     taus = lm.time_grid_pts(lm.config_time_grid(cfg))      # the run's slice times (its --time-grid; older runs uniform)
     n = lm.N_TIME_STEPS
     log(f"assembly_bench job {JOB}, {time.strftime('%Y-%m-%d %H:%M:%S')}; run {run} (K {cfg['K']}, local {local}, "
@@ -89,10 +92,11 @@ def main():
             for k in range(n):
                 with np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz")) as s:
                     held[k] = {g: s[g] for g in ["theta", "W", "b"] + (["wl", "bl"] if local else [])
-                               + (["Q"] if quad else [])}
+                               + (["Q"] if quad else []) + tail}
             log(f"  (memory: the {n} slices loaded in {time.time() - t:.1f} s, not part of the assembly)")
         t = time.time()
-        shape = train_latent.write_history(d, slice_dir, n, taus, local, quad, held)
+        shape = train_latent.write_history(d, slice_dir, n, taus, local, quad, held, harmonic=harm, patch=patch,
+                                           patch_quad=patch_quad)
         res[f"{mode}_s"] = time.time() - t
         del held
         bad = compare(d, run_dir)

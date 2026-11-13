@@ -49,7 +49,9 @@ def check_run(run):
     sdir = os.path.join(rdir, "slices")
     n = 100
     local, quad = bool(cfg.get("local")), bool(cfg.get("quad")) and int(cfg["K"]) > 0
-    groups = {g: [] for g in ["theta", "W", "b"] + (["wl", "bl"] if local else []) + (["Q"] if quad else [])}
+    tail = ((["V", "c"] if cfg.get("harmonic") else [])                  # --harmonic, then --patch: last members
+            + ((["Wp", "bp"] + (["Qp"] if cfg.get("quad") else [])) if cfg.get("patch") else []))
+    groups = {g: [] for g in ["theta", "W", "b"] + (["wl", "bl"] if local else []) + (["Q"] if quad else []) + tail}
     for k in range(n):
         with np.load(os.path.join(sdir, f"slice_{k:03d}.npz")) as s:
             for g in groups:
@@ -60,7 +62,7 @@ def check_run(run):
         if f.read() != npy_bytes(stacked["theta"]):
             bad.append("params_history.npy")
     taus = np.load(os.path.join(rdir, "hidden_history.npz"))["t"]
-    expect = ["W", "b", "t"] + (["wl", "bl"] if local else []) + (["Q"] if quad else [])
+    expect = ["W", "b", "t"] + (["wl", "bl"] if local else []) + (["Q"] if quad else []) + tail
     with zipfile.ZipFile(os.path.join(rdir, "hidden_history.npz")) as z:
         names = [nm[:-4] for nm in z.namelist()]
         if names != expect:

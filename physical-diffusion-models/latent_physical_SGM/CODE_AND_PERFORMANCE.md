@@ -923,3 +923,874 @@ splits at 20 / 25 / 30 / 35 / 40.
   `--init-from` the 1x seed runs at slice 20, then sampling and evaluation). They are compared with the 1x seeds
   (paired by seed) and with early 2x: FID job 4228450, gallery 4228451
   (`out/latent_physical_SGM/convergence_study/gallery_split/`).
+
+### Results: full runs with splits every 5 slices from 20 to 95 (2026-11-12 15:30)
+
+Jobs: pipelines 4228447-49 (`..._mixst_seed{1,2,3}_split`; slices 0-19 linked from the 1x seed runs), FID 4228450
+(`out/latent_physical_SGM/fid/4228450/report.txt`), gallery 4228451
+(`out/latent_physical_SGM/convergence_study/gallery_split/compare.png`).
+
+| | 1x seeds 1 / 2 / 3 | split seeds 1 / 2 / 3 | early 2x seeds 1 / 2 / 3 |
+|---|---|---|---|
+| FID | 20.25 / 20.14 / 19.36 (mean 19.92) | 19.60 / 19.75 / 19.07 (mean **19.47**) | 18.56 / 18.74 / 18.29 (mean **18.53**) |
+| paired vs 1x, same seed [95%] | | -0.65 [-1.82, +0.30] / -0.40 [-1.85, +1.06] / -0.29 [-1.42, +0.94] | -1.69 / -1.40 / -1.07 |
+| recall (features) | 0.418 / 0.464 / 0.482 | 0.476 / 0.478 / 0.480 | 0.470 / 0.470 / 0.510 |
+| dead / effective states at t = 0 | 136/441, 140/436, 120/434 | 41/594, 43/597, 50/564 | 72/483, 73/479, 72/479 |
+| validation at slice 99 | -146,392 / -146,488 / -146,826 | -145,839 / -145,901 / -146,141 | -147,024 / -147,121 / -147,265 |
+
+Split against early 2x, paired by seed: +1.04 / +1.01 / +0.78 FID (split worse, all three).
+
+What this means:
+- **The split works mechanically but barely helps the samples.**
+  - It keeps about 150 more states alive at t = 0 than the 1x runs, and about 100 more than early 2x.
+  - FID improves by only 0.45 on average, every interval containing 0. Recall rises a little, within the seed spread.
+  - **So the number of live states is not the bottleneck by itself.**
+- **The late splits hurt the fit at t = 0.** The slice-99 validation loss is worse for all three seeds (+553 / +587
+  / +685, against a seed spread of about 230). If splits are used at all, they should stop well before the last
+  slices.
+- **The gallery shows why.** Each split run keeps exactly the digits of its own 1x seed (split_s1 = seed1, and so
+  on), while early 2x changes them. The digit a trajectory becomes is already decided by slices 0-19 (t >= 4.0),
+  which the split runs take over unchanged.
+- **Early 2x changes those slices.** Its gain cannot come from keeping states alive later. It must come from how
+  slices 0-19/30 are trained. There the validation loss is already flat (second-half gains about 0 SE), yet more
+  steps still change the state allocation: the loss is flat along how the states are allocated, and extra steps move
+  along those flat directions.
+
+### Next (2026-11-12 17:30): more steps in the decisive window, and what they change there
+
+1. **GPU pipelines, seeds 1-3 each** (same flags as the study, old sampler, 500 samples):
+   - `--steps-schedule 0:4,31:1` (4x steps in slices 0-30; `..._mixst_early4x_seed{1,2,3}`, jobs 4229131-33).
+   - `0:2,20:1` (2x steps in slices 0-19 only; `..._mixst_early2x20_seed{1,2,3}`, jobs 4229134-36). This tests
+     whether the window is slices 0-19 or 0-30.
+2. **CPU analysis `early_slices.py`** (job 4229149). It compares plain, early 2x and full 2x runs at slices 0-30 (and a
+   few later ones). The data: 2048 held-out test digits, noised at each slice's t with the same noise for every run.
+   - The model's score (from the sampler drift) against the exact score of the noised training distribution, as a
+     relative error. The validation loss hides this error behind a large constant.
+   - The denoised (Tweedie) means, and which digit the FID classifier reads from them, against the exact posterior
+     mean.
+   - How the states are spread over the digit classes.
+
+### Results: what more steps change in the early slices (2026-11-12 17:25, CPU job 4229149, `early_slices.py`)
+
+The test data are 2048 held-out test digits, noised at each slice's t with the same noise for every run. The models
+are compared with the exact posterior of the noised training distribution, computed from all 23,692 training images.
+Report: `out/latent_physical_SGM/early_slices/4229149/report.txt`.
+
+The denoising error is the relative error of the model's Tweedie mean (x + sigma^2 score) / e^-t against the exact
+posterior mean. "Digit = exact" is how often the classifier reads the same digit from the two. Values are means over
+three seeds.
+
+| slice (t) | denoising error, plain / early 2x | digit = exact, plain / early 2x | states winning an image, plain / early 2x |
+|---|---|---|---|
+| 0 (5.00) | **1.351 / 0.139** | **0.829 / 0.952** | 324-352 (same init) |
+| 3 (4.85) | 0.095 / 0.087 | 0.938 / 0.944 | 209-230 / 228-246 |
+| 6 (4.70) | 0.070 / 0.061 | 0.928 / 0.941 | 163-188 / 204-227 |
+| 9 (4.55) | 0.058 / 0.045 | 0.935 / 0.945 | 163-177 / 234-247 |
+| 12 (4.39) | 0.052 / 0.039 | 0.926 / 0.938 | 202-204 / 296-305 |
+| 15 (4.24) | 0.052 / 0.039 | 0.934 / 0.946 | 262-273 / 373-384 |
+| 19 (4.04) | 0.064 / 0.052 | 0.938 / 0.944 | 360-386 / 486-490 |
+| 25 (3.74) | 0.110 / 0.100 | 0.929 / 0.935 | 500-512 / 586-591 |
+| 30 (3.49) | 0.163 / 0.154 | 0.945 / 0.948 | 550-566 / 611-617 |
+| 40 (2.98) | 0.245 / 0.241 | 0.978 / 0.980 | about 575 / about 610 |
+
+- **Slice 0 (t = 5) is badly underfitted with the paper's 10,901 steps.** Its denoising error is 10x larger than with
+  2x steps (1.35 vs 0.14), and the digit read from its denoised mean disagrees with the exact one in 17% of cases
+  instead of 5%. All three seeds agree to 1%.
+  - Slice 0 is the only slice that starts from the reference initialisation instead of a trained predecessor.
+  - Every later slice warm-starts from it, so its shortfall carries down the chain.
+- **In slices 6-25 the error is 10-26% lower with 2x steps** in every seed, and the digit read agrees with the exact
+  one about 1 point more often. By slice 30-40 the difference has faded (5%, 1.5%).
+- **The validation loss cannot show this.** Most of the score-matching loss is the constant E|s*|^2, so the relative
+  score error is about 1e-4 of it.
+- **States.** With 2x steps, 30-45% more states win at least one image in slices 9-19. Class 1 gets the fewest states
+  in every run (about 60-90 of 784).
+- **Where the exact class information appears.** The exact class posterior goes from almost uninformative at t = 5
+  (max p 0.40) to decided at t = 3.5 (max p 0.99). This is the window where the samples' digits are chosen, and the
+  same window where the plain runs are underfitted.
+- **Full 2x and early 2x are identical in slices 0-30** (as designed). Full 2x's extra FID gain (17.69 vs 18.56,
+  seed 1) comes from slices 31-99.
+- **Not meaningful below t of about 2.** There the exact score of the training set "memorises" individual training
+  images, while the models generalise.
+
+**Follow-up submitted (17:30):** 8x steps on slice 0 only (`--steps-schedule 0:8,1:1`, about 76k extra steps, 4% of a
+run), seeds 1-3, pipelines 4229174-76 (`..._mixst_slice0x8_seed{1,2,3}`). It tests whether fixing slice 0 alone
+recovers much of the early-2x gain.
+
+### Oracle-start test (the user's idea, 2026-11-12 17:45)
+
+**Option.** `sample_latent.py --oracle-start K` (new, opt-in, default sampler only) starts the reverse process at
+slice K. The initial states come from the exact forward distribution, x = e^-t x0 + sqrt(T (1 - e^-2t)) xi:
+- x0 are 500 training images with a fixed choice and noise (rng 12345), the same for every run and every K;
+- from t_K down to 0 the model integrates; the Brownian keys are the usual ones;
+- output goes to `<stem>_oracle<K>.npy`, never the normal samples.
+
+**Reading it.** For a perfect model the samples would not depend on K, so FID against K shows how much error the
+reverse process before t_K adds. Comparing plain with early 2x at the same K shows where early 2x gains.
+
+**Jobs.**
+- Starts K = 5 / 10 / 19 / 30 / 45 / 70 (t = 4.75 / 4.49 / 4.04 / 3.48 / 2.73 / 1.46).
+- Runs: plain seeds 1-3 and early 2x seeds 1-3. GPU jobs 4229209-14, after the import check 4229208.
+- FID 4229215: the 36 oracle sets plus the 6 normal ones, with early 2x vs plain paired per seed and K.
+- Gallery 4229216 (`convergence_study/gallery_oracle/`, seed 1).
+
+### Is t = 5 long enough? (2026-11-12 17:50, CPU job 4229465)
+
+**The mismatch.** The sampler starts at t = 5 from N(0, T I) (`trajectory_set`). The true forward distribution there
+still carries e^-5 of the data.
+
+**Data** (normalised four-digit training set, 23,692 images): |mu|^2 = 234.5, trace C = 549.5, top eigenvalues 92.4 /
+43.5 / 40.4 / 30.7 / 24.5; T = 0.02.
+
+| t | mean offset along mu | variance excess, PC1 / PC10 | KL(p_t \|\| N(0, T)) |
+|---|---|---|---|
+| 4 | 1.98 sigma | 155% / 18% | 1.97 + 0.69 nats |
+| **5 (used)** | **0.73 sigma** | **21% / 2.5%** | **0.266 + 0.019 nats** |
+| 6 | 0.27 sigma | 2.8% / 0.3% | 0.036 nats |
+| 7 | 0.10 sigma | 0.4% / 0.04% | 0.005 nats |
+
+- **At t = 5 the start is measurably off:** 0.73 noise SDs along the mean image, and 21% too little variance along
+  the top principal direction. KL is 0.29 nats, almost all of it from the mean.
+- **Why it can matter.** The reverse dynamics shrink this error only by about e^-1 per unit time. So roughly a third
+  of it is still there at t of about 4, where the digits are decided.
+- **Direct test, sampling only:** oracle start at slice 1 (exact forward states at t = 4.95) against the normal start.
+  GPU jobs 4229466 / 67, FID 4229468.
+- **Fixes if it matters:**
+  - Start from the exact Gaussian approximation N(e^-5 mu, e^-10 C + T (1 - e^-10) I). No retraining.
+  - Or set T_forward to 6-7 (needs retraining).
+
+### Overnight plan (2026-11-12 18:15; the user is away and asked to continue with the ideas)
+
+- **K = 6144 ten-digit run** (pipeline 4214805):
+  - Training finished, but its sampling was killed for host memory (64 GB; the old sampler holds the 6144-state
+    history several times).
+  - Resampling with the fast sampler, 2000 samples (GPU job 4229560). It also re-samples the K = 3072 run with the
+    fast sampler as a cross-check against its old-sampler samples.
+  - Then evaluate_multiclass + summary (4229561), FID with all ten-digit runs (4229562), and the gallery (4229563).
+- **Is the Gaussian start "cheating"? No.** It needs only the data mean (784 numbers) and covariance (or its top ~20
+  principal directions), computed once like any trained parameter. Sampling is then x_5 = e^-5 mu + L z: no data, and
+  no forward process, at generation time. The equilibrated start needs nothing beyond the model: thermalise the
+  oscillators under the learned t = 5 energy, then run the protocol. The oracle start (real training images) is a
+  diagnostic only.
+- **Build workflow wf_dd119390-5b4** (two tracks, one after the other; each built and CPU-tested, reviewed twice,
+  fixed):
+  1. `sample_latent.py --init-dist gauss | equil:S`: the exact Gaussian start, paired with the normal samples, plus a
+     low-rank variant; or equilibration under the model's own slice-0 energy.
+  2. Harmonic hidden modes, `train_latent.py --harmonic R`: R linear oscillators integrated out exactly,
+     F_h = -1/2 sum_j (v_j.x + c_j)^2, with a closed-form per-t reference from the data's principal components (the
+     exact Gaussian part of p_t). Plus `--harmonic-fixed`, sampler support and tests.
+- **When results come in:** analyse the early-steps runs (FID 4229181), the oracle starts (FID 4229215, 4229468) and
+  K = 6144. Then submit the start-distribution sampling (6 models) and the harmonic-mode pipelines (seeds 1-3), and
+  record everything here.
+
+### K = 6144 ten-digit run sampled with the fast sampler (2026-11-12 18:55)
+
+**Jobs.** GPU 4229560, evaluation 4229561, FID 4229562 (`out/latent_physical_SGM/fid/4229562/report.txt`), gallery
+4229563 (`gallery/28x28_all_ten_digits_sweep_number_of_hidden_elements/Potts6144_8nb.png`).
+
+**Sampling.** The old sampler had been killed at 67 GB of host memory (pipeline 4214805, after 42 h of training). The
+fast sampler (`--fast --precision mixed --brownian cached --brownian-tol 1e-8 --chunk 1000`) took **191 s for 2000
+samples**: no non-finite samples, max |x| 3.86, about 4,150 solver steps per trajectory as at smaller K.
+
+**Fast-sampler check on the ten-digit problem.** K = 3072, 2000 samples, fast vs old sampler: FID 22.48 vs 22.48,
+paired -0.00 [-0.00, +0.00]; precision and recall identical. This is the first check at ten digits and 2000 samples,
+after four digits at K = 784 / 3072.
+
+| ten digits, 2000 samples | FID | KID x 1e3 | precision / recall (features) |
+|---|---|---|---|
+| Potts 784 | 31.10 | 204.8 | 0.904 / 0.296 |
+| Potts 1536 | 25.95 | 173.9 | 0.912 / 0.340 |
+| Potts 3072 | 22.48 | 153.8 | 0.924 / 0.384 |
+| **Potts 6144** | **19.75** | **138.7** | **0.930 / 0.445** |
+| real training images (floor) | 1.69 | 1.9 | 0.870 / 0.882 |
+
+- **Doubling the states still pays at K = 6144:** -2.73 [-3.53, -1.72] vs 3072, and -6.20 vs 1536. Recall rises
+  steadily with K (0.30 -> 0.45).
+- **Gallery.** Most trajectories end on the same digit as with K = 3072; some malformed digits become clean (for
+  example row 5, last column: a broken "5" becomes a "3").
+- **Recommendation.** Sample every K >= 3072 with the fast sampler. The old sampler's per-trajectory parameter
+  interpolation does not fit in memory at K = 6144.
+
+### The start distribution matters: oracle start at slice 1 (2026-11-12 19:00; GPU 4229466/67, FID 4229468)
+
+**Setup.** Each model was sampled from the exact forward states at t = 4.95 (slice 1): 500 training images
+x e^-4.95 plus noise, i.e. a correct draw from p_4.95 (rng 12345, the same for every model). This was compared with
+its normal start from N(0, T I) at t = 5. FID report: `out/latent_physical_SGM/fid/4229468/report.txt`.
+
+| model | FID, normal start | FID, exact start at slice 1 | change | KID x 1e3, normal -> exact |
+|---|---|---|---|---|
+| plain seed 1 / 2 / 3 | 20.25 / 20.14 / 19.36 | 18.14 / 19.21 / 18.79 | -2.11 / -0.93 / -0.57 | 148 -> 112, 149 -> 118, 136 -> 115 |
+| early 2x seed 1 / 2 / 3 | 18.56 / 18.74 / 18.29 | 17.04 / 17.29 / 17.58 | -1.52 / -1.45 / -0.71 | 134 -> 98, 139 -> 112, 129 -> 108 |
+| mean, plain / early 2x | 19.92 / 18.53 | 18.71 / 17.30 | **-1.20 / -1.23** | |
+
+- **The wrong start costs about 1.2 FID, as much as early 2x gains (1.39), and the two add up.** Early 2x with the
+  correct start reaches 17.30 on average, close to the full 2x-steps run (17.69, seed 1) and below every plain
+  configuration. KID drops by 20-35 units in all six models.
+- **Caveat.** Normal vs exact start is unpaired (different initial states), and single changes have SD of about 1.5
+  FID. But all six models move the same way, and the KID drop is large.
+- **Starting at slice 5 instead of slice 1 changes nothing.** These two are paired (same images, noise and keys):
+  +0.19 / +0.32 / -0.99 / -0.30 / -0.17 / +0.21, about 0 on average. So the model's own dynamics in t = 4.75-4.95
+  are fine there; what matters is the distribution it starts from. The mismatch at t = 5 is 0.73 noise SDs along
+  the mean image, 21% variance excess along PC1 and KL 0.29 nats (job 4229465).
+- **Early 2x keeps its advantage with the correct start:** paired -1.10 / -1.92 / -1.21, mean -1.41, the same as
+  with the normal start (-1.39). So the start and the early-slice training are two independent levers.
+- **The legitimate version of this start** is the exact Gaussian start being built (`--init-dist gauss`: data mean
+  and covariance only, no images at generation time), with a mean-only variant to separate the mean shift from the
+  covariance. The equilibrated start is the other version. Both will be run on the same six models.
+
+### Oracle starts across the whole reverse process: most error builds up at t of about 1.5-2.7 (2026-11-12 19:10)
+
+**Jobs.** GPU 4229209-14, FID 4229215 (`out/latent_physical_SGM/fid/4229215/report.txt`), gallery 4229216
+(`convergence_study/gallery_oracle/compare.png`, seed 1).
+
+**Setup.** Exact forward states at slice K (the same 500 training images and noise for every model and K), then the
+model down to t = 0. FID means over the three seeds:
+
+| start | normal (t = 5) | K = 5 (4.75) | 10 (4.49) | 19 (4.04) | 30 (3.48) | 45 (2.73) | 70 (1.46) |
+|---|---|---|---|---|---|---|---|
+| plain (seeds 1/2/3) | 19.92 | 18.87 | 18.60 | 18.58 | 18.89 | 17.53 | **6.82** |
+| early 2x (seeds 1/2/3) | 18.53 | 17.39 | 17.32 | 17.91 | 18.08 | 16.55 | **6.79** |
+| paired early 2x - plain | -1.39 | -1.48 | -1.28 | -0.68 | -0.81 | -0.98 | -0.02 |
+
+- **How to read it.** A perfect model would give FID near the floor (4.6) at every K. The curve shows where the
+  model's own dynamics add error.
+  - t > 2.7 adds only about 1.3 FID (K = 5 -> 45).
+  - **t of about 2.7 -> 1.5 adds about 10.7** (K = 45 -> 70).
+  - Below 1.5 only about 2.2 is left above the floor.
+- **The gallery confirms it.** Starts at K <= 45 end in the familiar speckled, blotchy strokes; starts at K = 70 end in
+  smooth digits. The grain and the malformed strokes form in slices 45-70.
+- **Early 2x helps there too.** It is better by about 1 FID up to K = 45 (paired), because its later slices warm-start
+  from better early ones. At K = 70 the two are equal.
+- **The study never varied this window.** The step experiments covered slices 0-30 (early) and 80-99 (late). The
+  earlier suggestion to cut slices 30-69 rested on state counts only and should not be followed until mid-slice
+  quality is tested.
+- **Submitted 19:15:**
+  - 2x steps in slices 31-79 (`--steps-schedule 0:1,31:2,80:1`, `..._mixst_mid2x_seed{1,2,3}`, pipelines
+    4230084-86). FID against plain and early 2x: 4230097, gallery 4230098.
+  - Finer oracle starts K = 50 / 55 / 60 / 65 for plain seed 1 and early 2x seed 1 (4230087 / 88), FID 4230089,
+    gallery 4230090 (`convergence_study/gallery_oracle_mid/`).
+
+### Results: early 4x, early 2x in slices 0-19, 8x on slice 0 only (2026-11-12 19:25)
+
+**Jobs.** Pipelines 4229131-36 and 4229174-76; FID 4229181 (`out/latent_physical_SGM/fid/4229181/report.txt`);
+gallery 4229182 (`convergence_study/gallery_early/compare.png`).
+
+| schedule (extra steps) | FID seeds 1 / 2 / 3 | mean | paired vs plain, mean | recall mean | lost states at slice 19 / t = 0 |
+|---|---|---|---|---|---|
+| plain (+0%) | 20.25 / 20.14 / 19.36 | 19.92 | | 0.455 | 190-205 / 120-140 |
+| 8x on slice 0 only (+4%) | 20.29 / 20.25 / 19.30 | 19.95 | **+0.03** | 0.449 | as plain |
+| 2x in slices 0-19 (+13%) | 18.64 / 18.94 / 18.98 | 18.85 | -1.06 | 0.483 | 71-79 / 64-79 |
+| 2x in slices 0-30 (+21%) | 18.56 / 18.74 / 18.29 | 18.53 | -1.39 | 0.483 | 71-79 / 72-73 |
+| **4x in slices 0-30 (+62%)** | **17.85 / 18.26 / 17.89** | **18.00** | **-1.92** | **0.493** | **19-21 / 51-55** |
+| 2x in all slices (seed 1 only, +100%) | 17.69 | | -2.56 (seed 1) | 0.472 | 71 / 71 |
+
+- **Slice 0 alone does nothing.** It is badly underfitted at the paper's steps (early_slices.py), yet 8x steps there
+  changes neither FID nor the gallery: those rows are identical to plain. This fits the oracle starts, where the
+  start distribution, not slice 0's fit, mattered. The early-steps gain comes from slices 1-30.
+- **4x in slices 0-30 beats 2x** by 0.71 / 0.48 / 0.41 (paired, same seed), with diminishing returns: -1.39 for the
+  first doubling, -0.53 for the second. It keeps almost every state alive through slice 30 (4-7 lost) and loses
+  51-55 at t = 0.
+- **2x in slices 0-19 gives about 75% of the 0-30 effect** for 60% of its extra steps. States lost in slices 20-30
+  are partly regained by t = 0.
+- **Gallery.** Early 4x keeps the digits of early 2x of the same seed, with a few strokes cleaner; the grain stays in
+  every model. That fits the oracle curve: the grain forms at t of about 1.5-2.7 (mid slices), which these schedules
+  do not touch directly.
+
+### Finer oracle starts, K = 45-70 (2026-11-12 19:45; GPU 4230087/88, FID 4230089, gallery 4230090)
+
+Seed 1, plain (p1) and early 2x (e1); exact forward states at slice K, then the model:
+
+| K (t) | 45 (2.73) | 50 (2.47) | 55 (2.22) | 60 (1.97) | 65 (1.72) | 70 (1.46) |
+|---|---|---|---|---|---|---|
+| FID plain | 18.05 | 15.81 | 13.25 | 10.69 | 8.39 | 6.87 |
+| FID early 2x | 16.22 | 14.72 | 12.60 | 10.26 | 8.21 | 6.84 |
+| recall plain | 0.463 | 0.520 | 0.601 | 0.676 | 0.736 | 0.785 |
+| paired early 2x - plain | -1.82 | -1.10 | -0.65 | -0.43 | -0.18 | -0.02 |
+
+- **The error builds up steadily over t of about 2.7 -> 1.5,** about 2.3-2.6 FID per 5 slices. Over t > 2.7 it is
+  about 0.03 per slice, over 2.7 -> 1.5 about 0.45 per slice.
+- **Gallery** (`convergence_study/gallery_oracle_mid/compare.png`).
+  - The later the model takes over, the more of the true digit's thin strokes survive.
+  - With a handover at t = 2.7 the strokes come out thick, blotchy and speckled; at t = 1.5 they come out smooth
+    and close to the source digit. Example: column 4, a cursive "2" with a loop: blob -> loop with speckles ->
+    clean loop.
+  - So at t of about 1.5-2.7 the model cannot hold the fine stroke structure the true state still carries. It pulls
+    samples towards thick, template-like shapes plus pixel noise.
+- **Likely cause: a missing kind of structure, not too few steps.**
+  - At these t the digit class is fixed and the shape detail is being formed.
+  - Each Potts state contributes one template (W_m) with per-pixel quadratic terms (Q_m).
+  - Variation of strokes within a state can come only from the nearest-neighbour visible energy and the per-pixel
+    bistable units, which give independent pixel noise: the grain.
+- **Pointers this gives:**
+  - More states help: ten digits, K = 3072 -> 6144: -2.7 FID.
+  - The user's idea of Potts units on overlapping patches would add exactly the missing local, compositional stroke
+    structure.
+  - Harmonic modes add only global Gaussian directions.
+  - The mid-slice 2x runs (4230084-86, queued) test the "too few steps" alternative.
+
+### Start distributions built and submitted (2026-11-12 20:00; workflow wf_dd119390-5b4, track 1)
+
+**Option.** `sample_latent.py --init-dist` (opt-in; default 'set' = today's start):
+- **'gauss'** starts at t = 5 from N(e^-5 mu, e^-10 C + T (1 - e^-10) I). mu and C are cached once per problem in
+  `out/latent_physical_SGM/data_stats/<problem>.npz`. The trajectory set's own draws are mapped onto it, so the
+  samples stay paired with the normal ones. `--init-rank r` keeps the extra variance only along the top r
+  principal directions; r = 0 is the mean shift alone (784 numbers).
+- **'equil:S'** first runs S time units of Langevin dynamics under the model's own frozen slice-0 free energy. It
+  needs no data at all.
+
+**Tests.** `test_latent.py` block 16, 26 checks, passed on the candidate (4230022) and on the installed files
+(4230110):
+- the default path is bit for bit unchanged through the command line;
+- mapped draws hit the target mean and covariance;
+- the rank-r starts match the full start on the kept axes;
+- the Langevin routine reproduces the exact Ornstein-Uhlenbeck transition on a quadratic energy;
+- 20 invalid command lines are refused.
+
+Installed atomically 19:07, import checks 4230100 and 4230160. Both reviewers: ship (low issues only).
+
+**Experiment.** gauss / gauss with `--init-rank 0` / equil:3 for the six models (plain seeds 1-3, early 2x seeds 1-3).
+GPU 4230539-44, FID 4230545 (paired against the normal start; the oracle slice-1 sets for reference), gallery 4230546
+(`convergence_study/gallery_initdist/`).
+
+### Results: the start distribution is worth about 1.5 FID, and no data is needed to fix it (2026-11-12 21:20; GPU 4230539-44, FID 4230545, gallery 4230546)
+
+500 samples per set, paired against the normal N(0, T I) start (`t5`). Mean FID over three seeds (KID x 1e3 in brackets):
+
+| start | plain | early 2x |
+|---|---|---|
+| N(0, T I) (today) | 19.92 (144) | 18.53 (134) |
+| Gaussian, full covariance (`gs`) | 18.32 (122) | 17.22 (114) |
+| Gaussian, mean shift only, 784 numbers (`gs0`) | 18.54 (124) | 17.34 (114) |
+| equilibrated, 3 time units under the model's slice-0 energy (`eq3`) | **17.98** (114) | 17.36 (107) |
+| exact forward states at slice 1 (oracle, `o1`) | 18.71 (115) | 17.30 (106) |
+
+- **Every corrected start removes the whole start error.** Each one matches or beats the oracle start at slice 1.
+  - Paired gs - t5: -1.76, -1.60, -1.43 (plain) and -1.38, -1.18, -1.38 (early 2x). KID p = 0.005-0.01 in all six.
+  - eq3 - t5: -2.30, -1.89, -1.62 and -1.38, -1.57, -0.57. The intervals are wide because Langevin with fresh noise
+    re-draws the trajectories, so the pairing with t5 is lost.
+- **The mean shift is almost all of it.** gs - gs0 = -0.19, -0.35, -0.13, -0.04, -0.06, -0.27: every sign is
+  negative, but each value is within noise. The covariance adds about 0.2.
+- **It adds to early 2x.** e_gs - p_t5 = -2.70 = (-1.31 start) + (-1.39 early 2x). The two fixes act on different
+  things.
+- **What it changes: class balance, not strokes.**
+  - The N(0, T I) start draws 27-28 % ones in all six models; every corrected start draws 23-25 % (the reference
+    has 25 %).
+  - Precision (0.94) and recall (0.45-0.46 in features) are unchanged.
+  - In the gallery (`convergence_study/gallery_initdist/compare.png`), the Gaussian starts change the digit of 2 of
+    16 trajectories (2 -> 3). Every stroke looks the same: still thick, blotchy and speckled.
+  - The stroke problem sits at t of about 1.5-2.7 (oracle curve above). The start cannot reach it.
+- **Cost.**
+  - gs and gs0 need only the cached data mean, plus the covariance for gs. They cost nothing at sampling time.
+  - eq3 needs nothing beyond the trained model. It adds 102 s to 497 s for 500 samples on the old adaptive sampler,
+    about 2,500 accepted Langevin steps per trajectory. The trajectories have fully decorrelated by then (median
+    displacement 5.5, against a typical norm |x| of about 4).
+- **Answer to the question "is t = 5 long enough?"** For the forward process, yes: it reaches N(e^-5 mu, ...)
+  closely. The sampler's N(0, T I) start ignores the e^-5 mu offset (0.73 sd along the mean direction), and that
+  offset costs about 1.5 FID through class balance.
+  - Either fix is legitimate. One stores 784 numbers (the data mean). The other runs the model's own slice-0
+    dynamics, which needs no data.
+  - Recommendation: make eq3 (or gs0) the default start for all further comparisons. Report it as part of the
+    sampler.
+
+### More global states: K = 1536 beats K = 784 by 3.5 FID on four digits (2026-11-12 21:45; FID 4230842/43, gallery 4230857)
+
+- The four-digit K = 1536 run (`mnist28_d0123_K1536_ema_potts_quad_local_quartic_r1_lin_pooled`, float64, job
+  4206670) is the same recipe as the K = 784 runs. It had been sampled on 11-10 but never scored.
+- Paired against K = 784 (same start and noise):
+
+| set | FID | KID x 1e3 | precision / recall (features) |
+|---|---|---|---|
+| K = 784, old float64 run | 20.29 | 148 | 0.941 / 0.420 |
+| K = 784, mixst seed 1 | 20.25 | 148 | 0.942 / 0.418 |
+| **K = 1536** | **16.84** | 121 | 0.948 / **0.534** |
+
+- K1536 - K784: **-3.46 [-4.93, -1.74]**, p = 0.005. K1536 - mixst seed 1: -3.41.
+- This is the largest single gain so far (early 2x: -1.39; start fix: about -1.5). It is not yet saturated:
+  ten digits gained -2.7 from 3072 -> 6144.
+- The mixst code reproduces the old float64 run: K784 (old) - mixst seed 1 = +0.04 [-0.02, +0.11].
+- Gallery (`convergence_study/gallery_k1536/compare.png`):
+  - K = 1536 strokes are somewhat thinner and less blotchy (e.g. the rings of the zeros), and the shapes vary more
+    (recall +0.11).
+  - Most trajectories keep their digit.
+  - The pixel grain remains.
+- Consequence for the patch-Potts test: the baseline is not only K = 784. Patch units must be compared with simply
+  adding global states at similar cost.
+  - Global units cost K x 784 couplings each for W and Q (1.2 M at K = 784).
+  - Patch units on 7 x 7 windows at stride 3 with 32 states cost 64 x 32 x 49 = 0.1 M each.
+- **Submitted:** K = 3136 with the same recipe on the mixst code, seed 1 (pipeline 4230861, resubmitted as 4231231:
+  training, 500 samples, evaluation). This gives the next point on the K curve.
+
+### Results: 2x steps in the middle slices barely help (2026-11-12 21:45; pipelines 4230084-86, FID 4230097, gallery 4230098)
+
+2x steps in slices 31-79 (`--steps-schedule 0:1,31:2,80:1`, `..._mixst_mid2x_seed{1,2,3}`). This covers the window
+where the oracle curve shows the error building up. Normal N(0, T I) start, 500 samples:
+
+| | seed 1 | seed 2 | seed 3 | mean |
+|---|---|---|---|---|
+| plain | 20.25 | 20.14 | 19.36 | 19.92 |
+| early 2x (slices 0-30) | 18.56 | 18.74 | 18.29 | 18.53 |
+| mid 2x (slices 31-79) | 19.66 | 19.16 | 18.96 | **19.26** |
+
+- mid2x - plain: -0.59, -0.98 (p = 0.005), -0.40, a mean of -0.66. mid2x - early2x: +1.11, +0.42, +0.66.
+  - Mid 2x spends more extra steps than early 2x (49 slices against 31) and gains half as much.
+  - Training: 56-60 min per run, against 42 for plain.
+- Recall 0.47 (plain 0.45, early 2x 0.48). Class shares unchanged.
+- Gallery (`convergence_study/gallery_mid2x/compare.png`): the strokes look the same as plain. They are still thick,
+  blotchy and speckled.
+- **Conclusion: the error that builds up at t of about 1.5-2.7 is not a training-steps problem.**
+  - The model lacks the structure to hold thin strokes there.
+  - This leaves more states (K = 1536: -3.5) and local structure (the patch-Potts units) as the levers.
+
+### Overnight status and plan (2026-11-12 22:00)
+
+- **Harmonic modes** (workflow wf_dd119390-5b4, track 2):
+  - Built and installed 21:17.
+  - Tests: block 17 58/58 (4230780). Blocks 13-16 pass on the installed files (4230877, 4230781). Import check
+    4230775.
+  - Two reviewers are running.
+  - GPU runs once the reviews pass, in the builder's order: `--harmonic 64` seeds 1-3, then `--harmonic 64
+    --harmonic-fixed-slices 31` (modes held at the closed-form reference over t >= 3.48), then R = 16, then fully
+    fixed modes (the builder expects these to be non-confining below t of about 3).
+  - Each run is sampled with the normal start and with `--init-dist equil:3`.
+- **Builder's analysis of the plain seed-1 run** (harmonic_analysis.py, 4230722):
+  - At t = 5 the Potts layer already carries 93 / 53 / 23 % of the exact Gaussian anti-spring along PCs 1 / 16 / 64.
+  - At slice 30 it carries 31 / 28 / 13 %.
+  - So the Gaussian structure is missing mostly along the weaker principal directions, and more so as t falls.
+- **Patch Potts** (the user's idea):
+  - Design panel running (workflow wf_899ae7cd-383, read-only): three designers (a faithful integration, the learning
+    dynamics including shared templates, and evaluation and physics including a fair comparison with more global
+    states), then a judge who writes one spec.
+  - The build starts after the harmonic track is closed, because both edit the same files.
+- **Queued GPU work:**
+  - K = 3136 pipeline 4230861, resubmitted as 4231231 with a 4 h limit (this site forbids changing a walltime).
+  - K = 1536 with the gs0 / eq3 starts 4230862, FID 4230863.
+
+### The start fix stacks with more states: K = 1536 + equilibrated start = FID 15.0 (2026-11-12 22:40; GPU 4230862, FID 4230863)
+
+| start | K = 784 (mixst seed 1) | K = 1536 |
+|---|---|---|
+| N(0, T I) | 20.25 (KID 148) | 16.84 (121) |
+| mean shift only, `gs0` | 18.69 (127) | 15.67 (100) |
+| equilibrated, `eq3` | 17.95 (113) | **15.01** (91) |
+
+- Paired K1536_gs0 - K1536_t5: FID -1.17 [-2.91, +0.71], KID -21 (p = 0.010).
+- K1536_eq3 - K1536_t5: FID -1.82, KID -30 (p = 0.020). The interval is wide because equilibration re-draws the
+  trajectories.
+- The two fixes add up: K = 1536 with the eq3 start is 4.9 FID better than the plain seed-1 run with today's start.
+  This is the best four-digit result so far. Recall is 0.54 (0.42 for plain).
+- The start gain at K = 1536 (-1.2 to -1.8) is about the same as at K = 784 (-1.6 to -2.3). The start fixes class
+  balance (ones 27 -> 24 %), more states fix shapes. They act on different things.
+
+### Mid-t error: the model is converged there and capacity-limited (2026-11-12 22:50; CPU job 4231198, `early_slices.py`)
+
+Relative denoising error against the exact posterior of the noised training set, on 2048 held-out images, seed 1
+of each:
+
+| slice (t) | plain | mid 2x | early 2x | K = 1536 |
+|---|---|---|---|---|
+| 45 (2.73) | 0.2715 | 0.2710 | 0.2684 | **0.2587** |
+| 55 (2.22) | 0.2978 | 0.2986 | 0.2954 | **0.2878** |
+| 65 (1.72) | 0.3147 | 0.3146 | 0.3122 | **0.3070** |
+| 70 (1.47) | 0.3224 | 0.3225 | 0.3201 | **0.3166** |
+| effective states at slice 70 | 430 | 433 | 450 | 612 (of 1536; 652 dead) |
+
+- **Mid 2x changes nothing in slices 40-90** (differences of at most 0.001). Training at these t has converged; the
+  limit is the model's capacity there.
+- **K = 1536 lowers the error by 3-5 % (relative) in every mid slice** and keeps about 45 % more effective states.
+- The relative change is much smaller than the FID gain (-3.46).
+  - Caveat: this reference is the training set's posterior. At low t it is the memorising score, so the measure
+    contains a floor that a generalising model must not reach.
+  - It is a consistent ruler for comparing models at the same slice, not an absolute quality measure.
+- Early 2x fixes slice 0 (denoising error 0.14 against 1.35) and gains about 0.003 in the mid slices.
+- **Implication:** anything that improves mid-t quality must add capacity of a useful form there: more global states,
+  or the patch units. This table is the baseline the patch runs will be measured against, with the same job script.
+
+### Harmonic modes: review round closed, stage 1 submitted (2026-11-12 23:15; workflow wf_dd119390-5b4)
+
+- **Review findings, fixed.** The maths reviewer found that modes built from the full data covariance C double-count
+  what the Potts prototypes already carry: the 784 prototypes hold 95 % of the variance along PC 1.
+  - Adding the full-C reference modes to the trained plain run makes the curvature along PC 1 at the data negative
+    from slice 19 on.
+  - **New opt-in `--harmonic-ref within`:** the reference is built from the within-cluster covariance S_w, the part
+    the prototypes do not carry. It keeps 4.9 % of C's variance along PC 1, 48 % along PC 16 and 79 % along PC 64.
+    The prototype unit plus these modes is then exactly the prototypes' Gaussian mixture (block 18: force to
+    1e-14).
+  - **New opt-in `--harmonic-lr-tmin 1`:** the modes' learning rate stops rising below t = 1.
+- **Tests on the installed files (23:03):** blocks 13-18 pass (21, 22, 6, 26, 59 and 16 checks; jobs 4231443,
+  4231503, 4231387, 4231388). Import check 4231375.
+- **Stage 1 (seed 1 only, as the reviewer advised):**
+  - `--harmonic 64 --harmonic-ref within --harmonic-lr-tmin 1`: pipeline 4231671.
+  - The same with the modes held at the reference in slices 0-30 (`--harmonic-fixed-slices 31`): pipeline 4231672.
+  - R = 16: pipeline 4231673.
+  - Each is followed by equil:3 sampling (4231674-76), then FID 4231677 against plain and early 2x seed 1.
+  - Seeds 2-3 come only if stage 1 is clean (finite, no runaway modes in train_log).
+
+### Overnight go-ahead (2026-11-12 23:25, the user): build patch Potts; run the best recipe; then decide
+
+- **Best recipe (option 3):** K = 1536 + early 2x (`--steps-schedule 0:2,31:1`) on the mixst code, seed 1
+  (`mnist28_d0123_K1536_..._mixst_early2x_seed1`).
+  - Pipeline 4231701, then equil:3 sampling 4231702, FID 4231703 (against K = 1536 float64 and plain / early 2x
+    seed 1, each with the normal and the equilibrated start), gallery 4231704 (`convergence_study/gallery_best/`).
+- **Patch Potts (option 1):** build after the design panel's spec (wf_899ae7cd-383), with build, two reviewers and
+  fixes.
+- **If 1 and 3 are not promising, in this order:** `--split-dead` at large K (42 % of states are dead at K = 1536 by
+  t = 1.5), sampler-side checks (PF-ODE, `--quench`), radius-2 visible couplings.
+
+### Patch Potts: design panel result and build started (2026-11-13 00:00; workflow wf_899ae7cd-383)
+
+**Panel.** Three designers worked from different angles (faithful integration; learning dynamics; evaluation and
+physics). A judge checked their measurements and wrote one spec:
+`out/latent_physical_SGM/patch_design/judge/final_spec.md` (scores, flags, plan and rejected ideas in `judge.json`).
+Measurement jobs: 4231029, 4231053, 4231028, 4231064, 4231229, 4231394; the judge's own is 4231616.
+
+**Key measurements:**
+- **Potential.** Exact closed-form denoisers on held-out images, change in DSM against the 784-prototype mixture:
+  - Additive global + per-patch residual templates (7 x 7 tiles, 64 states): -152 / -949 / -1650 at
+    t = 2.73 / 1.97 / 1.46.
+  - Doubling K (1536): -40 / -103 / -120.
+  - So local templates carry far more of what is missing at mid t than more global ones.
+  - Patch structure matters only below t of about 3.5. Above it, the patch templates cannot be told apart in the
+    noise (d' < 0.5).
+- **The physical form (product of experts) constrains the start.** It has no explaining-away:
+  - residual templates are harmful (+930 DSM at t = 1.97);
+  - the raw per-patch reference at full strength double-counts (2-11x the exact Gaussian anti-spring at t = 5);
+  - the start must be weak: 0.25 x reference at slice 0, or 0.06 x at a switch-on at slice 31;
+  - a small random start never breaks the symmetry.
+  - The weak start only sets the direction. Each patch unit gets its own learning rate, from the scale of its full
+    reference.
+- **Grain metric (4231229).** Specks (ink components of at most 2 px) and ink components per image:
+  - plain 0.52-0.54 and 1.84-1.90;
+  - K = 1536 0.47 and 1.74;
+  - oracle start at slice 70 0.05 and 1.09;
+  - real digits 0.01 and 1.03.
+  - Along the oracle curve they track FID with r = 0.99-1.00. More global states mainly raise coverage (recall);
+    patches target the grain.
+- **Cost.** 7:3:32 adds 200,704 W + Q couplings, the same as going from K = 784 to K = 912. On the CPU the patch
+  path costs 3.5-5x the plain loss; the GPU cost is unknown until the first GPU test (E0).
+
+**Spec:**
+- `--patch SIDE:STRIDE:STATES` (7:3:32); `--patch-init-scale` (0.25); `--patch-lr-scale`; `--patch-on-slice K`
+  (switch-on variant).
+- Deterministic slices and pads, no scatter. Terms are added last.
+- `load_params` refuses a patch run unless the caller takes the units; `--fast` refuses patch runs.
+- Test block 19, plus a de-risk step: the integrated code must reproduce the judge's loss changes to 1e-6.
+
+**Rejected:** shared (convolutional) templates, the hierarchical coupling, a gather/scatter implementation, a
+full-strength or residual start, a small random start, one shared learning rate.
+
+**Plan:**
+- Build: a builder agent in `patch_dev/` (started 00:00).
+- Then two independent reviews.
+- Then GPU:
+  - E0: cost and reproducibility;
+  - E1 pilot seed 1: P-A (from slice 0) and P-B (from slice 31);
+  - E2 seeds 2-3 only if the pilot meets the go rules (spec section 10): FID -1, or specks <= 0.40 with FID no
+    worse.
+- **Coupling-matched baseline submitted:** K = 912 seed 1 (pipeline 4231752, then equil:3 sampling 4231753).
+
+### Patch Potts: built, tested, installed; E0 and the pilot submitted (2026-11-13 01:45)
+**Build (builder agent, 00:05-01:40; installed 01:22:17 by `patch_dev/install.sh`).**
+- Install method: each file checked against the pre-install snapshot `out/latent_physical_SGM/patch_dev/pkg/latent_orig`
+  and against the tested sha256 list, then moved atomically into place.
+- **Changed files:**
+  - `latent_model.py`: `patch_terms`, `patch_free_energy`, `patch_reference`, `patch_lr_scales`, `patch_unit_stats`,
+    `PatchGeometry`.
+  - `train_latent.py`: the four flags; switch-on; per-patch learning-rate arrays; diagnostics.
+  - `sample_latent.py`: `load_params(with_patch=)`, `make_drift(patch=)`, `init_start(patch=)`.
+  - `early_slices.py`: patch rows.
+  - The three check scripts.
+  - `test_latent.py`: block 19.
+- **New:** `grain_stats.py`, `patch_bench_check.py`.
+- **Tests:**
+  - Block 19 passed 50/50: gradient 2e-16 and Laplacian 4e-15 vs autodiff; mixed-precision gradient error/noise
+    <= 6e-6; scatter and gather counts unchanged.
+  - Blocks 13-18 all passed, both on the candidate and again on the installed files (jobs 4232044/45/100,
+    4232192/97/98).
+- **De-risk step:** the installed code reproduces the design judge's four loss changes (4231616) to 8e-13 relative or
+  better.
+- **Default path:** bit for bit unchanged, with and without harmonic modes (losses, gradients, jaxprs, runner, drift,
+  sampler, history files).
+- **Patch reference on `mnist28_d0123` 7:3:32:**
+  - k-means: 62 s; median explained variance 0.80 (min 0.66); no empty clusters.
+  - `lr_Wp` medians: 1.6 / 2.7 / 4.0e-5 at slices 31 / 45 / 60, as specified.
+  - The per-patch spread of the learning-rate scale (max/min) grows at low t: 2.0 / 2.3 / 8.4 / 130 at slices
+    0 / 60 / 80 / 99. These are border patches. To watch.
+- **Toy run** (gauss2_8, 100 slices): at slice 99 the patch units collapse to 2 effective states (11 dead).
+  Watch `patch_states_below_1e-6` on MNIST too.
+- **Still open:** the two independent reviews (spec 8(3)) were launched at 01:45 and run in parallel with the GPU
+  queue. If they find a real bug, the pilot is cancelled or re-run.
+
+**Submitted (01:44):**
+- **E0** (GPU cost and reproducibility, 3 slices each):
+  - runs: plain K = 784 twice; patch twice; patch switch-on at slice 1; K = 912; K = 1536;
+  - job: 4232341, followed by the CPU check 4232342 (`patch_bench_check.py`).
+- **E1 pilot, seed 1:**
+  - **P-A**, `--patch 7:3:32` from slice 0: pipeline 4232343.
+  - **P-B**, `--patch 7:3:32 --patch-on-slice 31 --patch-init-scale 0.06`: pipeline 4232344.
+  - Time limit 6 h each, because the GPU cost is unknown; on the CPU a patch step costs 3.5-5x a plain one, and the
+    plain pipeline takes 42 min.
+  - equil:3 sampling: 4232345 / 4232346.
+  - FID 4232347, compared with plain seed 1, K = 912 seed 1 and K = 1536, each with both starts.
+  - Grain 4232348; `early_slices` 4232349 (slices 30, 45, 55, 65, 70, 80); training summary 4232350; gallery 4232351
+    (`patch_pilot/gallery_s1`).
+- **Decision rules (spec section 10):** go on to seeds 2-3 if FID improves by at least 1 against plain seed 1 (and is
+  not worse than K = 912), or if specks are <= 0.40 with FID no worse.
+
+**Maths review (independent agent, 02:00): no blocker, no major issue.**
+- **Verified correct:**
+  - gradient and Laplacian, including the per-pixel sums over overlapping patches;
+  - how they enter the loss (same T and ½ factors and sign as `potts_terms`);
+  - the drift sign;
+  - unfold/fold, which are exact adjoints (last row and column included);
+  - mixed precision: softmax with max subtraction, float32 at HIGHEST, loss cast to float64;
+  - `patch_reference`, the same pooled formulas as `prototype_reference` at the right τ: t = 5 for P-A, t_31 = 3.43
+    for P-B;
+  - the learning-rate rule;
+  - Adam re-initialised per slice, so keys that appear at the switch-on are handled.
+- **Risk to watch, not changed: border patches in slices about 85-99.**
+  - Near t = 0, S(τ) → S_w. In mostly-background border patches (pixel variance about 1e-3) the reference W is
+    amplified about 19x, set by the rarest cluster's template. So the per-patch learning rate of a few border units is
+    10-20x the median (max/min 130 at slice 99).
+  - Adam bounds each entry's step, and a coherent field step of about 1 T is the same regime the global unit already
+    handles. So divergence is unlikely, but border units could get noisy where specks form.
+  - Decision: no code change under the queued pilot.
+  - Check in the pilot's train_log: `lr_Wp`/`lr_bp` max and loss spikes in slices 85-99, and specks near the borders
+    in the gallery.
+  - Fix if needed: cap the per-patch scale at 8x that slice's median. This leaves slices <= 80 unchanged and could be
+    applied with `--init-from` at slice 85.
+- **Diagnostics are skewed (records only):**
+  - `patch_cos_W_Wref` and the norms are flattened over all patches, so from slice 85 on they mostly report the border
+    patches;
+  - `patch_b_rms` contains the per-patch gauge offset.
+  - Read the per-patch medians instead.
+- **Note:** `--patch-init-scale` λ scales the likelihood part, not T log π. At small λ the anti-spring grows like λ², so
+  0.25 gives about 1/16 of the reference anti-spring at t = 5. The spec measured this directly, so it is not an error.
+
+**Integration review (independent agent, 02:05): no blocker. Review round closed; the pilot runs as submitted.**
+- **Default path:** unchanged, apart from four inactive keys in config.json. This was checked in:
+  - the loss, CD-1, hebb and force-matching guards (trace time);
+  - every training branch;
+  - resume and `--init-from` of older runs;
+  - every sampler mode, and `sample_fast.py` (unchanged).
+- **Patch lifecycle:** all correct.
+  - Slice 0 is 0.25 x the reference, with no learning rate at slice 0.
+  - P-B saves zero arrays before slice 31, then switches on at slice 31 before the learning rates and carry are built.
+  - The warm start, EMA and best selection go over all keys, patches included; resume is shape-checked.
+  - equil:3 sampling uses the slice-0 patch energy (0.25 x the reference for P-A, zero for P-B), as in training.
+  - Patch drift columns: offset, sign and the factor of 2 are correct.
+  - Tools that load without `with_patch` (sampler_check, time_grid_check) refuse patch runs loudly, so none silently
+    drops the term.
+- **Minor findings:**
+  - `early_slices.py` showed all-zero units before the switch-on as 32 healthy states.
+    - Fixed at 02:10: such slices are now marked "absent" (`patch_absent` in results.json).
+    - Block 19G stays valid: it compares only the keys of the run without units.
+  - P-B's slice-31 timing includes a recompile, so leave slice 31 (like slice 0) out of the cost reading.
+  - `--ref-kmeans gpu --patch` with Ising or K = 0 is now accepted, but only the patch k-means uses the GPU. Not
+    relevant here.
+- **Scheduling risk:** E0 runs alongside the pilot, not before it, because the GPU queue is long. The 6 h limits allow
+  about a 10x slower patch step. If a run times out, the follow-ups fail loudly and a resubmit resumes.
+
+### Morning status (2026-11-13 10:00): queue stalled overnight; harmonic modes are a dead end; patch Potts cuts the mid-t loss by about 8x what K = 1536 does
+**Queue.**
+- The GPU queue did not move between 01:45 and 08:36, so no GPU job ran overnight.
+- Since 08:36: K = 3136 (4231231) and the best recipe (4231701) are running; K = 912 (4231752) is done; E0 is done; both
+  patch pilots are running (09:06, nearly finished training).
+
+**E0, GPU cost and reproducibility (4232341, check 4232342): ALL OK.**
+- **Cost:** a patch step (7:3:32) costs 1.57x a plain K = 784 step on the GPU: 745 vs 1170 steps/s. That is the same
+  as K = 1536 (1.57x); K = 912 costs 1.06x. Much cheaper than the CPU estimate of 3.5-5x.
+- **Reproducibility:** plain and patch runs are each bit for bit reproducible across processes.
+- **Switch-on:** `--patch-on-slice 1` gives slice 0 identical to plain, bit for bit, with zero patch arrays.
+
+**Harmonic modes, stage 1 (FID 4231677): no gain; dropped.**
+
+| run (seed 1) | FID, plain start | paired vs plain_1 | FID, equil:3 start | recall F |
+|---|---|---|---|---|
+| plain_1 | 20.25 | - | 17.95 | 0.42 |
+| harm64w (64 modes, within-cluster reference) | 19.98 | -0.27 [-1.61, +0.86], p 0.61 | 18.84 | 0.45 |
+| harm64wfs31 (fixed for slices 0-30) | 20.54 | +0.29 [-0.53, +1.34], p 0.61 | 19.25 | 0.46 |
+| harm16w (16 modes) | 20.19 | -0.06 [-1.33, +1.05], p 0.86 | 19.77 | 0.47 |
+
+- The validation loss barely moves: -40 at slice 60, against -99 for K = 1536.
+- With the equilibrated start the harmonic runs are worse than plain (18.8-19.8 vs 17.95).
+- A Gaussian (rank-64) correction to the global Potts mixture does not carry what is missing. No seeds 2-3.
+
+**Patch Potts pilot, validation loss per slice (train_log; lower is better).**
+
+| slice (t) | plain | K = 912 | K = 1536 | harm64w | P-A (from slice 0) | P-B (on at slice 31) |
+|---|---|---|---|---|---|---|
+| 31 (3.43) | -19334 | -19335 | -19338 | -19336 | -19341 | -19339 |
+| 45 (2.73) | -18957 | -18966 | -19007 | -18984 | -19131 | -19133 |
+| 60 (1.97) | -18333 | -18352 | -18432 | -18373 | -19088 | -19091 |
+| 70 (1.47) | -18312 | -18343 | -18433 | -18330 | -19341 | -19344 |
+| 80 (0.96) | -19375 | -19383 | -19552 | -19366 | -20778 | -20774 |
+| 90 (0.45) | -24622 | -24736 | -25121 | -24624 | -27989 | -27987 |
+| 97 (0.10) | -53100 | -53751 | -55602 | -53319 | - | -71226 |
+
+- **Mid t:** at slice 60 the patch units improve the loss by 755, against 99 for K = 1536 (7.6x) and 19 for the
+  coupling-matched K = 912 (40x). This is in line with the design panel's estimate of about 10x K-doubling.
+- **Start variants:** P-A and P-B are equal to within 5 from slice 45 on. Starting at slice 0 brings nothing, which
+  matches the panel (patch structure is invisible above t of about 3.5).
+- **Low t:** the gain grows (slice 90: -3367 vs -500 for K = 1536).
+- **Watch:** the patch units' occupation narrows at low t.
+  - P-A at slice 90: effective states 19.0 median and 1.7 minimum per patch, 20 dead states, <max p> 0.80.
+  - P-B at slice 97: 48 dead, <max p> 0.95.
+  - The patch force dominates there (patch/global/local rms 0.63/0.05/0.32 at slice 97).
+- The validation loss is score matching, not sample quality. FID, grain and gallery follow once the pilots finish
+  sampling (pipeline default sampler, then equil:3 4232345/46, FID 4232347, grain 4232348, early_slices 4232349,
+  gallery 4232351).
+
+### Results: patch Potts halves the FID (20.3 -> 10.6) and removes the grain (2026-11-13 10:20; pilots 4232343/44, FID 4236364, grain 4236365, gallery 4236366, early_slices 4232349)
+**Pilot, seed 1, default start (sde_base_n500), 500 samples each:**
+
+| run | FID (sd) | paired vs plain_1 | prec F | recall F | confident | specks / image | ink components / image |
+|---|---|---|---|---|---|---|---|
+| real training images (n = 500 floor) | 4.57 | - | 0.88 | 0.89 | 98.4 % | 0.01 | 1.03 |
+| plain_1 (K = 784) | 20.25 (1.68) | - | 0.94 | 0.42 | 98.8 % | 0.52 | 1.84 |
+| K = 912 (same couplings as the patches) | 19.12 (1.67) | - | 0.94 | 0.45 | 97.4 % | 0.51 | 1.82 |
+| K = 1536 | 16.84 (1.38) | - | 0.95 | 0.53 | 98.0 % | 0.47 | 1.74 |
+| **P-A, patches from slice 0** | **10.70** (1.42) | **-9.55** [-10.84, -7.42] | 0.76 | 0.85 | 88.4 % | **0.03** | 1.28 |
+| **P-B, patches from slice 31** | **10.55** (1.37) | **-9.70** [-10.72, -7.65] | 0.79 | 0.85 | 88.2 % | **0.05** | 1.26 |
+
+- **Comparisons:** P-A vs K = 912 -8.4 FID; vs K = 1536 -6.1 FID (all p < 0.005). P-B vs P-A -0.15
+  [-0.80, +0.64], so the two are equal. Both pass the go rule (spec section 10) by far.
+- **Grain** (grain_stats, deviation from real test images in units of their per-image SD):
+  - specks +4.8 (plain) -> +0.17 (P-A);
+  - ink components +3.3 -> +1.0;
+  - speckle energy +2.0 -> +0.5;
+  - the mid-grey fraction is now normal.
+- **Gallery** (`patch_pilot/gallery_s1_default/compare.png`, same start and noise per column):
+  - Each trajectory keeps its digit; the high-t decision is unchanged.
+  - The noise cloud around the strokes is gone: solid strokes, clean background, closed rings.
+- **What is left:** some shapes are locally clean but globally wrong:
+  - a '0' drawn as an open 'C';
+  - '2's with crossed 'x'-like strokes;
+  - '3's that look like '5';
+  - a '1' with a hook and a detached dot;
+  - a few blobs.
+- **Reading the trade-off:**
+  - Recall roughly doubles (0.42 -> 0.85, real 0.89): the samples now cover the shape variety.
+  - Precision drops below real (0.94 -> 0.78, real 0.88), and 12 % are not confidently one of 0-3 (the classifier
+    sees a few 4/5/7/8).
+  - The patches are independent experts, so nothing ties a stroke to the digit the global state chose. Local strokes
+    are right; global consistency now limits.
+- **Pipeline evaluation (LDA):**
+  - %far 14.8 vs 5.4 (K = 912) and 10.0 (data); clean, class-averaged, 80 vs 93 (data 87).
+  - The higher %far is consistent with the new variety and the off-class shapes.
+  - Copy rate 0.6 %, so no memorisation.
+- **early_slices (4232349):**
+  - At slices 30-55 the patch runs are closer to the exact score (slice 45: 0.0316 vs 0.0348).
+  - At slices 65-80 they are 1-2 % further from it.
+  - Digit agreement and states per class are unchanged.
+  - Caution: the "exact score" there is the score of the training-set mixture. At t < 1.7 it points to the nearest
+    training image (memorisation), so it does not measure the generalising gain that the validation loss and FID
+    show. Do not read the earlier "mid-t is capacity-limited" verdict (4231198) from this metric alone.
+  - Patch occupation at slices 45-80: effective states 18-27 median (min 1.3-9), dead 0-8. Healthy; the collapse seen
+    in the toy run does not happen on MNIST at mid t (at slice 99 the train_log shows dead 127 of 2048).
+- **Cost:** training 1:04 / 0:59 h vs 0:42 h for plain; sampling 546 s vs about 500 s.
+
+**Decision and next runs (10:25):**
+- E2: P-B seeds 2 and 3, pipelines 4236383/84, equil:3 sampling 4236386/87.
+- Stack test: K = 1536 + patches (P-B) seed 1, pipeline 4236385, equil:3 4236388.
+- Follow-ups: FID 4236389 (each against plain of the same seed; equilibrated vs default start; K = 1536 + patches vs
+  K = 1536), grain 4236390, gallery 4236391 (`patch_pilot/gallery_seeds`).
+- Still queued from the pilot: equil:3 for P-A and P-B (4232345/46), with FID, grain and gallery 4232347/48/51.
+- Next design step if seeds 2-3 hold: global consistency.
+  - Several patch sizes (e.g. 14:7 added to 7:3) keep the single bipartite layer: exact, instant equilibration,
+    local learning.
+  - Only if that fails: the tree coupling (global state biases the patch states). It is exact in simulation, but a
+    device would equilibrate slowly.
+
+### Patches clean the strokes but override the global shape; three shape tests submitted (2026-11-13 10:50)
+**Gallery reading (the user, B1 vs K = 1536):**
+- B1 has no speckle, but some samples are not proper digits.
+- K = 1536 keeps consistent shapes but is speckled, yet its FID is worse (16.8 vs 10.6).
+- So FID here mostly measures speckle: speckle shifts every image's classifier features a little, while broken shapes
+  shift about 12 % of them a lot.
+- From now on, report FID together with precision (0.94 -> 0.78) and the confident share (98.8 % -> 88 %), which do
+  show the shape defect.
+
+**Why the shape breaks.** Force decomposition in B1's train_log (rms per pixel):
+
+| slice (t) | 31 (3.43) | 40 (2.98) | 50 (2.47) | 60 (1.97) | 70 (1.47) | 80 (0.96) | 99 (0) |
+|---|---|---|---|---|---|---|---|
+| patch | 0.004 | 0.029 | 0.065 | 0.105 | 0.137 | 0.168 | 1.12 |
+| global Potts (K = 784) | 0.016 | 0.019 | 0.016 | 0.013 | 0.015 | 0.021 | 0.090 |
+| local | 0.005 | 0.004 | 0.004 | 0.003 | 0.006 | 0.046 | 0.85 |
+
+- The patch force overtakes the global force at t of about 3 and is 8x larger by t = 2.
+- From mid t on, the independent 7x7 experts decide the strokes, and the whole-image template is only a weak hint. A
+  faint part of a ring can be cleaned away (a '0' becomes a 'C').
+
+**Three shape tests, all seed 1, default start:**
+1. **Stronger global unit:** K = 1536 + 7:3:32 on at 31. Already queued (4236385).
+2. **Bigger patches:** 14:7:64, i.e. 9 patches of 14x14 with 64 states, 225,792 couplings, about the same as 7:3:32's
+   200,704. On at 31, init 0.06. Pipeline 4236523.
+3. **Later switch-on:** 7:3:32 on at slice 55 (t = 2.22), init 0.06, so the global unit fixes the shape before the
+   patches act. Pipeline 4236524.
+
+- Follow-ups: FID 4236525 (pairs vs B1 and plain; read precision and the confident share too), grain 4236526,
+  gallery 4236527 (`patch_pilot/gallery_shape`).
+- If none of the three keeps both clean strokes and the shapes:
+  - multi-scale patches (7:3 + 14:7 in one layer; needs `--patch` to take several specs);
+  - then the tree coupling.
+
+### K = 3136: another -3.4 FID per doubling, shapes stay clean (2026-11-13 11:20; pipeline 4231231, FID 4236581, grain 4236582, gallery 4236596)
+| run (seed 1, default start) | FID (sd) | prec F | recall F | confident | specks | ink components |
+|---|---|---|---|---|---|---|
+| plain K = 784 | 20.25 (1.68) | 0.94 | 0.42 | 98.8 % | 0.52 | 1.84 |
+| K = 1536 | 16.84 (1.53) | 0.95 | 0.53 | 98.0 % | 0.47 | 1.74 |
+| **K = 3136** | **13.48** (1.43) | **0.95** | 0.63 | **98.8 %** | 0.31 | 1.51 |
+| 7x7 patches (B1) | 10.55 (1.55) | 0.79 | 0.85 | 88.2 % | 0.05 | 1.26 |
+
+- **FID:** K = 3136 vs K = 1536 -3.35 [-4.71, -1.74]. Each doubling of K so far gives about -3.4 FID (784 -> 1536 -> 3136),
+  with no sign of saturation yet.
+- **B1 vs K = 3136:** -2.93 [-4.58, -0.51], p 0.02.
+- **Gallery** (`convergence_study/gallery_K3136/`): every sample is a clear digit, with no broken or off-class shapes. Precision
+  stays at 0.95 and the confident share at 98.8 %.
+- **Grain:** less than K = 1536 (specks 0.47 -> 0.31) but still clearly visible: speckle along the strokes and filled-in
+  ring interiors.
+- **Pipeline evaluation:** %far 0.4 (data 10.0), clean (class-averaged) 97.2, median NN 4.12 (data 4.41), copy 0.4 %.
+  The samples sit closer to the training set than held-out digits do; this is the prototype effect.
+- **Cost:** 2:23 h pipeline (K = 784: 0:42 h).
+- **Reading:** global states buy shape and precision; 7x7 patches buy texture and recall. This is the case for combining
+  them. K = 1536 + patches (4236385) tests whether the global shape holds against the patch force. If it does,
+  K = 3136 + patches is the next candidate.
+- equil:3 sampling for K = 3136 queued: 4236583.
+
+### The equilibrated start stacks with the patches: B1 + equil:3 = FID 8.65 (2026-11-13 12:00; sampling 4232345/46, 4231753; FID 4232347; gallery 4232351)
+| run (seed 1) | FID, default start | FID, equil:3 | change | precision F, equil:3 | confident, equil:3 |
+|---|---|---|---|---|---|
+| plain K = 784 | 20.25 | 17.95 | -2.3 | 0.94 | 98.6 % |
+| K = 912 | 19.12 | 17.16 | -2.0 | 0.94 | 96.6 % |
+| K = 1536 | 16.84 | 15.01 | -1.8 | 0.95 | 97.8 % |
+| P-A (patches from slice 0) | 10.70 | 9.74 | -1.0 | 0.78 | 89.8 % |
+| **P-B (patches from slice 31)** | 10.55 | **8.65** | **-1.9** | 0.78 | 89.6 % |
+
+- **Best FID so far: 8.65.** The floor at n = 500 is 4.57.
+- **B1_eq vs plain_1eq:** -9.30 [-10.33, -7.55]; vs K = 1536 + equil:3 -6.36 (both p < 0.005).
+- **B1_eq vs A1_eq:** -1.09 [-1.89, -0.30], p 0.01. With the equilibrated start, P-B is better than P-A, presumably because
+  P-A's slice-0 energy contains the weak patch units, which the start relaxes under.
+- **Shapes:** precision and the confident share do not change with the start. The gallery (`patch_pilot/gallery_s1/B1_eq.png`)
+  shows the same defects: open 'C'-shaped zeros, '1's with a detached dot ('!'), crossed '2's. The start fixes class
+  balance, not shape.
+- **Recipe so far:** `--patch 7:3:32 --patch-on-slice 31 --patch-init-scale 0.06` + `--init-dist equil:3`.
+
+### Best global-only recipe: K = 1536 + early 2x + equilibrated start = FID 13.55 (2026-11-13 12:10; pipeline 4231701, equil:3 4231702, FID 4231703, gallery 4231704)
+| run (seed 1) | FID default | FID equil:3 | prec F (eq) | recall F (eq) | confident (eq) |
+|---|---|---|---|---|---|
+| plain K = 784 | 20.25 | 17.95 | 0.94 | 0.45 | 98.6 % |
+| early 2x, K = 784 | 18.56 | 17.18 | 0.94 | 0.49 | 98.2 % |
+| K = 1536 | 16.84 | 15.01 | 0.95 | 0.54 | 97.8 % |
+| **K = 1536 + early 2x** | 14.43 | **13.55** | 0.94 | 0.59 | 98.8 % |
+
+- **Early 2x at K = 1536:** -2.40 FID with the default start [-3.59, -1.12] and -1.46 with equil:3 [-2.61, -0.49]. That is more
+  than early 2x at K = 784 (-1.7).
+- **Stacking:** all three global-side fixes add up, 20.25 -> 13.55.
+- **Gallery** (`convergence_study/gallery_best/K1536e2x_eq.png`): every sample is a clean digit shape, but the strokes are
+  still speckled.
+- **Status of the options:**
+  - option 3 (best recipe) worked: -6.7 FID with shapes intact, but still about 5 FID behind the patch run with
+    equil:3 (8.65);
+  - option 1 (patches) is ahead on FID, behind on shape.
+- **Natural combination:** K = 1536 + early 2x + patches (on at 31) + equil:3. Wait for K = 1536 + patches (4236385)
+  first, to see whether the stronger global unit protects the shapes.

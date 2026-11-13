@@ -57,6 +57,60 @@ at t_k, the logs, hidden_history.npz 't', and the paper comparison (the paper's 
 config.json as 'time_grid' ('uniform' by default and for runs without the key): a run resumes only on its own grid,
 --init-from takes a source run on another grid only if the linked slices sit at identical times (e.g. slices 0..K of
 a uniform run for power:P@K, init slices <= K + 1), and the samplers read the knots from it.
+Option --harmonic R (2026-11-12): R harmonic hidden modes, linear oscillators integrated out exactly, add
+F_h = -1/2 sum_j (v_j . x + c_j)^2 to the free energy (latent_model.harmonic_terms; parameters V (R x N) and c (R) in
+the params dict, so Adam, the EMA and the best iterate handle them like every other group). They only add variance
+along their v_j, so the model can carry the near-Gaussian covariance of the high-t slices directly instead of building
+it from the spread of the Potts states. Reference (latent_model.harmonic_reference): the R strongest modes of the
+Gaussian approximation N(e^-t mu, e^-2t C + T (1 - e^-2t) I) of each slice's forward distribution, mu and C the
+training data's (sample_latent.data_stats; the cache out/latent_physical_SGM/data_stats/ shared with sample_latent.py
+--init-dist gauss). Slice 0 starts from the reference at t_0 = 5 (held there, like the hidden units, during the first
+--freeze-hidden-slices slices); every later slice warm-starts from the previous one. Learning rates: --hidden-lr-scale
+times the reference's root-mean-square entry of V and of c (floored at T) at the slice (latent_model.harmonic_lr_scales),
+times --harmonic-lr-scale. --harmonic-fixed: the modes are this slice's reference in every slice, not trained.
+--harmonic-fixed-slices N: the reference in slices 0..N-1 only, trained from slice N on (warm-started from slice N-1's
+reference); below t of about 3 the reference's anti-springs exceed a trained run's visible springs (harmonic_analysis.py,
+job 4230722), so fixing them everywhere asks the springs to grow by up to T / iso_0 = 24 at t = 0 (mnist28_d0123).
+--harmonic-ref within (opt-in; default 'full', the above): the reference is built from the shared component
+covariance S_w of the Potts prototype init (latent_model.prototype_reference(..., return_stats=True): the part of C
+the prototypes do not carry) instead of from C. The full reference's modes also carry the prototypes' between-cluster
+spread, which the Potts unit carries already (along PC 1 at t = 5 the plain seed-1 run's Potts layer supplies 93% of
+the full reference's anti-spring; harmonic_analysis.py), so slice 0's start and every fixed slice count it twice;
+with 'within' the prototype Potts unit plus the modes plus isotropic springs is exactly the prototypes' Gaussian
+mixture. Its spectrum is saved in harmonic_within.npz at the first start and reused on resume. --harmonic-lr-tmin t0
+(opt-in; default 0, off): below t0 the modes' learning-rate scales keep their value at t0 (the reference's isotropic
+spring T / iso_t rises from 1.15 at t = 1 to 24.5 at t = 0, far above a trained run's springs, so the reference's
+scale overstates the modes' size there).
+Diagnostics per slice (record keys harm_*: norms, cosines and added variance against the reference, the curvature of
+the visible springs minus the modes at x = 0, the modes beyond the springs along their own directions;
+latent_model.harmonic_unit_stats); V and c are saved in every slice file and in hidden_history.npz (members V, c after
+all others). Recorded in config.json (harmonic, harmonic_fixed, harmonic_lr_scale, harmonic_fixed_slices,
+harmonic_ref, harmonic_lr_tmin; 0, False, 1.0, 0, 'full', 0.0 for runs from before); the reference's data statistics
+in harmonic_reference.json. A run resumes only with the same values (strict, as every option); --init-from takes only a
+source with the same modes (harmonic, harmonic_fixed, harmonic_fixed_slices, harmonic_ref; harmonic_lr_scale and
+harmonic_lr_tmin are free, they act on the new slices only). Needs exact hidden statistics and the exact rule (not
+with --hidden-samples, --hidden-rule cd1 or --hidden-norm other than element).
+Option --patch SIDE:STRIDE:STATES (2026-11-13; e.g. 7:3:32): per-patch Potts hidden units. P = ((G - SIDE)/STRIDE + 1)^2
+units with STATES states each, unit p coupled only to the SIDE x SIDE pixels x_p of its patch (fields a_ps = bp_ps +
+Wp_ps . x_p, plus Qp_ps . x_p^2 with --quad, Qp starting at 0), integrated out exactly: F_patch = -T sum_p log sum_s
+exp(a_ps / T) (latent_model.patch_terms; parameters Wp (P, S, d), bp (P, S), Qp in the params dict, added after every
+other term, so Adam, the EMA and the best iterate handle them like every other group). Reference per patch
+(latent_model.patch_clusters / patch_reference): prototype_reference's pooled branch on the patch vectors, k-means
+seeds 20000 + 1000 (seed - 1) + p; written to patch_reference.json at the first start. Start: --patch-init-scale LAM
+(default 0.25) times the reference at the start slice (a tempered expert: W = LAM (W* - pi W*), b = T log pi - LAM
+W*.mu / 2, centred), held during --freeze-hidden-slices like every hidden unit. --patch-on-slice K (opt-in variant):
+no patch units in slices 0..K-1 (exactly the plain computation; their slice files carry zero patch arrays), switched
+on at slice K at LAM x the reference at t_K (LAM must then be given; 0.06 is the measured safe value at slice 31, job
+4231616) and trained from slice K on. Learning rates per unit: --hidden-lr-scale x --patch-lr-scale x the
+root-mean-square entry of that unit's scale-1 reference at the slice (W and Q; for b floored at T), always from the
+seed-1 clustering (latent_model.patch_lr_scales), times --lr-scale. Diagnostics per slice (record keys patch_*: norms,
+cosine to the reference, effective states, dead states, <max p>; force_rms_vis / _glob / _loc / _patch, the force
+decomposition on the validation batch in float64; latent_model.patch_unit_stats); Wp, bp, Qp and patch_eff are saved in
+every slice file, Wp, bp, Qp in hidden_history.npz after every other member. Recorded in config.json (patch,
+patch_init_scale, patch_lr_scale, patch_on_slice; '', 0.25, 1.0, 0 for runs from before); a run resumes only with the
+same values, --init-from takes only a source with the same patch, init scale and on-slice (patch_lr_scale is free).
+Needs exact hidden statistics, the exact rule with per-element Adam, trained units and both classes (not with
+--hidden-samples, --hidden-rule cd1, --hidden-norm other than element, --hidden-fixed or --cls).
 Every slice file also stores the per-sample losses on the fixed validation batch (and the paper checkpoint's, for
 mnist28), for paired comparisons between runs (the validation batch of slice k is drawn with the key of k at the
 slice's t, so runs on different grids share it only where their slice times agree: slices 0 and 99 for power:P
@@ -68,6 +122,7 @@ finished slice. Run under Slurm: cd physical-diffusion-models/latent_physical_SG
 
 import argparse
 import fcntl
+import hashlib
 import json
 import os
 import sys
@@ -267,6 +322,52 @@ def parse():
                          "start, so that a release moves the hidden fields by about kappa T")
     ap.add_argument("--cd1-dt", type=float, default=0.0, help="cd1: a fixed release length instead (if > 0)")
     ap.add_argument("--cd1-releases", type=int, default=1, help="cd1: independent releases per sample")
+    ap.add_argument("--harmonic", type=int, default=0,
+                    help="R > 0: add R harmonic hidden modes (linear oscillators integrated out exactly), F_h = -1/2 "
+                         "sum_j (v_j . x + c_j)^2, parameters V (R x N) and c (R); slice 0 starts from the closed-form "
+                         "reference (the R strongest modes of the Gaussian approximation of the forward distribution, "
+                         "from the training data's mean and covariance; latent_model.harmonic_reference), later slices "
+                         "warm-start. 0 (default): none, every path as before")
+    ap.add_argument("--harmonic-fixed", action="store_true",
+                    help="with --harmonic R: the modes are each slice's closed-form reference, not trained")
+    ap.add_argument("--harmonic-fixed-slices", type=int, default=0,
+                    help="with --harmonic R (not --harmonic-fixed): the modes are the closed-form reference in slices "
+                         "0..N-1 only (t >= t_{N-1}, where p_t is nearly Gaussian) and trained from slice N on, "
+                         "warm-started from slice N-1's reference; 0 (default): not used")
+    ap.add_argument("--harmonic-lr-scale", type=float, default=1.0,
+                    help="with --harmonic R: multiplies the modes' learning rates (--hidden-lr-scale x the reference's "
+                         "root-mean-square entry of V and of c at the slice; latent_model.harmonic_lr_scales)")
+    ap.add_argument("--harmonic-ref", choices=("full", "within"), default="full",
+                    help="with --harmonic R: the closed-form reference of the modes (slice 0's start, the fixed slices, "
+                         "the learning-rate scales and the diagnostics). 'full' (default): the R strongest modes of "
+                         "the data covariance C. 'within': those of the shared component covariance S_w of the Potts "
+                         "prototype init (latent_model.prototype_reference: C minus the prototypes' spread), so that "
+                         "the prototype Potts unit plus the modes plus isotropic springs is exactly the prototypes' "
+                         "Gaussian mixture and the modes do not count the between-cluster covariance a second time; "
+                         "needs --hidden potts with K >= 2, --proto-init pooled or perclass, --cls none")
+    ap.add_argument("--harmonic-lr-tmin", type=float, default=0.0,
+                    help="with --harmonic R: below forward time t0 the modes' learning-rate scales stay at their value at "
+                         "t0 (latent_model.harmonic_lr_scales at max(t_k, t0)): the reference's isotropic spring T / iso_t "
+                         "grows from 1.15 at t = 1 to 24.5 at t = 0 (mnist28_d0123's pixel noise), far above a trained "
+                         "run's springs, so its scale overstates the modes' there. 0 (default): no floor")
+    ap.add_argument("--patch", default="",
+                    help="per-patch Potts hidden units SIDE:STRIDE:STATES, e.g. 7:3:32: one unit with STATES states per "
+                         "SIDE x SIDE patch of a grid of overlapping patches with stride STRIDE, coupled only to its "
+                         "patch (Wp, bp, plus Qp with --quad), integrated out exactly (latent_model.patch_terms); start "
+                         "--patch-init-scale x the per-patch prototype reference. '' (default): none, every path as "
+                         "before")
+    ap.add_argument("--patch-init-scale", type=float, default=None,
+                    help="with --patch: the initial templates are LAM x the per-patch reference at the start slice "
+                         "(default 0.25; must be given with --patch-on-slice > 0, where 0.06 is the measured safe value "
+                         "at slice 31)")
+    ap.add_argument("--patch-lr-scale", type=float, default=1.0,
+                    help="with --patch: multiplies the per-unit learning rates (--hidden-lr-scale x the rms of each "
+                         "unit's scale-1 reference at the slice; latent_model.patch_lr_scales)")
+    ap.add_argument("--patch-on-slice", type=int, default=0,
+                    help="with --patch: 0 (default) the units take part from slice 0 (held during "
+                         "--freeze-hidden-slices); K > 0: no patch units in slices 0..K-1 (exactly the plain "
+                         "computation), switched on at slice K at --patch-init-scale x the reference at t_K and trained "
+                         "from slice K on")
     ap.add_argument("--seed", type=int, default=lm.KEY_SEED,
                     help="training seed (>= 1 for Potts units and for Ising units other than the K = 1 Fisher unit): "
                          "the optimisation key chain jr.PRNGKey(seed) and, for Potts units, the k-means seeds "
@@ -416,15 +517,18 @@ def split_dead_states(params, X, spread, temp=lm.TEMP, dead_below=1e-6, n_power=
     return new, info
 
 
-def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None):
+def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, harmonic=False, patch=False,
+                  patch_quad=False):
     """The sampler's input: params_history.npy (theta per slice) and hidden_history.npz (W, b, t, then wl, bl with
-    --local, then Q with --quad and K > 0), stacked in slice order. Slices in `held` (slice -> the arrays as saved in
-    its slice file; --assemble memory) are taken from memory, all others are read from their slice files (every
-    slice with --assemble files, and slices made by an earlier job: resume, --init-from). The same arrays in the same
-    order either way, so the files hold the same bytes (the zip entries of the .npz carry their write time). Returns
-    the shape of the theta history."""
+    --local, then Q with --quad and K > 0, then V, c with --harmonic, then Wp, bp with --patch and Qp with --patch and
+    --quad), stacked in slice order. Slices in `held`
+    (slice -> the arrays as saved in its slice file; --assemble memory) are taken from memory, all others are read
+    from their slice files (every slice with --assemble files, and slices made by an earlier job: resume,
+    --init-from). The same arrays in the same order either way, so the files hold the same bytes (the zip entries of
+    the .npz carry their write time). Returns the shape of the theta history."""
     held = held or {}
-    thetas, Ws, bs, wls, bls, Qs = [], [], [], [], [], []
+    thetas, Ws, bs, wls, bls, Qs, Vs, cs = [], [], [], [], [], [], [], []
+    Wps, bps, Qps = [], [], []
     for k in range(n_slices):
         s = held[k] if k in held else np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
         thetas.append(s["theta"])
@@ -435,6 +539,14 @@ def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None):
             bls.append(s["bl"])
         if quad:
             Qs.append(s["Q"])
+        if harmonic:
+            Vs.append(s["V"])
+            cs.append(s["c"])
+        if patch:
+            Wps.append(s["Wp"])
+            bps.append(s["bp"])
+            if patch_quad:
+                Qps.append(s["Qp"])
     tmp = os.path.join(out_dir, "params_history.tmp.npy")
     theta_hist = np.stack(thetas)
     np.save(tmp, theta_hist)
@@ -443,6 +555,12 @@ def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None):
     loc = {"wl": np.stack(wls), "bl": np.stack(bls)} if local else {}
     if Qs:
         loc["Q"] = np.stack(Qs)
+    if harmonic:
+        loc.update(V=np.stack(Vs), c=np.stack(cs))
+    if patch:                                    # per-patch units: after every other member
+        loc.update(Wp=np.stack(Wps), bp=np.stack(bps))
+        if patch_quad:
+            loc["Qp"] = np.stack(Qps)
     np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
     os.replace(tmp, os.path.join(out_dir, "hidden_history.npz"))
     return theta_hist.shape
@@ -800,7 +918,8 @@ def main():
         raise ValueError("--split-dead needs trained Potts units (--hidden potts, --K >= 2, not --hidden-fixed)")
     if split_slices and not args.split_spread >= 0.0:
         raise ValueError("--split-spread must be >= 0")
-    if args.ref_kmeans == "gpu" and not (args.hidden == "potts" and args.K > 0):
+    patch = lm.parse_patch_spec(args.patch, lm.problem_geometry(args.problem)[0])   # None, or (side, stride, S)
+    if args.ref_kmeans == "gpu" and not (args.hidden == "potts" and args.K > 0) and patch is None:   # --patch: also
         raise ValueError("--ref-kmeans gpu is the k-means of the Potts prototype reference (--hidden potts, --K > 0)")
     if args.neighbourhood != "chebyshev" and args.radius is None:
         raise ValueError("--neighbourhood von_neumann needs an explicit --radius")
@@ -810,6 +929,55 @@ def main():
                                       or (args.cd1_dt <= 0 and args.cd1_kappa <= 0)):
         raise ValueError("--hidden-rule cd1 needs trained hidden units (--K > 0 or --local, not --hidden-fixed), "
                          "--cd1-releases >= 1, and --cd1-dt > 0 or --cd1-kappa > 0")
+    n_pix = lm.problem_geometry(args.problem)[0] ** 2
+    if not 0 <= args.harmonic <= n_pix:
+        raise ValueError(f"--harmonic {args.harmonic}: the number of harmonic modes must lie in 0..{n_pix} (the pixels "
+                         f"of {args.problem})")
+    if args.harmonic_fixed and not args.harmonic:
+        raise ValueError("--harmonic-fixed needs --harmonic R > 0")
+    if args.harmonic_fixed_slices and not (args.harmonic and not args.harmonic_fixed
+                                           and 1 <= args.harmonic_fixed_slices < lm.N_TIME_STEPS):
+        raise ValueError(f"--harmonic-fixed-slices {args.harmonic_fixed_slices}: needs --harmonic R > 0, not "
+                         f"--harmonic-fixed, and a slice count in 1..{lm.N_TIME_STEPS - 1}")
+    if not (np.isfinite(args.harmonic_lr_scale) and args.harmonic_lr_scale > 0.0):
+        raise ValueError(f"--harmonic-lr-scale {args.harmonic_lr_scale}: must be > 0")
+    if args.harmonic and (args.hidden_samples > 0 or args.hidden_rule != "exact" or args.hidden_norm != "element"):
+        raise ValueError("--harmonic needs exact hidden statistics and the exact rule with per-element Adam (not with "
+                         "--hidden-samples, --hidden-rule cd1 or --hidden-norm group / state / occupancy)")
+    if args.harmonic_ref != "full" and not (args.harmonic and args.hidden == "potts" and args.K >= 2
+                                            and args.proto_init in ("pooled", "perclass") and args.cls == "none"):
+        raise ValueError(f"--harmonic-ref {args.harmonic_ref}: the within-cluster reference needs --harmonic R > 0 and a "
+                         f"Potts prototype init (--hidden potts, --K >= 2, --proto-init pooled or perclass) of the "
+                         f"training data (--cls none)")
+    if args.harmonic_lr_tmin != 0.0 and not (args.harmonic and np.isfinite(args.harmonic_lr_tmin)
+                                             and 0.0 < args.harmonic_lr_tmin <= lm.T_FORWARD):
+        raise ValueError(f"--harmonic-lr-tmin {args.harmonic_lr_tmin}: needs --harmonic R > 0 and a time in "
+                         f"(0, {lm.T_FORWARD:g}]")
+    if patch is None and (args.patch_init_scale is not None or args.patch_lr_scale != 1.0 or args.patch_on_slice != 0):
+        raise ValueError("--patch-init-scale, --patch-lr-scale and --patch-on-slice need --patch SIDE:STRIDE:STATES")
+    if patch is not None:
+        if (args.hidden_samples > 0 or args.hidden_rule != "exact" or args.hidden_norm != "element" or args.hidden_fixed
+                or args.cls != "none"):
+            raise ValueError("--patch needs exact hidden statistics, the exact rule with per-element Adam, trained hidden "
+                             "units and both classes (not with --hidden-samples, --hidden-rule cd1, --hidden-norm group / "
+                             "state / occupancy, --hidden-fixed or --cls)")
+        if args.seed < lm.KEY_SEED:
+            raise ValueError(f"--seed {args.seed}: --patch needs --seed >= {lm.KEY_SEED} (k-means seeds "
+                             f"{lm.PATCH_SEED0} + 1000 (seed - {lm.KEY_SEED}) + patch must be >= 0)")
+        if not (np.isfinite(args.patch_lr_scale) and args.patch_lr_scale > 0.0):
+            raise ValueError(f"--patch-lr-scale {args.patch_lr_scale}: must be finite and > 0")
+        if args.patch_init_scale is not None and not (np.isfinite(args.patch_init_scale) and args.patch_init_scale > 0.0):
+            raise ValueError(f"--patch-init-scale {args.patch_init_scale}: must be finite and > 0")
+        if not 0 <= args.patch_on_slice <= lm.N_TIME_STEPS - 2:
+            raise ValueError(f"--patch-on-slice {args.patch_on_slice}: must lie in 0..{lm.N_TIME_STEPS - 2}")
+        if args.patch_on_slice > 0 and args.patch_init_scale is None:
+            raise ValueError(f"--patch-on-slice {args.patch_on_slice} needs an explicit --patch-init-scale: 0.06 is the "
+                             f"measured safe value at slice 31, where 0.25 costs +27 loss units (job 4231616)")
+    lam_p = 0.25 if args.patch_init_scale is None else float(args.patch_init_scale)   # resolved (0.25 when inactive)
+    K_on = int(args.patch_on_slice)              # --patch-on-slice (0: from slice 0)
+    geom = None
+    if patch is not None:
+        geom = lm.PatchGeometry(lm.problem_geometry(args.problem)[0], patch[0], patch[1])
     out_dir = os.path.join(args.out_root, args.name)
     slice_dir = os.path.join(out_dir, "slices")
     os.makedirs(slice_dir, exist_ok=True)
@@ -844,6 +1012,11 @@ def main():
         "steps_schedule": steps_schedule_str(steps_sched), "ref_kmeans": args.ref_kmeans, "assemble": args.assemble,
         "time_grid": time_grid,
         "split_dead": ",".join(map(str, split_slices)), "split_spread": args.split_spread,
+        "harmonic": args.harmonic, "harmonic_fixed": args.harmonic_fixed, "harmonic_lr_scale": args.harmonic_lr_scale,
+        "harmonic_fixed_slices": args.harmonic_fixed_slices, "harmonic_ref": args.harmonic_ref,
+        "harmonic_lr_tmin": args.harmonic_lr_tmin,
+        "patch": lm.patch_spec_str(patch), "patch_init_scale": lam_p, "patch_lr_scale": args.patch_lr_scale,
+        "patch_on_slice": K_on,
     }
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -862,7 +1035,12 @@ def main():
                 "init_from": None, "init_slices": 0, "lr_scale": 1.0,
                 "visible_impl": "dense", "precision": "f64", "step_impl": "default",
                 "steps_schedule": "", "ref_kmeans": "cpu", "assemble": "files",
-                "time_grid": "uniform", "split_dead": "", "split_spread": 0.5}   # runs from before these options
+                "time_grid": "uniform", "split_dead": "", "split_spread": 0.5,
+                "harmonic": 0, "harmonic_fixed": False, "harmonic_lr_scale": 1.0,
+                "harmonic_fixed_slices": 0, "harmonic_ref": "full",
+                "harmonic_lr_tmin": 0.0,
+                "patch": "", "patch_init_scale": 0.25, "patch_lr_scale": 1.0,
+                "patch_on_slice": 0}                                            # runs from before these options
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -891,7 +1069,18 @@ def main():
               f"jax {jax.__version__}; devices {jax.devices()}; code {code_sha}; config "
               f"{json.dumps({k: config[k] for k in ('problem', 'visible', 'hidden', 'K', 'cls', 'select', 'hidden_lr_scale', 'freeze_hidden_slices', 'steps_scale', 'max_slices', 'seed', 'hidden_fixed', 'hidden_rule', 'radius', 'proto_init', 'hidden_samples', 'hidden_jackknife', 'hidden_replicates', 'hidden_samples_late', 'hidden_samples_switch', 'hidden_floor', 'hidden_norm', 'occ_beta', 'hidden_jackknife_order', 'occ_same_draws', 'pair_terms', 'neighbourhood', 'ising_reseed', 'ising_weak_boost', 'visible_impl', 'precision', 'step_impl', 'steps_schedule', 'ref_kmeans', 'assemble', 'time_grid', 'split_dead', 'split_spread')})}"
               + (f"; cd1 kappa {args.cd1_kappa}, dt {args.cd1_dt}, releases {args.cd1_releases}, "
-                 f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else ""))
+                 f"hidden samples {args.cd1_hidden_samples}" if args.hidden_rule == "cd1" else "")
+              + (f"; harmonic modes {args.harmonic}" + (" (fixed at the reference)" if args.harmonic_fixed else
+                                                        f", lr scale {args.harmonic_lr_scale:g}")
+                 + (f", the reference in slices 0-{args.harmonic_fixed_slices - 1}" if args.harmonic_fixed_slices
+                    else "")
+                 + (f", {args.harmonic_ref} reference" if args.harmonic_ref != "full" else "")
+                 + (f", lr scales held at their t = {args.harmonic_lr_tmin:g} value below it" if args.harmonic_lr_tmin
+                    else "") if args.harmonic else "")
+              + (f"; patch units {lm.patch_spec_str(patch)}: P {geom.P}, d {geom.d}, S {patch[2]}, coverage "
+                 f"{int(geom.coverage.min())}-{int(geom.coverage.max())} (mean {geom.coverage.mean():.2f}), W+Q couplings "
+                 f"{geom.P * patch[2] * geom.d * (2 if args.quad else 1):,}, initial scale {lam_p:g}, on slice {K_on}, lr "
+                 f"scale {args.patch_lr_scale:g}" if patch is not None else ""))
 
     # ---- data -------------------------------------------------------------------------------------------------
     prob = lm.make_problem(args.problem, args.radius, args.neighbourhood)
@@ -954,6 +1143,7 @@ def main():
             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices, **lean)
 
     state_cls = None
+    proto_stats = None                           # --harmonic-ref within: the prototype init's S_w (prototype_reference)
     if fisher:
         W_ref, b_ref = lm.fisher_reference(data, labels, taus, lm.TEMP)
         sW = np.sqrt(np.mean(W_ref**2, axis=1))                  # reference magnitudes for the hidden lr
@@ -965,8 +1155,11 @@ def main():
         pooled = args.proto_init in ("pooled", "random")       # random: the reference only sets lr scales/diagnostics
         t_ref = time.time()
         km_fn = lm.kmeans_jax if args.ref_kmeans == "gpu" else None    # None: numpy k-means (lm.kmeans), as before
-        W_ref, b_ref, state_cls = lm.prototype_reference(data, labels, taus, lm.TEMP, K, seed=km_seed, pooled=pooled,
-                                                         kmeans_fn=km_fn)
+        want_sw = bool(args.harmonic) and args.harmonic_ref == "within"
+        ref_out = lm.prototype_reference(data, labels, taus, lm.TEMP, K, seed=km_seed, pooled=pooled,
+                                         kmeans_fn=km_fn, return_stats=want_sw)
+        W_ref, b_ref, state_cls = ref_out[:3]
+        proto_stats = ref_out[3] if want_sw else None
         if not (np.isfinite(W_ref).all() and np.isfinite(b_ref).all()):
             raise RuntimeError(f"prototype reference is not finite for --seed {args.seed} (k-means seeds {km_seed} + class)")
         # The hidden learning-rate scales always come from the default-seed reference (k-means seed 0), so that
@@ -1027,6 +1220,172 @@ def main():
         log(logf, f"local units: {int(used.sum())} of {n_vis} pixels have both modes; rms w* {swl[0]:.3g} (t=5) -> "
                   f"{swl[-1]:.3g} (t=0); rms c* {sbl[0]:.3g} -> {sbl[-1]:.3g}")
 
+    R_h = args.harmonic                          # harmonic modes (--harmonic R; 0: none, nothing below changes)
+    if R_h:
+        import sample_latent                     # data_stats: the statistics cache shared with --init-dist gauss
+        st_h = sample_latent.data_stats(args.problem, args.cls)
+        mu_h, lam_h, U_h = (np.asarray(st_h[k], dtype=np.float64) for k in ("mu", "lam", "U"))
+        mu_err = float(np.max(np.abs(mu_h - np.asarray(data_train, dtype=np.float64).mean(axis=0))))
+        if mu_h.shape != (n_vis,) or not mu_err <= sample_latent.STATS_MU_TOL:
+            raise RuntimeError(f"--harmonic: the data statistics {st_h['path']} do not describe this run's training data "
+                               f"(shape {mu_h.shape}, largest mean difference {mu_err:.3g})")
+        lam_r, U_r, within_info = lam_h, U_h, None   # the reference's spectrum: C's ('full', the default) ...
+        if args.harmonic_ref == "within":        # ... or that of the prototype init's S_w, fixed at the run's first start
+            w_path = os.path.join(out_dir, "harmonic_within.npz")
+            lam_now, U_now = lm.harmonic_within_spectrum(proto_stats["Sw"])
+            if os.path.exists(w_path):           # resume: the saved spectrum (a k-means on other hardware could differ)
+                with np.load(w_path) as zw:
+                    lam_r, U_r = np.asarray(zw["lam"], dtype=np.float64), np.asarray(zw["U"], dtype=np.float64)
+                dev = float(np.max(np.abs(lam_now - lam_r)) / lam_r[0]) if lam_r.shape == lam_now.shape else float("inf")
+                if not dev <= 1e-9:
+                    log(logf, f"WARNING: the within-cluster covariance S_w computed now differs from the run's first "
+                              f"start (largest eigenvalue difference {dev:.3g} relative to the top one); the modes keep "
+                              f"the saved reference {w_path}")
+            else:
+                lam_r, U_r = lam_now, U_now
+                save_atomic(w_path, lam=lam_r, U=U_r, counts=np.asarray(proto_stats["counts"]),
+                            pi=np.asarray(proto_stats["pi"]))
+            Sw_e = np.einsum("ij,ik,kj->j", U_h[:, :3], np.asarray(proto_stats["Sw"]), U_h[:, :3])
+            within_info = {"file": w_path, "file_sha256": lm.sha256_file(w_path), "kmeans_seed": km_seed,
+                           "pooled": pooled, "states": K, "trace_Sw": float(lam_r.sum()), "trace_C": float(lam_h.sum()),
+                           "Sw_lam_top5": [float(v) for v in lam_r[:5]], "C_lam_top5": [float(v) for v in lam_h[:5]],
+                           "Sw_share_along_C_axes_1_3": [float(v) for v in Sw_e / lam_h[:3]]}
+        t_lr = taus if args.harmonic_lr_tmin == 0.0 else np.maximum(taus, args.harmonic_lr_tmin)
+        sV, sc = lm.harmonic_lr_scales(mu_h, lam_r, U_r, R_h, t_lr)
+        w_first, iso_first = lm.harmonic_reference_strengths(lam_r, taus[0], R_h)
+        w_last, iso_last = lm.harmonic_reference_strengths(lam_r, taus[-1], R_h)
+        ref_info = {"R": R_h, "fixed": args.harmonic_fixed, "fixed_slices": args.harmonic_fixed_slices,
+                    "lr_scale": args.harmonic_lr_scale,
+                    "stats_file": st_h["path"], "stats_sha256": st_h["file_sha256"], "stats_recomputed": st_h["recomputed"],
+                    "problem": args.problem, "cls": args.cls, "n_images": st_h["n_images"],
+                    "data_file_sha256": st_h["data_file_sha256"], "lam_top5": [float(v) for v in lam_r[:5]],
+                    "lam_0": max(float(lam_r.min()), 0.0), "lam_R": float(lam_r[R_h - 1]),
+                    "iso_spring_first_last": [lm.TEMP / iso_first, lm.TEMP / iso_last],
+                    "strength_first_top5": [float(v) for v in w_first[:5]],
+                    "strength_last_top5": [float(v) for v in w_last[:5]],
+                    "lr_scale_V": [float(v) for v in sV], "lr_scale_c": [float(v) for v in sc],
+                    "slice_t": [float(v) for v in taus], "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"),
+                    "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if args.harmonic_ref != "full" or args.harmonic_lr_tmin:     # recorded only when used (the defaults: as before)
+            ref_info.update(reference=args.harmonic_ref, lr_tmin=args.harmonic_lr_tmin, within=within_info)
+        ref_path = os.path.join(out_dir, "harmonic_reference.json")
+        if not os.path.exists(ref_path):
+            with open(ref_path + ".tmp", "w") as f:
+                json.dump(ref_info, f, indent=2)
+            os.replace(ref_path + ".tmp", ref_path)
+        else:
+            with open(ref_path) as f:
+                old_ref = json.load(f)
+            if old_ref.get("stats_sha256") != ref_info["stats_sha256"]:
+                log(logf, f"WARNING: the data statistics differ from the run's first start ({old_ref.get('stats_file')} "
+                          f"sha256 {str(old_ref.get('stats_sha256'))[:16]} -> {st_h['path']} "
+                          f"{st_h['file_sha256'][:16]}); the slices from here on use the new ones")
+        log(logf, f"harmonic modes: {R_h}" + (" fixed at the reference" if args.harmonic_fixed else "")
+                  + (f", the reference in slices 0-{args.harmonic_fixed_slices - 1} and trained from slice "
+                     f"{args.harmonic_fixed_slices} on" if args.harmonic_fixed_slices else "")
+                  + f"; reference from {st_h['path']} ({st_h['n_images']} images, sha256 {st_h['file_sha256'][:16]}, "
+                  f"{'computed now' if st_h['recomputed'] else 'cached'})"
+                  + (f", within-cluster: the Potts prototype init's S_w ({K} states, k-means seed {km_seed}; trace "
+                     f"{within_info['trace_Sw']:.5g} of C's {within_info['trace_C']:.5g}; along C's axes 1-3 it keeps "
+                     f"{'/'.join(f'{v:.3f}' for v in within_info['Sw_share_along_C_axes_1_3'])} of the variance; "
+                     f"{within_info['file']})" if within_info else "")
+                  + f": lam top {lam_r[0]:.4g}, lam_R "
+                  f"{lam_r[R_h - 1]:.4g}, lam_0 {ref_info['lam_0']:.3g}; isotropic spring T/iso {lm.TEMP / iso_first:.4g} "
+                  f"(t = {taus[0]:g}) -> {lm.TEMP / iso_last:.4g} (t = {taus[-1]:g}); mode strengths |v_1|^2 "
+                  f"{w_first[0]:.4g}, |v_R|^2 {w_first[-1]:.3g} (t = {taus[0]:g}) -> {w_last[0]:.4g}, {w_last[-1]:.3g} "
+                  f"(t = {taus[-1]:g}); lr scales V {sV[0]:.3g} -> {sV[-1]:.3g}, c {sc[0]:.3g} -> {sc[-1]:.3g} (x "
+                  f"{args.hidden_lr_scale:g} x {args.harmonic_lr_scale:g}"
+                  + (f"; held at their t = {args.harmonic_lr_tmin:g} value below it" if args.harmonic_lr_tmin else "")
+                  + ")")
+
+    if patch is not None:                        # per-patch Potts units (--patch; None: none, nothing below changes)
+        S_p = patch[2]
+        km_fn_p = lm.kmeans_jax if args.ref_kmeans == "gpu" else None      # as for the global reference
+        seed0_p = lm.PATCH_SEED0 + 1000 * (args.seed - lm.KEY_SEED)
+        data64 = np.asarray(data, dtype=np.float64)
+        clus = lm.patch_clusters(data64, geom, S_p, seed0_p, km_fn_p)
+        # the learning-rate scales always come from the seed-1 clustering, as the global unit's from k-means seed 0
+        clus_lr = clus if seed0_p == lm.PATCH_SEED0 else lm.patch_clusters(data64, geom, S_p, lm.PATCH_SEED0, km_fn_p)
+        del data64
+        sWp, sbp = lm.patch_lr_scales(clus_lr, taus, lm.TEMP)
+        if not (np.all(np.isfinite(sWp)) and np.all(sWp > 0) and np.all(np.isfinite(sbp)) and np.all(sbp > 0)):
+            raise RuntimeError(f"--patch {lm.patch_spec_str(patch)}: the per-patch learning-rate scales are not all finite "
+                               f"and positive")
+        Wp0, bp0 = (a[0] for a in lm.patch_reference(clus, taus[K_on:K_on + 1], lm.TEMP, scale=lam_p))   # the start
+        if not (np.all(np.isfinite(Wp0)) and np.all(np.isfinite(bp0))):
+            raise RuntimeError(f"--patch {lm.patch_spec_str(patch)}: the start templates are not finite (--seed "
+                               f"{args.seed}, k-means seeds {seed0_p} + patch)")
+
+        def _sha(*arrs):
+            h = hashlib.sha256()
+            for a in arrs:
+                h.update(np.ascontiguousarray(a).tobytes())
+            return h.hexdigest()
+
+        ev, cnt = clus["explained_variance"], clus["counts"]
+        mmm = lambda a: [float(np.min(a)), float(np.median(a)), float(np.max(a))]     # noqa: E731
+        pref = {"spec": lm.patch_spec_str(patch), "P": geom.P, "d": geom.d, "S": S_p,
+                "coverage_min_max_mean": [int(geom.coverage.min()), int(geom.coverage.max()), float(geom.coverage.mean())],
+                "kmeans": "numpy" if km_fn_p is None else "gpu",
+                "kmeans_seeds": [int(clus["seeds"][0]), int(clus["seeds"][-1])],
+                "kmeans_seconds": float(clus["seconds"]),
+                "lr_kmeans_seeds": [int(clus_lr["seeds"][0]), int(clus_lr["seeds"][-1])],
+                "lr_kmeans_seconds": 0.0 if clus_lr is clus else float(clus_lr["seconds"]),
+                "explained_variance_median_min_central_median": [
+                    float(np.median(ev)), float(np.min(ev)), float(np.median(ev[geom.central])) if geom.central.any()
+                    else None],
+                "empty_clusters": int(np.sum(cnt == 0)), "clusters_below_20_images": int(np.sum(cnt < 20)),
+                "lr_scale_W_min_median_max": [mmm(v) for v in sWp], "lr_scale_b_min_median_max": [mmm(v) for v in sbp],
+                "init_scale": lam_p, "on_slice": K_on, "start_t": float(taus[K_on]), "lr_scale": args.patch_lr_scale,
+                "start_sha256": _sha(Wp0, bp0), "lr_scales_sha256": _sha(sWp, sbp),
+                "slice_t": [float(v) for v in taus], "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"),
+                "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+        pref_path = os.path.join(out_dir, "patch_reference.json")
+        if not os.path.exists(pref_path):
+            with open(pref_path + ".tmp", "w") as f:
+                json.dump(pref, f, indent=2)
+            os.replace(pref_path + ".tmp", pref_path)
+        else:
+            with open(pref_path) as f:
+                old_pref = json.load(f)
+            if (old_pref.get("start_sha256"), old_pref.get("lr_scales_sha256")) != (pref["start_sha256"],
+                                                                                      pref["lr_scales_sha256"]):
+                log(logf, f"WARNING: the per-patch reference differs from the run's first start (start arrays sha256 "
+                          f"{str(old_pref.get('start_sha256'))[:16]} -> {pref['start_sha256'][:16]}, lr scales "
+                          f"{str(old_pref.get('lr_scales_sha256'))[:16]} -> {pref['lr_scales_sha256'][:16]}); the slices "
+                          f"from here on use the new ones")
+        log(logf, f"patch units {pref['spec']}: P {geom.P}, d {geom.d}, S {S_p}; k-means ({pref['kmeans']}) seeds "
+                  f"{pref['kmeans_seeds'][0]}-{pref['kmeans_seeds'][1]} in {clus['seconds']:.0f} s"
+                  + ("" if clus_lr is clus else f" (lr scales from seeds {pref['lr_kmeans_seeds'][0]}-"
+                                                f"{pref['lr_kmeans_seeds'][1]}, {clus_lr['seconds']:.0f} s)")
+                  + f"; explained variance median {np.median(ev):.3f} (min {np.min(ev):.3f}); empty clusters "
+                  f"{pref['empty_clusters']}, < 20 images {pref['clusters_below_20_images']}; lr scales W median "
+                  f"{np.median(sWp[0]):.3g} (t = {taus[0]:g}) -> {np.median(sWp[-1]):.3g} (t = {taus[-1]:g}), b median "
+                  f"{np.median(sbp[0]):.3g} -> {np.median(sbp[-1]):.3g} (x {args.hidden_lr_scale:g} x "
+                  f"{args.patch_lr_scale:g}); start {lam_p:g} x the reference at slice {K_on} (t = {taus[K_on]:.4f}), "
+                  f"|Wp| {np.linalg.norm(Wp0):.4g}" + (f"; no patch units in slices 0-{K_on - 1}" if K_on else ""))
+
+        @jax.jit
+        def force_rms(params, X):
+            """Force decomposition on the validation batch (float64): sqrt(mean over samples and pixels of g^2) of
+            the visible force and of each hidden part's (global unit(s), per-pixel units, harmonic modes, patches)."""
+            def rms(g):
+                return jnp.sqrt(jnp.mean(g * g))
+            out = {"force_rms_vis": rms(vis_dense.grad_lap(params["theta"], X)[0])}
+            if K > 0 and "Q" in params:
+                out["force_rms_glob"] = rms(lm.hidden_terms_quad(params["W"], params["Q"], params["b"], X, lm.TEMP,
+                                                                 args.hidden)[0])
+            elif K > 0:
+                out["force_rms_glob"] = rms((lm.hidden_terms if args.hidden == "ising" else lm.potts_terms)(
+                    params["W"], params["b"], X, lm.TEMP)[0])
+            if args.local:
+                out["force_rms_loc"] = rms(lm.local_terms(params["wl"], params["bl"], X, lm.TEMP)[0])
+            if "V" in params:
+                out["force_rms_harm"] = rms(lm.harmonic_terms(params["V"], params["c"], X)[0])
+            out["force_rms_patch"] = rms(lm.patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, lm.TEMP,
+                                                        with_lap=False)[0])
+            return out
+
     # Paper checkpoint, for a per-slice comparison of the validation loss (paper problem, joint data only)
     paper = None
     if args.problem == "mnist28" and args.cls == "none" and os.path.exists(lm.PAPER_CKPT):
@@ -1050,8 +1409,12 @@ def main():
                       f"sit at identical times (t >= {float(taus[n_link - 1]):.4f})")
         free = {"name", "steps_scale", "val_every", "lr_scale", "init_from", "init_slices", "max_slices",
                 "visible_impl", "precision", "step_impl", "steps_schedule", "ref_kmeans",
-                "assemble", "time_grid", "split_dead", "split_spread"}   # numerics of the new slices only
-                                                     # (time_grid: checked above)
+                "assemble", "time_grid", "split_dead", "split_spread",
+                "harmonic_lr_scale", "harmonic_lr_tmin",
+                "patch_lr_scale"}                    # numerics of the new slices only (time_grid: checked above;
+                                                     # harmonic, harmonic_fixed(_slices) and harmonic_ref must match:
+                                                     # the model's modes and their reference; so must patch,
+                                                     # patch_init_scale and patch_on_slice)
         bad = {k: (scfg.get(k, defaults.get(k)), v) for k, v in config.items()
                if k not in free and k in defaults and scfg.get(k, defaults.get(k)) != v}
         bad.update({k: (scfg.get(k), config[k]) for k in ("K", "cls", "hidden_lr_scale", "freeze_hidden_slices")
@@ -1106,6 +1469,13 @@ def main():
             params["Q"] = jnp.zeros_like(params["W"])
         if args.local:
             params.update(wl=jnp.asarray(wl_ref[0]), bl=jnp.asarray(bl_ref[0]))
+        if R_h:                                  # harmonic modes: the reference at slice 0's t (t = 5)
+            V0, c0, _ = lm.harmonic_reference(mu_h, lam_r, U_r, R_h, float(taus[0]))
+            params.update(V=jnp.asarray(V0), c=jnp.asarray(c0))
+        if patch is not None and K_on == 0:      # patch units: LAM x the reference at slice 0's t
+            params.update(Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
+            if args.quad:
+                params["Qp"] = jnp.zeros_like(params["Wp"])
     else:
         prev = np.load(os.path.join(slice_dir, f"slice_{done - 1:03d}.npz"))
         params = {"theta": jnp.asarray(prev["theta"]), "W": jnp.asarray(prev["W"]), "b": jnp.asarray(prev["b"])}
@@ -1113,6 +1483,17 @@ def main():
             params["Q"] = jnp.asarray(prev["Q"])
         if args.local:
             params.update(wl=jnp.asarray(prev["wl"]), bl=jnp.asarray(prev["bl"]))
+        if R_h:
+            if "V" not in prev.files or prev["V"].shape != (R_h, n_vis):
+                raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {R_h} harmonic modes to continue from")
+            params.update(V=jnp.asarray(prev["V"]), c=jnp.asarray(prev["c"]))
+        if patch is not None and done - 1 >= K_on:   # patch units trained up to slice done - 1 (before K_on: none)
+            need = ("Wp", "bp") + (("Qp",) if args.quad else ())
+            shp = {"Wp": (geom.P, patch[2], geom.d), "bp": (geom.P, patch[2]), "Qp": (geom.P, patch[2], geom.d)}
+            if any(g not in prev.files or prev[g].shape != shp[g] for g in need):
+                raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {lm.patch_spec_str(patch)} patch units to "
+                                   f"continue from")
+            params.update({g: jnp.asarray(prev[g]) for g in need})
         optimization_key = jnp.asarray(prev["key"])
         where = f"t = {taus[done]:.4f}" if done < n_slices else "all slices present; assembling"
         log(logf, f"resuming at slice {done} ({where}) from {slice_dir}")
@@ -1133,6 +1514,18 @@ def main():
                 params["b"] = jnp.asarray(b_ref[k:k + 1] if one else b_ref[k])
             if args.local:
                 params["wl"], params["bl"] = jnp.asarray(wl_ref[k]), jnp.asarray(bl_ref[k])
+        fixed_h = R_h and (args.harmonic_fixed or k < args.harmonic_fixed_slices)   # modes held at the reference
+        if R_h:                                  # this slice's harmonic reference (fixed slices: the modes themselves)
+            V_rk, c_rk, iso_k = lm.harmonic_reference(mu_h, lam_r, U_r, R_h, t_curr)
+            if fixed_h:
+                params = dict(params)
+                params["V"], params["c"] = jnp.asarray(V_rk), jnp.asarray(c_rk)
+        if patch is not None and K_on > 0 and k == K_on:   # --patch-on-slice: switched on at LAM x the reference at t_K
+            params = dict(params, Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
+            if args.quad:
+                params["Qp"] = jnp.zeros_like(params["Wp"])
+            log(logf, f"slice {k}: patch units {lm.patch_spec_str(patch)} switched on at {lam_p:g} x the reference at "
+                      f"t = {t_curr:.4f}")
         split_info = None
         if k in split_slices and k >= args.freeze_hidden_slices:   # --split-dead: dead states become copies
             Xsp = sample_forward_process(t_curr, VAL_N, lm.TEMP, lm.SIGMA_FORWARD, data_train,
@@ -1153,6 +1546,17 @@ def main():
             on = k >= args.freeze_hidden_slices and not args.hidden_fixed
             lrs.update(wl=float(args.hidden_lr_scale * swl[k]) if on else 0.0,
                        bl=float(args.hidden_lr_scale * sbl[k]) if on else 0.0)
+        if R_h:                                  # harmonic modes: held during the first freeze slices, as the units
+            on = k >= args.freeze_hidden_slices and not fixed_h
+            f_h = args.hidden_lr_scale * args.harmonic_lr_scale
+            lrs.update(V=float(f_h * sV[k]) if on else 0.0, c=float(f_h * sc[k]) if on else 0.0)
+        if "Wp" in params:                       # patch units: per-unit arrays of fixed shape (the runner traces once)
+            on = k >= max(K_on, args.freeze_hidden_slices)
+            f_p = args.hidden_lr_scale * args.patch_lr_scale
+            lrs["Wp"] = jnp.asarray(f_p * sWp[k][:, None, None] if on else np.zeros((geom.P, 1, 1)))
+            lrs["bp"] = jnp.asarray(f_p * sbp[k][:, None] if on else np.zeros((geom.P, 1)))
+            if "Qp" in params:
+                lrs["Qp"] = lrs["Wp"]
         lrs = {g: v * args.lr_scale for g, v in lrs.items()}
         lr_log = {"W": lrs["W"], "b": lrs["b"]}       # scalars for the log (--ising-weak-boost makes lrs per unit)
         n_boost = None
@@ -1237,6 +1641,10 @@ def main():
         val_ps = np.asarray(loss_ps(params, Xv))
         val = float(np.mean(val_ps))
         rec = {"slice": k, "t": t_curr, "steps": n_steps, "lr_v": lrs["theta"], "lr_W": lr_log["W"], "lr_b": lr_log["b"],
+               **({"lr_V": lrs["V"], "lr_c": lrs["c"]} if R_h else {}),
+               **({"lr_Wp": [float(v) for v in (np.min(lrs["Wp"]), np.median(lrs["Wp"]), np.max(lrs["Wp"]))],
+                   "lr_bp": [float(v) for v in (np.min(lrs["bp"]), np.median(lrs["bp"]), np.max(lrs["bp"]))]}
+                  if "Wp" in params else {}),
                **({"n_weak_boosted": n_boost} if n_boost is not None else {}),
                **({"split": split_info} if split_info is not None else {}),
                **({"cd1_dt": dt_k} if cd1_grad is not None else {}),
@@ -1325,6 +1733,22 @@ def main():
                         "cos_wl": float(wl @ wl_ref[k] / (np.linalg.norm(wl) * np.linalg.norm(wl_ref[k]) + 1e-300)),
                         "local_decided": float(np.mean(np.abs(ml) > 0.9))})
             extra.update(wl=wl, bl=bl)
+        if R_h:                                  # harmonic modes against this slice's reference (harmonic_unit_stats)
+            Vn, cn = np.asarray(params["V"]), np.asarray(params["c"])
+            rec.update(lm.harmonic_unit_stats(Vn, cn, V_rk, c_rk, U_r[:, :R_h], iso_k, lm.TEMP,
+                                              theta=np.asarray(params["theta"]), conn=prob["conn"]))
+            extra.update(V=Vn, c=cn)
+        if "Wp" in params:                       # patch units against this slice's scale-1 reference, forces
+            Wpn, bpn = np.asarray(params["Wp"]), np.asarray(params["bp"])
+            Qpn = np.asarray(params["Qp"]) if "Qp" in params else None
+            W_ref_p = lm.patch_reference(clus, [t_curr], lm.TEMP)[0][0]
+            st_p, arr_p = lm.patch_unit_stats(Wpn, bpn, Qpn, np.asarray(Xv), lm.TEMP, W_ref_p, geom)
+            rec.update(st_p)
+            rec.update({q: float(v) for q, v in force_rms(params, jnp.asarray(Xv)).items()})
+            extra.update(Wp=Wpn, bp=bpn, **({"Qp": Qpn} if Qpn is not None else {}), **arr_p)
+        elif patch is not None:                  # --patch-on-slice, before the switch-on: zero arrays, no record keys
+            extra.update(Wp=np.zeros((geom.P, patch[2], geom.d)), bp=np.zeros((geom.P, patch[2])),
+                         **({"Qp": np.zeros((geom.P, patch[2], geom.d))} if args.quad else {}))
         save_atomic(os.path.join(slice_dir, f"slice_{k:03d}.npz"),
                     theta=np.asarray(params["theta"]), W=np.asarray(params["W"]), b=np.asarray(params["b"]),
                     key=np.asarray(optimization_key), loss_trace=losses[::10].astype(np.float32),
@@ -1332,7 +1756,8 @@ def main():
                     **extra)
         if held is not None:                     # --assemble memory: the arrays just saved, for write_history
             held[k] = {"theta": np.asarray(params["theta"]), "W": np.asarray(params["W"]),
-                       "b": np.asarray(params["b"]), **{g: extra[g] for g in ("Q", "wl", "bl") if g in extra}}
+                       "b": np.asarray(params["b"]),
+                       **{g: extra[g] for g in ("Q", "wl", "bl", "V", "c", "Wp", "bp", "Qp") if g in extra}}
         with open(os.path.join(out_dir, "train_log.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
         msg = (f"slice {k:3d} t {t_curr:.4f}: {n_steps} steps in {t_train:.0f} s ({rec['steps_per_s']:.0f}/s); "
@@ -1363,18 +1788,33 @@ def main():
         if args.local:
             msg += (f"; local |w| {rec['wl_norm']:.4g} (ref {rec['wl_ref_norm']:.4g}), cos {rec['cos_wl']:.3f}, "
                     f"decided {rec['local_decided']:.3f}")
+        if R_h:
+            msg += (f"; modes |V| {rec['harm_V_norm']:.4g} (ref {rec['harm_Vref_norm']:.4g}), cos "
+                    f"{rec['harm_cos_V_Vref']:.3f} (V^T V {rec['harm_cos_M_Mref']:.3f}), added variance "
+                    f"{rec['harm_added_var']:.4g} (ref {rec['harm_added_var_ref']:.4g}; {rec['harm_n_beyond_iso']} modes "
+                    f"beyond T/iso {rec['harm_iso_spring']:.4g}), curvature at 0: springs {rec['harm_vis_curv_min']:.3g}, "
+                    f"with the modes {rec['harm_curv_min']:.3g}")
+        if "patch_W_norm" in rec:
+            fr = lambda q: f"{rec[q]:.3g}" if q in rec else "n/a"      # noqa: E731
+            msg += (f"; patches |Wp| {rec['patch_W_norm']:.4g} (ref {rec['patch_Wref_norm']:.4g}), cos "
+                    f"{rec['patch_cos_W_Wref']:.3f}, eff states {rec['patch_eff_states_median']:.2f}/"
+                    f"{rec['patch_eff_states_min']:.2f} (median/min), dead {rec['patch_states_below_1e-6']}, <max p> "
+                    f"{rec['patch_mean_max_p']:.3f}; force patch/glob/loc {fr('force_rms_patch')}/{fr('force_rms_glob')}/"
+                    f"{fr('force_rms_loc')}")
         log(logf, msg)
 
     # ---- assemble ---------------------------------------------------------------------------------------------
     if n_slices == lm.N_TIME_STEPS and held is not None:      # --assemble memory: the same files (write_history)
         t_asm = time.time()
-        shape = write_history(out_dir, slice_dir, n_slices, taus, args.local, args.quad and K > 0, held)
+        shape = write_history(out_dir, slice_dir, n_slices, taus, args.local, args.quad and K > 0, held,
+                              harmonic=bool(R_h), patch=patch is not None, patch_quad=patch is not None and args.quad)
         with open(os.path.join(out_dir, "DONE"), "w") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
         log(logf, f"assembled params_history.npy {shape} and hidden_history.npz in {time.time() - t_asm:.1f} s "
                   f"({len(held)} slices from memory, {n_slices - len(held)} from their files); DONE")
     elif n_slices == lm.N_TIME_STEPS:
-        thetas, Ws, bs, wls, bls, Qs = [], [], [], [], [], []
+        thetas, Ws, bs, wls, bls, Qs, Vs, cs = [], [], [], [], [], [], [], []
+        Wps, bps, Qps = [], [], []
         for k in range(n_slices):
             s = np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
             thetas.append(s["theta"])
@@ -1385,6 +1825,14 @@ def main():
                 bls.append(s["bl"])
             if args.quad and K > 0:
                 Qs.append(s["Q"])
+            if R_h:
+                Vs.append(s["V"])
+                cs.append(s["c"])
+            if patch is not None:
+                Wps.append(s["Wp"])
+                bps.append(s["bp"])
+                if args.quad:
+                    Qps.append(s["Qp"])
         tmp = os.path.join(out_dir, "params_history.tmp.npy")
         np.save(tmp, np.stack(thetas))
         os.replace(tmp, os.path.join(out_dir, "params_history.npy"))
@@ -1392,6 +1840,12 @@ def main():
         loc = {"wl": np.stack(wls), "bl": np.stack(bls)} if args.local else {}
         if Qs:
             loc["Q"] = np.stack(Qs)
+        if R_h:                                  # harmonic modes: after every other member (write_history)
+            loc.update(V=np.stack(Vs), c=np.stack(cs))
+        if patch is not None:                    # patch units: after every other member (write_history)
+            loc.update(Wp=np.stack(Wps), bp=np.stack(bps))
+            if args.quad:
+                loc["Qp"] = np.stack(Qps)
         np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
         os.replace(tmp, os.path.join(out_dir, "hidden_history.npz"))
         with open(os.path.join(out_dir, "DONE"), "w") as f:

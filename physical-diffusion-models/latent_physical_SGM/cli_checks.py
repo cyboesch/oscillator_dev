@@ -105,13 +105,15 @@ def stacked_slices(name):
     with open(os.path.join(run_dir(name), "config.json")) as f:
         cfg = json.load(f)
     local, quad = bool(cfg["local"]), bool(cfg["quad"]) and int(cfg["K"]) > 0
-    groups = ["theta", "W", "b"] + (["wl", "bl"] if local else []) + (["Q"] if quad else [])
+    tail = ((["V", "c"] if cfg.get("harmonic") else [])                  # --harmonic, then --patch: last members
+            + ((["Wp", "bp"] + (["Qp"] if cfg.get("quad") else [])) if cfg.get("patch") else []))
+    groups = ["theta", "W", "b"] + (["wl", "bl"] if local else []) + (["Q"] if quad else []) + tail
     parts = {g: [] for g in groups}
     for k in range(lm.N_TIME_STEPS):
         with np.load(os.path.join(run_dir(name), "slices", f"slice_{k:03d}.npz")) as s:
             for g in groups:
                 parts[g].append(s[g])
-    members = ["W", "b", "t"] + (["wl", "bl"] if local else []) + (["Q"] if quad else [])
+    members = ["W", "b", "t"] + (["wl", "bl"] if local else []) + (["Q"] if quad else []) + tail
     return {g: np.stack(v) for g, v in parts.items()}, members
 
 
