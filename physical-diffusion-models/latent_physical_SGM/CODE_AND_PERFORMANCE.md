@@ -1429,7 +1429,7 @@ of each:
 - **Best recipe (option 3):** K = 1536 + early 2x (`--steps-schedule 0:2,31:1`) on the mixst code, seed 1
   (`mnist28_d0123_K1536_..._mixst_early2x_seed1`).
   - Pipeline 4231701, then equil:3 sampling 4231702, FID 4231703 (against K = 1536 float64 and plain / early 2x
-    seed 1, each with the normal and the equilibrated start), gallery 4231704 (`convergence_study/gallery_best/`).
+    seed 1, each with the normal and the equilibrated start), gallery 4231704, redone as 4236962 (`galleries/2026-11-13_best-global-recipe_K1536+early2x_seed1/`).
 - **Patch Potts (option 1):** build after the design panel's spec (wf_899ae7cd-383), with build, two reviewers and
   fixes.
 - **If 1 and 3 are not promising, in this order:** `--split-dead` at large K (42 % of states are dead at K = 1536 by
@@ -1531,7 +1531,7 @@ full-strength or residual start, a small random start, one shared learning rate.
   - equil:3 sampling: 4232345 / 4232346.
   - FID 4232347, compared with plain seed 1, K = 912 seed 1 and K = 1536, each with both starts.
   - Grain 4232348; `early_slices` 4232349 (slices 30, 45, 55, 65, 70, 80); training summary 4232350; gallery 4232351
-    (`patch_pilot/gallery_s1`).
+    (redone as 4236960: `galleries/2026-11-13_patch7x7_start-noise_vs_start-equil_seed1/`).
 - **Decision rules (spec section 10):** go on to seeds 2-3 if FID improves by at least 1 against plain seed 1 (and is
   not worse than K = 912), or if specks are <= 0.40 with FID no worse.
 
@@ -1658,7 +1658,7 @@ full-strength or residual start, a small random start, one shared learning rate.
   - ink components +3.3 -> +1.0;
   - speckle energy +2.0 -> +0.5;
   - the mid-grey fraction is now normal.
-- **Gallery** (`patch_pilot/gallery_s1_default/compare.png`, same start and noise per column):
+- **Gallery** (`galleries/2026-11-13_patch7x7_vs_more-global-states_seed1_start-noise/00_side_by_side.png`, same start and noise per column):
   - Each trajectory keeps its digit; the high-t decision is unchanged.
   - The noise cloud around the strokes is gone: solid strokes, clean background, closed rings.
 - **What is left:** some shapes are locally clean but globally wrong:
@@ -1692,7 +1692,7 @@ full-strength or residual start, a small random start, one shared learning rate.
 - E2: P-B seeds 2 and 3, pipelines 4236383/84, equil:3 sampling 4236386/87.
 - Stack test: K = 1536 + patches (P-B) seed 1, pipeline 4236385, equil:3 4236388.
 - Follow-ups: FID 4236389 (each against plain of the same seed; equilibrated vs default start; K = 1536 + patches vs
-  K = 1536), grain 4236390, gallery 4236391 (`patch_pilot/gallery_seeds`).
+  K = 1536), grain 4236390, gallery 4236923 (`galleries/2026-11-13_patch7x7-from-t3.4_seeds1-3_and_with-K1536/`; replaces 4236391).
 - Still queued from the pilot: equil:3 for P-A and P-B (4232345/46), with FID, grain and gallery 4232347/48/51.
 - Next design step if seeds 2-3 hold: global consistency.
   - Several patch sizes (e.g. 14:7 added to 7:3) keep the single bipartite layer: exact, instant equilibration,
@@ -1729,7 +1729,7 @@ full-strength or residual start, a small random start, one shared learning rate.
    patches act. Pipeline 4236524.
 
 - Follow-ups: FID 4236525 (pairs vs B1 and plain; read precision and the confident share too), grain 4236526,
-  gallery 4236527 (`patch_pilot/gallery_shape`).
+  gallery 4236924 (`galleries/2026-11-13_shape-tests_stronger-global_bigger-patches_later-patches_seed1/`; replaces 4236527).
 - If none of the three keeps both clean strokes and the shapes:
   - multi-scale patches (7:3 + 14:7 in one layer; needs `--patch` to take several specs);
   - then the tree coupling.
@@ -1745,7 +1745,7 @@ full-strength or residual start, a small random start, one shared learning rate.
 - **FID:** K = 3136 vs K = 1536 -3.35 [-4.71, -1.74]. Each doubling of K so far gives about -3.4 FID (784 -> 1536 -> 3136),
   with no sign of saturation yet.
 - **B1 vs K = 3136:** -2.93 [-4.58, -0.51], p 0.02.
-- **Gallery** (`convergence_study/gallery_K3136/`): every sample is a clear digit, with no broken or off-class shapes. Precision
+- **Gallery** (`galleries/2026-11-13_global-states-K784-K1536-K3136_vs_patch7x7_seed1_start-noise/`): every sample is a clear digit, with no broken or off-class shapes. Precision
   stays at 0.95 and the confident share at 98.8 %.
 - **Grain:** less than K = 1536 (specks 0.47 -> 0.31) but still clearly visible: speckle along the strokes and filled-in
   ring interiors.
@@ -1770,7 +1770,7 @@ full-strength or residual start, a small random start, one shared learning rate.
 - **B1_eq vs plain_1eq:** -9.30 [-10.33, -7.55]; vs K = 1536 + equil:3 -6.36 (both p < 0.005).
 - **B1_eq vs A1_eq:** -1.09 [-1.89, -0.30], p 0.01. With the equilibrated start, P-B is better than P-A, presumably because
   P-A's slice-0 energy contains the weak patch units, which the start relaxes under.
-- **Shapes:** precision and the confident share do not change with the start. The gallery (`patch_pilot/gallery_s1/B1_eq.png`)
+- **Shapes:** precision and the confident share do not change with the start. The gallery (`galleries/2026-11-13_patch7x7_start-noise_vs_start-equil_seed1/08_K784+patch7x7-from-t3.4_start-equil_seed1.png`)
   shows the same defects: open 'C'-shaped zeros, '1's with a detached dot ('!'), crossed '2's. The start fixes class
   balance, not shape.
 - **Recipe so far:** `--patch 7:3:32 --patch-on-slice 31 --patch-init-scale 0.06` + `--init-dist equil:3`.
@@ -1786,7 +1786,7 @@ full-strength or residual start, a small random start, one shared learning rate.
 - **Early 2x at K = 1536:** -2.40 FID with the default start [-3.59, -1.12] and -1.46 with equil:3 [-2.61, -0.49]. That is more
   than early 2x at K = 784 (-1.7).
 - **Stacking:** all three global-side fixes add up, 20.25 -> 13.55.
-- **Gallery** (`convergence_study/gallery_best/K1536e2x_eq.png`): every sample is a clean digit shape, but the strokes are
+- **Gallery** (`galleries/2026-11-13_best-global-recipe_K1536+early2x_seed1/05_K1536+early2x_start-equil_seed1.png`): every sample is a clean digit shape, but the strokes are
   still speckled.
 - **Status of the options:**
   - option 3 (best recipe) worked: -6.7 FID with shapes intact, but still about 5 FID behind the patch run with
@@ -1794,3 +1794,37 @@ full-strength or residual start, a small random start, one shared learning rate.
   - option 1 (patches) is ahead on FID, behind on shape.
 - **Natural combination:** K = 1536 + early 2x + patches (on at 31) + equil:3. Wait for K = 1536 + patches (4236385)
   first, to see whether the stronger global unit protects the shapes.
+
+### Gallery naming (2026-11-13 12:30, the user's request: names must say what was done)
+**Folders.** New galleries go to `out/latent_physical_SGM/galleries/<date>_<what is compared>/`. Today's four were redone
+there (jobs 4236959-62) and the old short-named folders were removed:
+
+| new folder | replaces |
+|---|---|
+| `2026-11-13_patch7x7_vs_more-global-states_seed1_start-noise/` | `patch_pilot/gallery_s1_default/` |
+| `2026-11-13_patch7x7_start-noise_vs_start-equil_seed1/` | `patch_pilot/gallery_s1/` |
+| `2026-11-13_global-states-K784-K1536-K3136_vs_patch7x7_seed1_start-noise/` | `convergence_study/gallery_K3136/` |
+| `2026-11-13_best-global-recipe_K1536+early2x_seed1/` | `convergence_study/gallery_best/` |
+
+Two pending galleries were resubmitted with the new names (4236923 replaces 4236391; 4236924 replaces 4236527). Older
+galleries (before 2026-11-13) keep their names.
+
+**Files** (`make_gallery.py`, changed 12:15):
+- `00_side_by_side.png`: one row per model; column j = the same start and noise in every model.
+- `01_real_digits.png`.
+- `NN_<name>.png`: in row order.
+- `README.txt`: the legend, plus for every set its sample file with the run's training settings (K, seed, patch,
+  switch-on, init scale, steps schedule) and the sampling settings (sampler, n, start distribution).
+- The left margin of the side-by-side image grows with the label length.
+
+**Names** (file name = row label):
+- `K784` = global Potts with 784 whole-image states (base model).
+- `+patch7x7` / `+patch14x14` = per-patch Potts units: 7x7 every 3 px with 32 states, or 14x14 every 7 px with 64
+  states.
+- `-from-tX` = patch units only at diffusion times t <= X (`from-t5` = always; `from-t3.4` = `--patch-on-slice 31`;
+  `from-t2.2` = slice 55).
+- `early2x` = 2x steps for t > 3.4.
+- `start-noise` = N(0, T I).
+- `start-equil` = `--init-dist equil:3`.
+- `seedN` = training seed.
+- Example: `K784+patch7x7-from-t3.4_start-equil_seed1` (FID 8.65; earlier called "B1_eq").

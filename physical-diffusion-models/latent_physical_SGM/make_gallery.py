@@ -3,20 +3,28 @@
 
 For one problem and a list of sample sets NAME=PATH (PATH relative to out/latent_physical_SGM, '+'-joined parts
 allowed, as in evaluate_samples.py), writes into --out:
-  real.png               100 random real training images (the evaluation probes' pixel space: data * std + mean)
-  <NAME>.png             the first 100 samples of the set (trajectory indices 0-99), in trajectory order, unsorted;
-                         a diverged sample (|x| > 15 or not finite, as in the evaluation) is a red square
-  compare.png            one row per set (first row: real images), 16 columns; for the sample sets column j is the
+  00_side_by_side.png    one row per set (first row: real images), 16 columns; for the sample sets column j is the
                          same trajectory index j, i.e. the same initial state and Brownian keys in every model
+  01_real_digits.png     100 random real training images (the evaluation probes' pixel space: data * std + mean)
+  NN_<NAME>.png          the first 100 samples of the set (trajectory indices 0-99), in trajectory order, unsorted;
+                         a diverged sample (|x| > 15 or not finite, as in the evaluation) is a red square; NN = 02, 03,
+                         ... in the order the sets are given (= row order of 00_side_by_side.png)
   nearest_<NAME>.png     12 samples (top) above their nearest training image (bottom), with the pixel-space distance
+  README.txt             the title, --legend, and per set its sample file(s) with the run's training settings
+                         (config.json) and the sampler settings (the sample file's .json manifest)
 All images: white ink on black, pixel values clipped to [0, 1], nearest-neighbour upscaling, no smoothing.
+NAME is both the file name and the row label: make it say what the model is (e.g. K784+patch7x7-from-t3.4_start-equil_seed1),
+not a code.
 
 Usage (CPU Slurm job): python make_gallery.py --problem mnist28 --out DIR --title TEXT NAME=PATH ... [--nearest NAME,...]
+                       [--legend TEXT]
 """
 
 import argparse
+import json
 import os
 import sys
+import time
 
 import numpy as np
 
@@ -56,10 +64,35 @@ def canvas(P, div, g, rows, cols, pad=1):
     return C
 
 
+def provenance(spec):
+    """Lines for README.txt: each sample file of 'PATH[+PATH...]' with its run's key settings (config.json) and the
+    sampler settings (the sample file's .json manifest), so a gallery says what was done without the job log."""
+    lines = []
+    keys_cfg = ("K", "hidden", "seed", "patch", "patch_on_slice", "patch_init_scale", "steps_schedule", "harmonic")
+    keys_man = ("sampler", "n", "init_dist", "oracle_start", "quench", "patch_units")
+    for p in spec.split("+"):
+        path = p if os.path.isabs(p) else os.path.join(lm.OUT_ROOT, p)
+        lines.append(f"sample file: {p}")
+        run_dir = os.path.dirname(os.path.dirname(path))
+        for fn, keys, what in ((os.path.join(run_dir, "config.json"), keys_cfg, "training"),
+                               (os.path.splitext(path)[0] + ".json", keys_man, "sampling")):
+            try:
+                with open(fn) as f:
+                    d = json.load(f)
+                vals = [f"{k} {json.dumps(d[k], separators=(',', ':'))}" for k in keys
+                        if (k in d and d[k] not in (None, "", 0, False) or k in ("K", "seed", "sampler", "n") and k in d)
+                        and not (k.startswith("patch_") and what == "training" and not d.get("patch"))]  # inactive
+                lines.append(f"  {what}: " + ", ".join(vals))
+            except (OSError, ValueError):
+                lines.append(f"  {what}: (no {os.path.basename(fn)})")
+    return lines
+
+
 def save(C, path, title, scale, left_labels=None, row_h=None):
     C = np.repeat(np.repeat(C, scale, axis=0), scale, axis=1)
     H, W = C.shape[:2]
-    top, left = 34, (190 if left_labels else 0)
+    top = 34
+    left = max(190, 7 * max(len(s) for s in left_labels) + 24) if left_labels else 0   # room for long labels
     fig = plt.figure(figsize=((W + left) / 100, (H + top) / 100), dpi=100)
     ax = fig.add_axes([left / (W + left), 0, W / (W + left), H / (H + top)])
     ax.imshow(C, interpolation="nearest")
@@ -80,8 +113,16 @@ def main():
     ap.add_argument("--out", required=True, help="output folder (created)")
     ap.add_argument("--title", default="")
     ap.add_argument("--nearest", default="", help="comma list of set names for nearest-training-image pairs")
+    ap.add_argument("--legend", default="", help="text for README.txt explaining the set names")
     args = ap.parse_args()
     os.makedirs(args.out, exist_ok=True)
+    readme = [args.title, "", f"made {time.strftime('%Y-%m-%d %H:%M')} by make_gallery.py, Slurm job "
+              f"{os.environ.get('SLURM_JOB_ID', 'manual')}, problem {args.problem}", ""]
+    if args.legend:
+        readme += ["How to read the names:", args.legend, ""]
+    readme += ["Files:", "  00_side_by_side.png   one row per model, 16 columns; column j = trajectory j in every model "
+               "(same start and noise), first row real digits",
+               "  01_real_digits.png    100 random real training images"]
 
     prob = lm.make_problem(args.problem)
     data, labels, mean, std, g = np.asarray(prob["data"]), prob["labels"], prob["mean"], prob["std"], prob["grid"]
@@ -90,17 +131,20 @@ def main():
     rng = np.random.default_rng(2026)
     real_idx = rng.choice(px.shape[0], size=100, replace=False)
     no_div = np.zeros(100, bool)
-    save(canvas(px[real_idx], no_div, g, 10, 10), os.path.join(args.out, "real.png"),
+    save(canvas(px[real_idx], no_div, g, 10, 10), os.path.join(args.out, "01_real_digits.png"),
          f"{args.title}: 100 random real training images", scale)
 
     sets = []
-    for spec in args.sets:
+    for i, spec in enumerate(args.sets):
         name, path = spec.split("=", 1)
         P, div = to_px(es.load_set(path), mean, std)
         sets.append((name, P, div))
-        save(canvas(P[:100], div[:100], g, 10, 10), os.path.join(args.out, f"{name}.png"),
+        fname = f"{i + 2:02d}_{name}.png"
+        save(canvas(P[:100], div[:100], g, 10, 10), os.path.join(args.out, fname),
              f"{args.title}: {name}, samples 0-99 in trajectory order ({int(div[:100].sum())} diverged, red)", scale)
-        print(f"{name}: {P.shape[0]} samples, {int(div.sum())} diverged; wrote {name}.png", flush=True)
+        print(f"{name}: {P.shape[0]} samples, {int(div.sum())} diverged; wrote {fname}", flush=True)
+        readme += [f"  {fname}   first 100 of {P.shape[0]} samples ({int(div.sum())} diverged)"] + \
+                  [f"      {line}" for line in provenance(path)]
 
     # side by side: same trajectory index in every column
     ncol = 16
@@ -109,7 +153,7 @@ def main():
     for name, P, div in sets:
         rows.append(canvas(P[:ncol], div[:ncol], g, 1, ncol))
         labs.append(name)
-    save(np.concatenate(rows, axis=0), os.path.join(args.out, "compare.png"),
+    save(np.concatenate(rows, axis=0), os.path.join(args.out, "00_side_by_side.png"),
          f"{args.title}: one row per model; column j = trajectory j in every model (same start and noise)", scale,
          left_labels=labs, row_h=g + 2)
 
@@ -128,6 +172,9 @@ def main():
         save(canvas(pair, np.zeros(pair.shape[0], bool), g, 2, len(idx)), os.path.join(args.out, f"nearest_{name}.png"),
              title, scale)
         print(f"{name}: nearest-image distances {np.round(dist, 2).tolist()}", flush=True)
+        readme.append(f"  nearest_{name}.png   12 samples of {name} above their nearest training images")
+    with open(os.path.join(args.out, "README.txt"), "w") as f:
+        f.write("\n".join(readme) + "\n")
     print(f"wrote {args.out}", flush=True)
 
 
