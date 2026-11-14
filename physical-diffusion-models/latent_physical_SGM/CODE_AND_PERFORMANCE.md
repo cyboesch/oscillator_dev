@@ -1828,3 +1828,436 @@ galleries (before 2026-11-13) keep their names.
 - `start-equil` = `--init-dist equil:3`.
 - `seedN` = training seed.
 - Example: `K784+patch7x7-from-t3.4_start-equil_seed1` (FID 8.65; earlier called "B1_eq").
+
+### Results: switching the 7x7 patches on later (t = 2.2) keeps the global shapes: FID 7.7 from the noise start, precision 0.90 (2026-11-13 15:15; pipelines 4236383-85, 4236523/24; FID 4236389, 4236525; grain 4236390, 4236526; galleries 4236923/24)
+**Patch gain reproduces over seeds** (`K784+patch7x7-from-t3.4`, FID; paired vs `K784` of the same seed):
+
+| seed | K784 noise start | +patch from t3.4, noise | paired | K784 equil start | +patch from t3.4, equil | paired |
+|---|---|---|---|---|---|---|
+| 1 | 20.25 | 10.55 | -9.70 | 17.95 | 8.65 | -9.30 |
+| 2 | 20.14 | 10.52 | -9.63 | 18.25 | 9.03 | -9.22 |
+| 3 | 19.36 | 9.72 | -9.64 | 17.74 | 9.42 | -8.32 |
+| mean | 19.92 | **10.26** | -9.66 | 17.98 | **9.03** | -8.95 |
+
+- All p < 0.005.
+- Precision 0.77-0.79 and confident share 88-90 % in every seed: the shape defect is systematic, not a seed effect.
+
+**Shape tests (seed 1, noise start):**
+
+| model | FID | paired vs from-t3.4 | prec F | recall F | confident | specks | speckle (SD) |
+|---|---|---|---|---|---|---|---|
+| K784 | 20.25 | | 0.94 | 0.42 | 98.8 % | 0.52 | +2.00 |
+| K1536 | 16.84 | | 0.95 | 0.53 | 98.0 % | 0.47 | +1.83 |
+| K784+patch7x7-from-t3.4 | 10.55 | - | 0.79 | 0.85 | 88.2 % | 0.05 | +0.45 |
+| K1536+patch7x7-from-t3.4 | 8.82 | -1.73 [-3.23, -0.44] | 0.80 | 0.86 | 91.8 % | 0.02 | +0.39 |
+| K784+patch14x14-from-t3.4 | 9.17 | -1.39 [-2.68, -0.66] | 0.87 | 0.79 | 94.0 % | 0.06 | +0.98 |
+| **K784+patch7x7-from-t2.2** | **7.68** | **-2.87** [-4.77, -1.37] | **0.90** | 0.80 | **97.4 %** | 0.03 | +0.51 |
+
+- **K784+patch7x7-from-t2.2 vs K784:** -12.57 [-13.40, -10.78]. This is the best FID from the noise start so far, with
+  precision and confident share almost back to the global-only models.
+- **Gallery** (`galleries/2026-11-13_shape-tests_stronger-global_bigger-patches_later-patches_seed1/`):
+  - Column by column, the from-t2.2 samples keep the K784 shapes: the open 'C' is a '0' again, the hooked '1' is
+    straight. The strokes are clean.
+  - A few defects remain: a '3' like a '5', two messy '2's, one blob.
+- **Stronger global unit** (K1536 + patches from t3.4): the 'C' and the crossed '2' stay. More global states alone do
+  not hold the shape against the patch force.
+- **Bigger patches** (14x14): better shapes than 7x7 from t3.4, but more speckle and mid-grey (speckle +0.98,
+  mid-grey +0.60 SD). Still a 'C'.
+- **K1536+patch7x7-from-t3.4 with equil:3:** 7.65 (vs K1536 equil -7.37); precision 0.82, confident 93.2 %.
+- **Reading:** what matters is when the patches act, not how strong the global unit is.
+  - From t = 3.4 the patch force overrides the global template while the shape is still being formed (t of about
+    3.4-2.2).
+  - From t = 2.2 the global unit has set the shape and the patches only clean the strokes.
+  - This fits the earlier finding: the digit choice is made above t of about 3.5, and the grain forms at t of about
+    2.7-1.5.
+
+**Submitted (15:15):**
+- equil:3 for from-t2.2 seed 1: 4237615.
+- from-t2.2 seeds 2 and 3: pipelines 4237616 / 4237618, equil:3 4237617 / 4237619.
+- Switch-on scan, seed 1:
+  - from-t2.7 (slice 45): pipeline 4237620, equil:3 4237621;
+  - from-t1.5 (slice 70): pipeline 4237622, equil:3 4237623.
+- K3136 equil:3, redone (4236583 hit OOM at 48 GB; now 64 GB, chunk 125): 4237624.
+- Follow-ups: FID 4237627, grain 4237628, galleries 4237629 (`galleries/2026-11-13_patch7x7-switch-on-time-scan_seed1_start-noise/`)
+  and 4237630 (`galleries/2026-11-13_patch7x7-from-t2.2_seeds1-3_start-equil/`).
+
+**Partial results (16:20; quick FID on the finished samples, job 4237732; full batch FID 4237627 still pending):**
+
+| model | FID | prec F | recall F | confident | paired |
+|---|---|---|---|---|---|
+| K784_start-equil_seed1 | 17.95 | 0.94 | 0.45 | 98.6 % | |
+| K784+patch7x7-from-t3.4_start-equil_seed1 | 8.65 | 0.78 | 0.85 | 89.6 % | |
+| K784+patch7x7-from-t2.2_start-noise_seed1 | 7.68 | 0.90 | 0.80 | 97.4 % | |
+| **K784+patch7x7-from-t2.2_start-equil_seed1** | **6.42** | 0.90 | 0.79 | 96.2 % | vs K784 equil -11.53 [-12.55, -9.66]; vs from-t3.4 equil -2.23 [-3.56, -1.34] |
+| K784+patch7x7-from-t2.2_start-noise_seed2 | 7.53 | 0.89 | 0.80 | 95.4 % | vs K784 noise seed 2 -12.62 [-13.40, -10.80] |
+| K3136_start-equil_seed1 | 13.04 | 0.95 | 0.61 | 98.6 % | vs K3136 noise -0.44 (n.s.) |
+
+- **New best: FID 6.42** (floor 4.57 at n = 500), with precision 0.90.
+- Seed 2 reproduces the from-t2.2 gain from the noise start.
+- The equilibrated start helps K = 3136 hardly at all (-0.4); its class balance is already good.
+
+### Results: 7x7 patches from t = 2.2 + equilibrated start = FID 6.24 (mean of 3 seeds), precision 0.90 (2026-11-13 16:40; pipelines 4237616/18/20/22, equil:3 4237615/17/19/21/23, K3136 equil:3 4237624; FID 4237627, grain 4237628, galleries 4237629/30)
+**Seeds 1-3, `K784+patch7x7-from-t2.2`** (paired vs `K784` of the same seed and start, all p < 0.005):
+
+| seed | noise start | paired | equil start | paired | prec F (equil) | confident (equil) |
+|---|---|---|---|---|---|---|
+| 1 | 7.68 | -12.57 | 6.42 | -11.53 | 0.90 | 96.2 % |
+| 2 | 7.53 | -12.62 | 6.02 | -12.23 | 0.90 | 95.6 % |
+| 3 | 6.78 | -12.58 | 6.29 | -11.45 | 0.89 | 96.0 % |
+| **mean** | **7.33** | -12.59 | **6.24** | -11.74 | 0.90 | 95.9 % |
+
+- `K784` means for comparison: 19.92 (noise), 17.98 (equil).
+- The floor at n = 500 is 4.57. The gap to the floor shrank from 13.4 to 1.7 FID in one day.
+
+**When to switch the patches on (seed 1):**
+
+| switch-on (slice) | FID noise | FID equil | prec F | recall F | confident | specks (SD) | speckle (SD) |
+|---|---|---|---|---|---|---|---|
+| never (K784) | 20.25 | 17.95 | 0.94 | 0.42 | 98.8 % | +4.76 | +2.00 |
+| t = 3.4 (31) | 10.55 | 8.65 | 0.79 | 0.85 | 88.2 % | +0.36 | +0.45 |
+| t = 2.7 (45) | 8.17 | 7.10 | 0.84 | 0.83 | 92.6 % | +0.21 | +0.47 |
+| **t = 2.2 (55)** | **7.68** | **6.42** | 0.90 | 0.80 | 97.4 % | +0.17 | +0.51 |
+| t = 1.5 (70) | 9.66 | 7.67 | 0.96 | 0.69 | 99.2 % | +1.07 | +0.85 |
+
+- **Paired vs t = 2.2:**
+  - t = 2.7: +0.49 (noise, n.s.) and +0.68 (equil, p 0.06);
+  - t = 1.5: +1.98 and +1.25 (both p < 0.01);
+  - t = 3.4: +2.87 and +2.23 (both p < 0.01).
+- **Trade-off:** a later switch-on raises precision and the confident share monotonically, and lowers recall.
+  - Switching on too early (t >= 2.7): the patches override the global shape ('C' instead of '0', hooked '1').
+  - Switching on too late (t = 1.5): the grain is already formed and partly stays (specks +1.07 SD).
+  - Optimum near t = 2.2-2.7, consistent with the shape being fixed above t of about 2.5 and the grain forming at
+    t = 2.7-1.5.
+- **Gallery** (`galleries/2026-11-13_patch7x7-switch-on-time-scan_seed1_start-noise/00_side_by_side.png`):
+  - the 'C' appears at t = 3.4 and 2.7 and is a '0' at t = 2.2 and 1.5;
+  - the speckle returns at t = 1.5.
+- **Equil-start gallery** (`galleries/2026-11-13_patch7x7-from-t2.2_seeds1-3_start-equil/`): almost all samples are clean,
+  proper digits. A few remain: a '7'-like shape with a dot, one squiggle, a '1' with a dot, an open '0', some messy
+  '3's.
+- **K3136 equil:3** (redone with 64 GB): 13.04, vs 13.48 from noise (n.s.).
+
+**Recipe now:** `--patch 7:3:32 --patch-on-slice 55 --patch-init-scale 0.06` + `--init-dist equil:3`.
+
+**Submitted (16:45): stacking with the global-side fixes, seed 1.**
+- K1536 + patches from t2.2: pipeline 4237903, equil:3 4237905.
+- K1536 + early 2x + patches from t2.2: pipeline 4237904, equil:3 4237906.
+- Follow-ups: FID 4237907, grain 4237908, gallery 4237909
+  (`galleries/2026-11-13_patch7x7-from-t2.2_on-top-of-K1536-and-K1536+early2x_seed1/`).
+- Expected: each doubling of K gave -3.4 FID for the global-only model. With the patches acting late, the global unit
+  sets the shape, so a better global unit should now carry through.
+
+### All ten digits: pilot of the patch recipe (2026-11-13 17:00, the user: "go for all 10 digits")
+**Why now.**
+- The recipe has no class-specific ingredient: 7x7 patches switched on late, plus the data-free equilibrated start.
+- Ten-digit MNIST 28x28 is the paper's target. The sweep of 2026-11-10 (n = 2000, floor 1.69) gave FID 31.1 for K784,
+  22.5 for K3072 and 26.0 for K1536.
+
+**Open questions.**
+- With ten digits a global state covers more variety: about 78 states per class at K784, against 196 on four digits.
+  So the global unit sets a weaker shape, and K may matter more.
+- Whether t = 2.2 is still the right switch-on time.
+
+**Pilot, seed 1:**
+- 2000 samples per model and both starts, as in the sweep.
+- Current code (stencil, mixed precision, `--val-every 1000`).
+- Equilibrated sampling at 64 GB with chunk 125, because K3136 ran out of memory at 48 GB.
+
+| run | pipeline | equil:3 |
+|---|---|---|
+| K784 (baseline on today's code, against the sweep's K784 from 2026-11-10) | 4237994 | 4237998 |
+| K784 + patches from t2.2 (slice 55) | 4237995 | 4237999 |
+| K784 + patches from t2.7 (slice 45): switch-on check | 4237996 | 4238000 |
+| K3072 + patches from t2.2 (against the sweep's K3072) | 4237997 | 4238001 |
+
+- Follow-ups: FID 4238002, grain 4238003, gallery 4238004
+  (`galleries/2026-11-13_ten-digits_patch7x7-late_vs_global-only_seed1/`).
+- Four-digit stacking runs (K1536 +/- early 2x + patches from t2.2, 4237903-09) keep running.
+
+**Update 18:20: K3072 time limit, and an early K784-only evaluation.**
+- The K3072 equilibrated-sampling job 4238001 had a 2.5 h limit, but needs about 3 h.
+  - Reference: K3136 four-digit (4237624) took 670 s per chunk of 125.
+  - 2000 samples = 16 chunks, so about 3 h plus equilibration.
+- Cancelled it and resubmitted as **4238364** with a 4 h 45 min limit (same arguments).
+- FID 4238002, grain 4238003 and gallery 4238004 now depend on 4238364 instead.
+  Expected around 01:00-02:00, since K3072 + patches training is at slice 57/100 at 18:05.
+- So the K784 results are not held up by K3072:
+  - early FID **4238365** for the K784 runs and the sweep's K784;
+  - early gallery **4238366** (`galleries/2026-11-13_ten-digits_K784-only_patch7x7-late_vs_global-only_seed1/`).
+  - Both depend only on the K784 equilibrated-sampling jobs 4237998-4238000. Expected around 20:00.
+- Status at 18:05:
+  - ten-digit K784 baseline trained and sampled (4237994, 230 s per 250 samples);
+  - K784 + patch runs sampling;
+  - four-digit K1536 + patches from t2.2 sampled (4237903); its equilibrated sampling 4237905 is running.
+
+### Patch variants on four digits: 64 states, and 8x8 every 2 px (submitted 2026-11-13 18:40)
+**Question.** Does more patch capacity or more overlap help the current recipe (7x7 every 3 px, 32 states, from
+t = 2.2, start-equil: FID 6.42 at seed 1)? The two tests:
+
+1. **More states per patch:** `--patch 7:3:64`. Same windows; W+Q couplings double to 401,408.
+2. **Denser, more overlapping windows:** `--patch 8:2:32`.
+   - 121 patches of 8x8; each pixel is in about 10 patches (now 4), and neighbouring windows overlap by 6 px.
+   - W+Q couplings 495,616.
+   - Stride 2 on 7x7 windows is not possible: the code needs (28 - side) divisible by the stride, so side 7 allows
+     strides 1, 3 or 7 only.
+   - Side and stride both change against the recipe, so this tests "denser" as a whole, not stride alone.
+
+**Common settings.** K784, patches from slice 55 (t = 2.2) with init scale 0.06, seed 1, n = 500, both starts.
+The reference is the recipe's seed 1 (`..._mixst_patch7s3S32on55_seed1`).
+
+**Fair share at submission.**
+- We had used about 2.7x our share (LevelFS 0.36), and there are no hard limits on the account or job class.
+- About 28 of 256 L40s were free and about 220 GPU jobs from others were waiting on priority, but our single-GPU
+  jobs had started within about 15 min all day.
+
+| run | pipeline | equil:3 |
+|---|---|---|
+| K784 + patch7x7-64states from t2.2 (`..._mixst_patch7s3S64on55_seed1`) | 4238574 | 4238576 |
+| K784 + patch8x8-every2px from t2.2 (`..._mixst_patch8s2S32on55_seed1`) | 4238575 | 4238577 |
+
+- Follow-ups: FID 4238578, grain 4238579, gallery 4238580
+  (`galleries/2026-11-13_patch-variants_7x7-64states_8x8-every2px_vs_7x7-32states_from-t2.2_seed1/`).
+
+### Results: 7x7 patches from t = 2.2 on top of K = 1536 and K = 1536 + early 2x (2026-11-13 18:50)
+**Jobs.**
+- Pipelines 4237903 and 4237904, equilibrated sampling 4237905 and 4237906.
+- FID 4237907 (`fid/4237907`), grain 4237908, gallery 4237909
+  (`galleries/2026-11-13_patch7x7-from-t2.2_on-top-of-K1536-and-K1536+early2x_seed1/`).
+- Seed 1, n = 500, four digits; FID floor 4.57.
+
+| set (seed 1, n = 500) | FID | prec F | rec F | confident | specks | speckle |
+|---|---|---|---|---|---|---|
+| K784 + patch7x7 from t2.2, start-noise | 7.68 | 0.900 | 0.802 | 97.4% | +0.17 | +0.51 |
+| K784 + patch7x7 from t2.2, start-equil | 6.42 | 0.897 | 0.791 | 96.2% | +0.29 | +0.55 |
+| K1536, start-equil (no patches) | 15.01 | 0.946 | 0.536 | 97.8% | +4.82 | +1.87 |
+| K1536 + early2x, start-equil (no patches) | 13.55 | 0.944 | 0.593 | 98.8% | +3.77 | +1.78 |
+| K1536 + patch7x7 from t2.2, start-noise | 6.60 | 0.909 | 0.796 | 98.0% | +0.25 | +0.44 |
+| K1536 + patch7x7 from t2.2, start-equil | 5.74 | 0.907 | 0.797 | 95.8% | +0.17 | +0.46 |
+| K1536 + early2x + patch7x7 from t2.2, start-noise | 6.44 | 0.921 | 0.831 | 97.4% | +0.15 | +0.40 |
+| **K1536 + early2x + patch7x7 from t2.2, start-equil** | **5.62** | 0.913 | 0.803 | 96.8% | +0.23 | +0.46 |
+
+The grain columns are deviations from the real test images, in units of their per-image SD.
+
+**Paired bootstrap (95% intervals):**
+- **K1536 vs K784, both with patches:** FID -1.09 [-2.76, +0.35] (p = 0.14) from noise, -0.68 [-1.96, +0.62]
+  (p = 0.27) from equilibrated. Not significant at one seed and n = 500.
+- **Early 2x on top:** -0.15 (p = 0.82) and -0.13 (p = 0.78). Nothing.
+- **Patches on K1536 (equilibrated start):** -9.27 [-10.1, -7.8] without early 2x and -7.94 with it, both p < 0.01.
+  As on K784, the patches account for most of the gain.
+
+**Images.**
+- *First reading (18:50, withdrawn):* "K1536 + early2x + patches and K784 + patches look almost the same". This was
+  too quick.
+- *Recount (19:05), after the user found the K1536 runs visibly better.*
+  - Count of clearly malformed digits among the first 100 samples of each grid (start-equil).
+  - Malformed: broken or open loops, a 2 or 3 with a gap, a squiggle that is no digit, a blob.
+  - Borderline shapes (thick or blotchy but readable) not counted.
+  - One person counting one seed, so about +/- 3.
+
+  | grid (start-equil, samples 0-99) | clearly malformed | FID |
+  |---|---|---|
+  | `03_K784+patch7x7-from-t2.2` | about 8 | 6.42 |
+  | `09_K1536+patch7x7-from-t2.2` | about 9 | 5.74 |
+  | `11_K1536+early2x+patch7x7-from-t2.2` | about 3 | 5.62 |
+
+  - The visible gain comes with K1536 + early2x. Several of K784's broken digits are clean in the early-2x run:
+    samples 6, 26, 55, 61 and 84.
+  - In my count, K1536 without early 2x is no cleaner than K784; to be checked against the user's reading.
+  - FID barely registers the difference (early 2x: -0.13, p = 0.78), and neither does the confident share
+    (95.8% / 96.8%). This confirms the user's point from this morning: **the FID here measures grain, not shape**.
+- Without patches, K1536 is grainy (specks +4.8 SD); with patches it is as clean as K784 + patches.
+
+**Conclusions (revised 19:05).**
+1. FID and the classifier confidence are blind to the remaining shape errors, at least at n = 500. Recipe decisions
+   between patch models need a shape measure: a blind count on more samples, or a metric checked against one.
+2. K1536 + early2x + patches is visibly the best four-digit model (about 3% malformed against about 8%). Whether that
+   comes from early 2x, from K1536 + early 2x together, or from this seed is open. The shape is set at t > 2.2, where
+   early 2x doubles the steps (t > 3.4) and the global unit acts, so a real effect is plausible.
+3. Best FID so far on four digits: **5.62** (K1536 + early2x + patches from t2.2, start-equil), against the 4.57
+   floor.
+
+### Results: all ten digits, K784, with 7x7 patches from t2.2 / t2.7 (2026-11-13 19:35)
+**Jobs.**
+- Pipelines 4237994-96, equilibrated sampling 4237998-4238000.
+- Early K784-only FID 4238365 (`fid/4238365`) and gallery 4238366
+  (`galleries/2026-11-13_ten-digits_K784-only_patch7x7-late_vs_global-only_seed1/`).
+- Seed 1, n = 2000; FID floor 1.69 (real training images at n = 2000); real images 97.8% confident.
+
+| set (ten digits, seed 1, n = 2000) | FID | prec F | rec F | confident |
+|---|---|---|---|---|
+| real training images (floor / target) | 1.69 | 0.870 | 0.882 | 97.8% |
+| K784, sweep 2026-11-10 (old code), start-noise | 31.10 | 0.904 | 0.296 | 89.1% |
+| K784, today's code, start-noise | 31.08 | 0.904 | 0.298 | 89.1% |
+| K784, today's code, start-equil | 30.12 | 0.904 | 0.284 | 89.2% |
+| K784 + patch7x7 from t2.2, start-noise | 10.22 | 0.837 | 0.746 | 88.4% |
+| **K784 + patch7x7 from t2.2, start-equil** | **8.94** | 0.844 | 0.733 | 88.6% |
+| K784 + patch7x7 from t2.7, start-noise | 12.12 | 0.765 | 0.808 | 82.7% |
+| K784 + patch7x7 from t2.7, start-equil | 10.99 | 0.769 | 0.781 | 84.0% |
+
+**Paired bootstrap:**
+- Patches from t2.2: -20.9 [-21.6, -20.0] from noise and -21.2 [-21.8, -20.3] from equilibrated (both p < 0.01).
+- t2.7 against t2.2: +1.9 and +2.05 (both p < 0.01).
+- Today's code against the sweep run: -0.02 [-0.06, +0.04].
+
+**Findings.**
+1. **The recipe transfers to ten digits.**
+   - K784 FID 31.1 -> 8.94 with patches from t2.2 and the equilibrated start, a factor 3.5.
+   - That is far below the sweep's best global-only model (K3072, 22.5) with a quarter of its global states.
+   - Recall goes 0.28 -> 0.73.
+2. **t2.2 is still the better switch-on time.** As on four digits, earlier switch-on (t2.7) gives more recall but
+   lower precision (0.77 against 0.84) and more unclassifiable digits (84% against 89% confident).
+3. **The fast code is exact enough** (stencil visible term, mixed precision): today's K784 gives the same samples as
+   the float64 sweep run (FID 31.08 against 31.10, the same class shares).
+4. **Shapes are the remaining problem, and more so than on four digits.**
+   - Gallery `06_K784+patch7x7-from-t2.2_start-equil_seed1.png`: textures are clean, but about 16 of the first 100
+     are clearly malformed (my count, +/- 4).
+   - Malformed: a 5 or 3 as a squiggle, a 4 drawn as a thin cross, 4/9 and 4/8 hybrids, scribbles.
+   - About 12 more are borderline. This matches the 88.6% confident share (real 97.8%).
+   - The side-by-side shows the malformed shapes are already there in the global-only model with the same start and
+     noise (column 1: the same squiggle 5 in every row). The shape is decided before t = 2.2, by the global unit
+     with about 78 states per digit; the patches only clean it.
+   - A new, small artefact: an isolated dot next to a clean digit ("1.", "8.", "2."), a few per 100.
+5. **What should fix the shapes:**
+   - More global states: K3072 + patches, 4238364 and FID 4238002 overnight.
+   - Early 2x: on four digits, K1536 + early2x + patches had about 3 malformed per 100 against about 8. Not yet
+     tested on ten digits.
+
+### Shape tests: early 2x on ten digits, and a blind shape count (submitted 2026-11-13 19:50)
+**Why.**
+- FID does not see the shape errors that are left once the patches remove the grain.
+- Early 2x looked visibly better on four digits (about 3 against 8 malformed per 100) at an FID change of only -0.13.
+
+**1. Ten digits, K784 + early2x + patch7x7 from t2.2, seed 1** (`..._mixst_early2x_patch7s3S32on55_seed1`).
+- Pipeline 4238946 (n = 2000), equilibrated sampling 4238947.
+- FID 4238948, grain 4238949, gallery 4238950
+  (`galleries/2026-11-13_ten-digits_K784+early2x+patch7x7-from-t2.2_vs_K784+patch7x7-from-t2.2_seed1/`).
+- Compared with the K784 + patch7x7 from t2.2 run above (FID 8.94 from the equilibrated start, about 16% malformed).
+
+**2. Blind shape count, new script `blind_gallery.py`.**
+- **Sheets.** Each sheet has 100 tiles, all from one model in a random order. The sheets of all models are
+  shuffled together, and `KEY.txt` (sheet -> model) is opened only after counting.
+- **Paired.** Every model shows the same trajectories (same starts and noise).
+- **Control.** `real` random training images, to give the rate at which real digits look malformed by the same rule.
+- **What counts as malformed** (in the README): a broken or open stroke that changes the digit, a merged digit or
+  hybrid, a scribble or blob, disconnected pieces. Stray dots are counted separately.
+- **Four-digit job 4238951.** 200 samples per set, start-equil: real, K784 + patches from t2.2 seeds 1-3 (gives the
+  seed-to-seed spread), K1536 + patches, K1536 + early2x + patches. 12 sheets in
+  `galleries/2026-11-13_blind-shape-count_four-digits_K784+patch-seeds1-3_K1536+patch_K1536+early2x+patch_real_start-equil/`.
+- **Plan.**
+  - I count the sheets before opening the key; the user can count independently.
+  - The same for ten digits once the early 2x and K3072 runs are in.
+  - Then check whether an automatic metric (pixel precision, nearest-image distance, classifier confidence) follows
+    the counts.
+
+**Blind count, four digits (job 4238951, Claude's count, 2026-11-13 20:05, written down BEFORE opening KEY.txt).**
+- Rule as in the README. Borderline tiles not counted: a 1 with serifs, a 3 with a closed but readable loop, thick
+  blobs that are still readable.
+- Counted as malformed: a 3/8 hybrid (an 8 is not among 0-3).
+- Stray dots were not counted consistently, so no numbers for them.
+
+| sheet | 01 | 02 | 03 | 04 | 05 | 06 | 07 | 08 | 09 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| malformed of 100 | 9 | 0 | 7 | 8 | 2 | 9 | 7 | 5 | 1 | 6 | 9 | 8 |
+
+**Guesses before the key:**
+- 02 and 09 are the real images: smooth strokes, no patch texture, no stray dots.
+- 05 is the cleanest model sheet.
+
+**Unblinded (key opened after the counts above).**
+- Both real sheets were guessed right (02, 09).
+- 05 was K1536 + early2x, but so was 04, which got 8.
+
+| set (four digits, start-equil, 200 samples each) | sheets | malformed | rate | FID (n = 500) |
+|---|---|---|---|---|
+| real training images | 02, 09 | 0 + 1 | **0.5%** | 4.57 (floor) |
+| K784 + patch7x7 from t2.2, seed 1 | 10, 11 | 6 + 9 | 7.5% | 6.42 |
+| K784 + patch7x7 from t2.2, seed 2 | 01, 06 | 9 + 9 | 9.0% | 6.02 |
+| K784 + patch7x7 from t2.2, seed 3 | 03, 07 | 7 + 7 | 7.0% | 6.29 |
+| K1536 + patch7x7 from t2.2, seed 1 | 08, 12 | 5 + 8 | 6.5% | 5.74 |
+| K1536 + early2x + patch7x7 from t2.2, seed 1 | 04, 05 | 8 + 2 | 5.0% | 5.62 |
+
+**Reading.**
+1. **Gap to real.** All patch models produce about 5-9% clearly malformed digits, against 0.5% for real ones. That
+   gap, a factor 10-15, is the main remaining defect on four digits.
+2. **K1536 and early 2x.**
+   - The order agrees with the user's visual impression: K784 (mean 7.8% over three seeds) > K1536 (6.5%) >
+     K1536 + early2x (5.0%).
+   - The steps are small and within the noise. The seed spread of K784 alone is 7.0-9.0%. Two sheets of the same
+     model gave 2 and 8.
+   - 10 of 200 against the K784 mean of 15.7 is p of about 0.08 (Poisson, one-sided).
+   - My earlier non-blind "about 3 against 8 per 100" (first 100 samples) overstated the difference.
+3. **FID.** Across models, FID follows the same order (6.2 -> 5.7 -> 5.6), but it does not follow the seeds: K784
+   seed 2 has the best FID of the three seeds and the most malformed digits.
+4. **Precision.** A difference of 2 percentage points needs about 1000+ counted samples per model. A blind count
+   suits large differences (ten digits at about 16%, real against model). Smaller ones need an automatic shape
+   measure checked against these counts.
+
+### Results: patch variants, 64 states and 8x8 every 2 px (2026-11-13 22:15)
+**Jobs.**
+- Pipelines 4238574 and 4238575 (0:59 and 1:12), equilibrated sampling 4238576 and 4238577.
+- FID 4238578 (`fid/4238578`), grain 4238579, gallery 4238580
+  (`galleries/2026-11-13_patch-variants_7x7-64states_8x8-every2px_vs_7x7-32states_from-t2.2_seed1/`).
+- Four digits, K784, patches from t2.2, seed 1, n = 500.
+
+| set | FID noise | FID equil | prec F (equil) | rec F (equil) | confident (equil) | speckle (equil) |
+|---|---|---|---|---|---|---|
+| patch7x7, 32 states (recipe) | 7.68 | 6.42 | 0.897 | 0.791 | 96.2% | +0.55 |
+| patch7x7, 64 states | 7.31 | 6.06 | 0.889 | 0.806 | 94.6% | +0.45 |
+| **patch8x8 every 2 px, 32 states** | 6.72 | **5.73** | 0.892 | 0.810 | 96.4% | +0.36 |
+
+**Paired against the recipe:**
+- 64 states: -0.37 from noise, -0.36 from equilibrated (both p = 0.01).
+- 8x8 every 2 px: -0.96 from noise, -0.69 from equilibrated (both p < 0.01).
+
+**Images.**
+- In `00_side_by_side.png`, every column has the same digit with the same shape in all three models, including the
+  same defects: the broken 1 in column 7, the odd 2 in column 12, the open 0s.
+- The 8x8 every-2-px grid has the same malformed tiles as the 7x7 grid (samples 6, 26, 55, 61, 84).
+- Only the stroke texture changes: 8x8 every 2 px gives slightly smoother strokes, with speckle +0.36 against +0.55.
+
+**Conclusion.**
+- The patch layout is a texture setting. Denser, larger windows clean the strokes a bit more (-0.7 FID), but **no
+  patch variant changes a single shape**.
+- Together with the ten-digit side-by-side (the malformed shapes are already there in the global-only model), the
+  shape of a sample is fixed before t = 2.2, by the global unit, the early slices and the start.
+- So shape fixes have to act at t > 2.2: more global states, better-trained early slices (early 2x), or the sampler
+  at early times.
+- 8x8 every 2 px is a cheap texture gain (1.2x the training time of 7x7) to fold into the recipe later. It is not
+  the bottleneck.
+
+### Overnight 2026-11-13/14: what is running, what to look at in the morning (submitted 22:25)
+**Already running.**
+
+| what | jobs | expected |
+|---|---|---|
+| ten digits, K3072 + patch7x7 from t2.2 (pipeline 4237997 finished 21:59) | equil 4238364 -> FID 4238002, grain 4238003, gallery 4238004 | about 00:30-01:30 |
+| ten digits, K784 + early2x + patch7x7 from t2.2 | equil 4238947 -> FID 4238948, grain 4238949, gallery 4238950 | about 23:30 |
+
+**New tonight.**
+- **Ten digits, K784 + patch7x7 from t2.2, seeds 2 and 3.** Gives the headline number (8.94 at seed 1) an error bar.
+  - Pipelines 4240128 and 4240130, equilibrated sampling 4240129 and 4240131.
+  - FID over seeds 1-3: 4240132. Expected about 01:30-02:30.
+- **Blind shape count, ten digits, job 4240133.** 200 per set, start-equil: real, K784 + patches seeds 1-3,
+  K784 + early2x + patches, K3072 + patches. 12 sheets in
+  `galleries/2026-11-13_blind-shape-count_ten-digits_K784+patch-seeds1-3_K784+early2x+patch_K3072+patch_real_start-equil/`.
+  It waits for all the equilibrated-sampling jobs, so it lands at about 01:30-02:30.
+
+**Morning questions.**
+1. Does K3072 reduce the ten-digit shape errors (about 16% malformed at K784)? FID against K784 + patches, and the
+   blind count.
+2. Does early 2x? Same comparison.
+3. What is the seed spread of the ten-digit number?
+- **Ten digits, K6144 + patch7x7 from t2.2, seed 1** (the user, 22:40: "maybe already also submit 6k potts").
+  Completes the K series 784 / 3072 / 6144 with patches for the paper figure, and asks whether more global states
+  fix the shapes.
+  - **Timing estimate** from K3072 + patches (4237997): training 2 h 10 min, sampling 2000 from noise 2 h 40 min
+    (1190 s per 250). K6144 should take about twice that.
+  - **Split to finish by morning.**
+    - Pipeline 4240138 (10 h limit, 96 GB): training plus a 250-sample check only.
+    - Then two parallel jobs: 2000 samples from noise (4240139) and from the equilibrated start (4240140), each
+      9 h limit, 96 GB.
+    - The noise job uses the same command as the pipeline's sampling (`--chunk 250`, defaults otherwise).
+  - **Follow-ups.** FID 4240141, paired against the 2026-11-10 sweep's global-only K6144, K3072 + patches and
+    K784 + patches. Grain 4240142, gallery 4240143
+    (`galleries/2026-11-13_ten-digits_patch7x7-from-t2.2_on-K784-K3072-K6144_seed1/`).
+  - **Expected about 08:30-10:00** if training starts soon (about 4-4.5 h), then about 5 h of sampling in parallel.
+  - The ten-digit blind sheets (4240133) do not include K6144. Add it in the morning.
