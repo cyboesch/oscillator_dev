@@ -2261,3 +2261,566 @@ The grain columns are deviations from the real test images, in units of their pe
     (`galleries/2026-11-13_ten-digits_patch7x7-from-t2.2_on-K784-K3072-K6144_seed1/`).
   - **Expected about 08:30-10:00** if training starts soon (about 4-4.5 h), then about 5 h of sampling in parallel.
   - The ten-digit blind sheets (4240133) do not include K6144. Add it in the morning.
+
+### Results overnight 2026-11-13/14: ten digits, K3072 + patches, early 2x, seeds (written 2026-11-14 12:40)
+**Jobs.**
+- FID: 4238002 (`fid/4238002`, all ten-digit sets incl. K3072), 4238948 (early 2x), 4240132 (seeds 1-3).
+- Grain: 4238003 and 4238949.
+- Galleries: 4238004 (`galleries/2026-11-13_ten-digits_patch7x7-late_vs_global-only_seed1/`, now with K3072) and
+  4238950 (`galleries/2026-11-13_ten-digits_K784+early2x+patch7x7-from-t2.2_vs_K784+patch7x7-from-t2.2_seed1/`).
+- n = 2000; FID floor 1.69; real images 97.8% confident, precision 0.870, recall 0.882.
+
+| ten digits, n = 2000 | FID noise | FID equil | prec F (eq) | rec F (eq) | confident (eq) | ncomp (eq) |
+|---|---|---|---|---|---|---|
+| K784, global only (today's code) | 31.08 | 30.12 | 0.904 | 0.284 | 89.2% | +4.62 |
+| K3072, global only (sweep 2026-11-10, noise start) | 22.48 | - | 0.924 (noise) | 0.384 (noise) | 92.2% (noise) | +3.43 (noise) |
+| K784 + patch7x7 from t2.2, seed 1 | 10.22 | 8.94 | 0.844 | 0.733 | 88.6% | +1.24 |
+| K784 + patch7x7 from t2.2, seed 2 | 10.12 | 8.76 | 0.843 | 0.733 | 86.8% | |
+| K784 + patch7x7 from t2.2, seed 3 | 10.27 | 8.92 | 0.843 | 0.718 | 89.3% | |
+| **K784 + patches, mean of seeds 1-3** | **10.20 +/- 0.08** | **8.87 +/- 0.10** | 0.843 | 0.728 | 88.2% | |
+| K784 + early2x + patch7x7 from t2.2, seed 1 | 9.89 | 8.34 | 0.847 | 0.728 | 89.5% | +1.24 |
+| **K3072 + patch7x7 from t2.2, seed 1** | **7.03** | **6.37** | 0.879 | 0.758 | **92.6%** | **+0.99** |
+
+- The +/- values are the SD over seeds.
+- ncomp = number of ink components, as a deviation from the real test images in their SD. Too many components
+  means disconnected pieces and stray dots.
+
+**Paired bootstrap:**
+- K3072 + patches against K784 + patches: -3.19 [-3.94, -2.49] from noise and -2.56 [-3.25, -1.85] from
+  equilibrated (both p < 0.01).
+- K3072 + patches against the sweep's K3072 global-only: -15.45.
+- Early 2x: -0.33 (p = 0.15) from noise and -0.60 [-1.00, -0.14] (p = 0.01) from equilibrated.
+- Seeds 2 and 3 against seed 1: -0.18 (p = 0.66) and -0.02 (p = 0.96).
+
+**Findings.**
+1. **The ten-digit number is stable across seeds:** K784 + patches = 8.87 +/- 0.10 from equilibrated, 10.20 +/- 0.08
+   from noise, at 2000 samples. The seed spread (0.1) is much smaller than the effects compared here.
+2. **More global states help the shapes on ten digits** (unlike four digits, where K1536 was within the noise).
+   - K3072 + patches: FID 6.37 against 8.87, precision 0.879 (real 0.870, so no longer too low), 92.6% confidently
+     classified against 88.2%, fewer disconnected pieces (ncomp +0.99 against +1.24).
+   - Gallery `00_side_by_side.png`, same trajectories: several of K784's malformed digits are proper digits at
+     K3072 (column 1: squiggle 5 -> 9; column 13: scribbled 8/3 -> 8; column 14: S-squiggle -> 2).
+   - In `11_K3072+patch7x7-from-t2.2_start-equil_seed1.png` I see about 8-10 clearly malformed of 100, against
+     about 16 at K784 (non-blind; the blind count is running).
+   - Stray dots next to digits remain ("1.", "8.").
+3. **Early 2x is a small effect on ten digits** (-0.6 FID). The side-by-side shows almost the same shapes as without
+   it, column by column. Not worth its training cost compared with more global states.
+4. **Paper figure** (FID against K, ten digits, noise start, n = 2000):
+   - global only: 31.1 (K784), 26.0 (K1536), 22.5 (K3072);
+   - with patches: 10.20 +/- 0.08 (K784, 3 seeds), 7.03 (K3072);
+   - K6144 + patches pending (below).
+   The patches shift the whole curve down by about 15-20 FID. Both curves keep improving with K.
+
+**K6144 + patches: sampling failed overnight (GPU memory), rerun 12:30.**
+- Training finished (pipeline 4240138, 3 h 55 min; slices at 166-168 s each). The 250-sample check and both 2000-sample
+  jobs (4240139, 4240140) failed with RESOURCE_EXHAUSTED on the 48 GB L40.
+- **Cause.** The default sampler vmaps diffrax over the trajectories of a chunk. Each trajectory interpolates its own
+  copy of the hidden parameters at its own time, so memory is about chunk x K x 784 x 8 B x 4. At chunk 250 that is
+  38.7 GB, the failed allocation. K3072 needs half and fit.
+- The fast sampler avoids this (one shared knot matrix), but it refuses patch units and `--init-dist`.
+- **Rerun with smaller chunks**, the same per-trajectory load as the K3072 settings that worked: noise start chunk
+  100 (**4243060**), equilibrated start chunk 50 (**4243061**). Follow-ups: FID 4243062, grain 4243063, gallery 4243064.
+  - Sampling time should be about twice K3072's (2.6-2.7 h), so about 5.5 h: results around 18:30.
+- **12:50: the smaller chunks failed too (4243060, 4243061). Chunk was not the main problem.**
+  - The noise-start job (chunk 100) failed on 15.6 GB, the chunk-scaled per-trajectory interpolation.
+  - The equilibrated-start job (chunk 50) failed on the same 7,885,041,600 bytes as at chunk 125. That is the full
+    hidden-parameter history in float64: 100 slices x (2 x 6144 x 784 + patches) x 8 B. It does not depend on the
+    chunk.
+  - **Diagnosis.** JAX preallocates only 75% of the L40's 48 GB (about 36 GB), and the default sampler holds the
+    7.7 GB history several times. At K6144 the remaining pool is too small. The old sweep's K6144 was also only ever
+    sampled with the fast sampler (4229560), after its default-sampler run was killed for host memory.
+  - **Rerun 12:55.** `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` in the job environment (apptainer passes it on; no
+    numerical change) and chunk 25 for both starts:
+    - noise start **4243109**, equilibrated start **4243110**, 12 h limits;
+    - FID 4243062, grain 4243063 and gallery 4243064 now depend on them (afterok).
+  - **If this still fails**, the clean fix is in the code: pass only slice 0's parameters to the equilibration drift,
+    and avoid the duplicate history copies in `make_drift` / `interpolate_parameters`.
+- **13:05: the 95% pool failed differently (4243109, 4243110).**
+  - Both failed with `INTERNAL: Failed to allocate 7885041600 bytes for new constant`.
+  - The compiled diffeqsolve embeds the closed-over parameter history (7.9 GB at K6144) as an XLA **constant**, and
+    constants are allocated outside the BFC pool. With the default 75% pool, the BFC pool was too small for the batch
+    and history buffers. With a 95% pool, too little memory was left outside it for the constant.
+  - **Rerun 13:08: `XLA_PYTHON_CLIENT_ALLOCATOR=platform`** (on-demand cudaMalloc from the whole 46 GB for buffers
+    and constants alike; no numerical change), chunk 25: noise start **4243157**, equilibrated start **4243158**.
+    FID, grain and gallery (4243062-64) depend on them.
+  - **Proper fix for later.** Pass the history to the jitted solver as an argument instead of a closure: no
+    per-executable constant copies. That would also cut the K3072 memory footprint.
+
+### Ising patch units: build started (2026-11-14 13:15, the user: "replace the Potts patch units by Ising patch units ... could you submit those?")
+**Why.**
+- Global Ising units lost clearly to Potts: ten digits, FID saturated at about 51-53 against 22.5 for Potts at
+  K3072; four digits at 28x28, 66% clean against 92% (README Result 15).
+- But the Ising rows had smoother strokes, and a bistable element per unit is far simpler hardware than a K-way
+  winner-take-all.
+- The patches only set the texture (they never changed a shape), so Ising patch units are a cheap test. Does stroke
+  quality hold with independent on/off local features instead of 32-state local mixtures?
+
+**Build** (workflow wf_d1cf272e-031): `train_latent.py --patch-kind ising`, with M Ising units per patch.
+- F = -T sum log 2cosh(a/T), new parameter keys Wpi/bpi/Qpi, the split-tree reference per patch, Ising
+  learning-rate scales and diagnostics, sampler support.
+- Test block 20, plus block 19 rerun to show the Potts path unchanged. GPU smoke run.
+- Two reviewers (maths/tests; integration), then a fixer.
+- Built in `candidates/ising_patch/`; installed only after the tests pass.
+
+**Planned runs** once installed:
+- four digits, K784 + Ising patches 7x7 every 3 px, 32 units per patch (the same number of bistable elements as 32
+  Potts states), from t2.2, seed 1, both starts;
+- two start scales (chosen from the smoke run's field sizes; small Ising fields are nearly degenerate);
+- then ten digits;
+- compared with the Potts patch runs on FID, grain (speckle, specks, components), precision/recall and the
+  galleries.
+
+**Also 13:20.** The adversarial verification of the on-device-training table (workflow wf_594cc60d-19b) did not run:
+the service's safeguards stopped all three agents. That table (steps 1-3 against the local learning rule) stays
+unverified.
+
+### Results: blind shape count by three independent raters, four and ten digits (2026-11-14 13:20; workflow wf_eb635ec0-643)
+**Method.**
+- Three independent rater agents per problem saw only the 12 sheets and README.txt (no key). Each marked every
+  malformed tile by position, plus borderline tiles and stray dots.
+- A tile counts as malformed if at least 2 of 3 raters marked it (the "majority" column). Per sheet, the majority
+  count is close to the unanimous count (in 24 sheets, unanimous is at most 4 lower). So the raters agree well.
+- 200 samples per set (2 sheets), start-equil, the same trajectories in every model set.
+- Real training images are included as a control.
+
+**Ten digits** (sheets: real 07/08; K3072 01/03; K784 seed 1 10/11, seed 2 04/05, seed 3 02/09; early2x 06/12):
+
+| set (ten digits, start-equil) | malformed (majority) | rate | stray dots (majority) | FID (n = 2000) |
+|---|---|---|---|---|
+| real training images | 0 + 1 | **0.5%** | 3 + 2 | 1.69 (floor) |
+| K784 + patch7x7 from t2.2, seed 1 | 9 + 5 | 7.0% | 4 + 6 | 8.94 |
+| K784 + patch7x7 from t2.2, seed 2 | 8 + 8 | 8.0% | 5 + 4 | 8.76 |
+| K784 + patch7x7 from t2.2, seed 3 | 9 + 8 | 8.5% | 3 + 6 | 8.92 |
+| K784 + early2x + patch7x7 from t2.2 | 10 + 5 | 7.5% | 4 + 5 | 8.34 |
+| **K3072 + patch7x7 from t2.2** | 5 + 1 | **3.0%** | 2 + 5 | 6.37 |
+
+- **K3072 cuts the malformed rate by more than half:** 6 against 15.7 per 200 for the K784 mean (p of about 0.006,
+  Poisson). The seeds agree (7.0-8.5%).
+- **Early 2x: no effect on shapes** (7.5%), although FID moves by -0.6.
+- **Stray dots are only mildly above real** (about 4.5% against 2.5%); the raters also flag specks in real digits.
+
+**Four digits** (key from 2026-11-13: real 02/09; K784 seed 1 10/11, seed 2 01/06, seed 3 03/07; K1536 08/12;
+K1536 + early2x 04/05):
+
+| set (four digits, start-equil) | malformed, raters (majority) | rate | Claude's count (2026-11-13, one rater) |
+|---|---|---|---|
+| real training images | 0 + 1 | 0.5% | 0.5% |
+| K784 + patches, seeds 1 / 2 / 3 | 10 / 9 / 10 of 200 | 5.0 / 4.5 / 5.0% (mean 4.8%) | 7.5 / 9.0 / 7.0% |
+| K1536 + patches | 4 + 6 | 5.0% | 6.5% |
+| K1536 + early2x + patches | 4 + 4 | 4.0% | 5.0% |
+
+- **The panel finds no K1536 effect on four digits** (5.0% against 4.8%). Early 2x: 4.0%, within noise.
+- My single-rater count from yesterday was more lenient: about 1.4x more tiles counted malformed. It was also
+  noisier (I gave the two early-2x sheets 8 and 2; the panel gives 4 and 4). So the K784 > K1536 > K1536 + early2x
+  ordering I reported was mostly noise.
+
+**Reading.**
+1. All patch models are about 10x above real digits in malformed shapes (4-8% against 0.5%). That is the remaining
+   defect.
+2. More global states fix it where states per digit are scarce:
+   - ten digits, K784 (about 78 states per digit): 7.8%;
+   - ten digits, K3072 (about 307 per digit): 3.0%;
+   - four digits, K784 or K1536 (196-384 per digit): 4-5%, flat.
+   A plausible reading: the malformed rate falls with the number of templates per class until about 200-300, then
+   flattens at a few percent. That flat part is what a conceptual change has to attack.
+3. FID agrees with the counts across K but not for early 2x (FID -0.6, shapes unchanged) and not across seeds. Use
+   both.
+- **13:21: K6144 sampling runs** with the platform allocator and chunk 25 (4243157 noise, 4243158 equilibrated).
+  - First noise chunk: 381 s for 25, including compilation. Equilibration: 20 s per 25 after the first chunk.
+  - About 13 s per sample against 4.8 s at K3072, so about 7-7.5 h per 2000. Expected about 21:00, then FID 4243062,
+    grain 4243063, gallery 4243064.
+- **14:10: status after the session break.**
+  - Noise start 4243157 is running: 245 s per chunk of 25 (9.8 s per sample), 12 of 80 chunks done; expected
+    about 18:40.
+  - The equilibrated start 4243158 equilibrated (1689 s) but was then killed for **host** memory (96 GB). Resubmitted
+    with 160 GB as **4243472** (platform allocator, chunk 25). Expected about 21:00.
+  - FID 4243062, grain 4243063 and gallery 4243064 now depend on 4243157 and 4243472.
+  - The user stopped all agent workflows: the design panel (wf_d71aa8a7-d23) and the Ising patch build
+    (wf_d1cf272e-031) did not finish. The build had written nothing: no candidates/ folder, and the main code files
+    are unchanged since 11-13.
+
+### Where we stand, the conceptual options, and next steps (2026-11-14 14:20)
+**1. The "most coherent" K6144 gallery: K, not the absence of patches.**
+- The user compared the grids in `galleries/2026-11-13_ten-digits_patch7x7-from-t2.2_on-K784-K3072-K6144_seed1/`.
+  That folder holds only the grids written before its gallery job failed overnight (02-05: K784 / K3072 + patches;
+  06: **K6144 global-only from the 2026-11-10 sweep**). Its side-by-side is still to come (4243064).
+- 06 differs from the patch runs in two ways at once: twice the states of K3072, and no patches.
+- At equal K the patches never changed a shape. In the side-by-sides, K784 and K3072 give the same digit with the
+  same shape column by column, with and without patches. So the coherence comes from K = 6144.
+- The K6144 + patches run (sampling now) checks that the patches keep it.
+
+**2. The global unit uses few of its states, and decides the shape between t of about 3.4 and 2.7.**
+Seed-1 training logs, ten digits, with patches (4237995, 4237997, 4240138). "eff" = exp of the entropy of the batch
+state occupation; "max p" = mean largest posterior.
+
+| slice (t) | K784: eff / max p | K3072: eff / max p | K6144: eff / max p |
+|---|---|---|---|
+| 0 (5.0) | 701 / 0.015 | 2472 / 0.006 | 4668 / 0.004 |
+| 20 (3.99) | **456** / 0.16 | **914** / 0.12 | **1269** / 0.11 |
+| 31 (3.43) | 620 / 0.47 | 1441 / 0.39 | 2003 / 0.36 |
+| 45 (2.73) | 616 / 0.83 | 1471 / 0.82 | 1980 / 0.83 |
+| 55 (2.22) | 612 / 0.91 | 1400 / 0.94 | 1827 / 0.95 |
+| 99 (0.0) | 576 / 1.00 | 1350 / 1.00 | 1736 / 1.00 |
+
+- **Few of the states are used:** about 600 of 784, 1400 of 3072 and 1800 of 6144. Going from 3072 to 6144 adds
+  only about 400 used states.
+- All three collapse at t of about 4 (slice 20) and recover only partly. The slices are trained from t = 5 down, each
+  warm-started from the previous one, so the collapse is plausibly passed on downward.
+- The top state's class accuracy is 0.93-0.95 from slice 45 on.
+- The posterior goes from max p of about 0.4 (t 3.4) to about 0.8 (t 2.7): the shape decision window, before the
+  patches switch on at t 2.2.
+
+**3. Noise start against equilibrated start** (the user's question; details in the 2026-11-12 sections on the start
+distribution).
+- The forward process is OU, dx = -x dt + sqrt(2T) dW. At t = 5 the true distribution still carries e^-5 of the data:
+  0.73 noise SDs along the mean digit and about 21% extra variance along PC1 (four digits). The noise start
+  N(0, T I) ignores this.
+- `--init-dist equil:3` takes the same draws and relaxes them for 3 time units under the model's own t = 5 energy
+  (dx = -grad F(x; t=5) ds + sqrt(2T) dW). No data are used. The shift along the mean digit goes from 0 to 0.63 SD
+  (true 0.73).
+- The gain is about 1 FID everywhere: four digits 7.33 -> 6.24 (3 seeds); ten digits 10.20 -> 8.87 (3 seeds);
+  K3072 7.03 -> 6.37.
+- What it changes is the class balance: from the noise start too many trajectories end as 1s (too little "ink" along
+  the mean digit). Strokes are unchanged.
+- The relaxation moves each start state far (median 5.5 against |x| of about 4). So noise and equil rows of a
+  gallery show different digits in the same column. Cost: about 2,500 Langevin steps per sample, about +20%
+  sampling time.
+
+**4. Assessment: is there a conceptual step?** Hyperparameter changes now give small FID gains and no shape gains
+(patch size, states, stride, early 2x). The evidence points at the global unit.
+- At low T the global Potts unit is a mixture of K templates (template plus a per-pixel quadratic term), the same
+  family as dense associative memories / modern Hopfield networks. That form has two limits:
+  - It covers the space of handwritten shapes with K separate "blobs". Coherence then needs very many templates per
+    digit; as K approaches the number of training images (60k) the model starts to copy.
+  - The hybrids (4/9, 3/5, 8/3) look like the spurious mixture states of an associative memory: in the decision
+    window, while two templates are about equally likely, the force points at their average.
+- The blind count supports this: the malformed rate falls with templates per digit (78 per digit: 7.8%; about 300:
+  3.0%), and at 200-384 per digit (four digits) it is flat at 4-5%, against 0.5% for real digits.
+- **Candidate conceptual steps** (my proposal; the design panel that was to critique them was stopped before it
+  finished):
+
+| step | idea | why it targets shapes | cost |
+|---|---|---|---|
+| A. tree hierarchy | the global Potts state sets the patch units' priors: F = -T log sum_g e^{a_g(x)/T} prod_p sum_s e^{(J_p(g,s) + a_ps(x))/T}. Still exactly summable. | each global state becomes a "shape program" over local stroke patterns instead of one pixel template; the patches could act early without overriding the shape | K*P*S per force evaluation (784*64*32 = 1.6M, like a K of about 2000 global unit); hidden-hidden couplings |
+| B. per-state soft modes | each global state gets a few low-rank directions of its own (slant, thickness, small shifts): a mixture of factor analysers. The cheaper variant: shared modes with a state-dependent stiffness. | tangent planes instead of blobs. The earlier harmonic modes were shared by all states, plausibly why they gave nothing. | a gated (three-body) or dispersive coupling in hardware |
+| C. use the states we pay for | fix the collapse at t of about 4: revive or split dead states (`--hidden-floor`, `--split-dead` exist), or train the slices jointly or in increasing t (DESIGN.md section 5 suggested that order) | if K3072 then behaves like K6144 or better, more shape coverage at no sampling cost | none at sampling time |
+
+- **Cheap diagnostics without retraining:**
+  - lock the global state after the decision window (a conditional reverse process);
+  - sharpen the global unit inside the window.
+  If the hybrids disappear, part of the problem is in the dynamics rather than in capacity.
+- **Caution:** at K6144 each state covers about 10 training images. Check nearest-image distances, so that coherence
+  is not copying.
+
+**5. Are the steps compatible with on-device training?** My derivation. The adversarial verification of it
+(workflow wf_594cc60d-19b) was stopped by the service's safeguards, so it is **unverified**.
+- Training is force/score matching: the hidden-unit statistics are measured while the pixels are clamped at data,
+  plus small nudges. There is no free-running negative phase, so depth alone does not rule out on-device training.
+
+| step | learning rule on the device | hidden settling while clamped | main cost |
+|---|---|---|---|
+| C. use the states | unchanged. `--hidden-floor` is local (a state needs only its own visit count); the slice order is a schedule; time-continuous parameters give local gradient x a broadcast basis weight | unchanged | `--split-dead` needs an occasional controller copy of parameters |
+| B. per-state modes | almost unchanged: integrating out Gaussian oscillators keeps each state's field quadratic in x, so the DESIGN.md 2.1 rule (occupations, nudge projections) carries over; the oscillator amplitude is an extra local factor | fast (given the state, the oscillators are linear) | gated (three-body) or dispersive coupling |
+| A. tree | possible, but the hidden units are no longer independent given x. Each local update then also needs a few scalars broadcast from the clamps (instantaneous force projected on psi, its norm, the total stiffness): a three-factor rule | can be slow: the global unit and the patches lock exactly when two shapes compete | broadcast signal; longer clamped sampling per update |
+
+**6. Ising against Potts** (the user asked whether to investigate Ising units first).
+- The record (README Result 15 and the ten-digit table): a flat layer of Ising units loses clearly.
+  - Ten digits, global only: FID 53.2 / 51.2 / 52.3 at 784 / 1568 / 3136 units (saturated), against Potts 31.1 /
+    26.0 / 22.5.
+  - Four digits at 28x28: 66% clean against 92%. Skewed class shares.
+  - The idle-unit fixes (reseed, step boost) did not help.
+- The likely reason: independent on/off features add up, and nothing makes them form a consistent combination; that
+  needs interactions between hidden units. A Potts state encodes a whole digit.
+- But Ising units had smoother strokes, and one bistable element per unit is much simpler hardware than a K-way
+  winner-take-all.
+- **Proposal:** Ising units as the lower level, not the shape selector. The cheapest test: Ising patch units in
+  place of the Potts patch units (`--patch-kind ising`), to see whether stroke quality holds. The build started
+  (13:15) but was stopped with the other agents before it wrote any code.
+
+**7. Agents stopped (between 13:21 and 14:05, the user's request).**
+- The design panel (wf_d71aa8a7-d23) and the Ising patch build (wf_d1cf272e-031) did not finish.
+- The blind count (wf_eb635ec0-643) had finished; its results are above.
+
+**8. Next steps (proposed 14:15; waiting for the user's choice).**
+1. **K6144 + patches** (running; noise start about 18:40, equilibrated start 4243472 about 21:00). Then FID, the
+   gallery and a blind count against K784 / K3072: does the flat part hold at about 600 states per digit?
+2. **Is the slow gain from K a training artefact?** Ten-digit K784 + patches with state revival (`--hidden-floor` or
+   `--split-dead` at the collapse slices). No new code; 2 runs; FID plus a blind count.
+3. **Ising patch units:** restart the build (agents, or directly in the session).
+4. **A conceptual step (A or B)**, chosen after 1 and 2 show whether more and better-used states close the gap.
+
+**Correction to next step 2 (14:35).** State revival is not untested.
+- `--split-dead` was run on 2026-11-12: four digits, K784, global only, 3 seeds, splits every 5 slices from 20 to 95
+  (section "Results: full runs with splits every 5 slices from 20 to 95").
+  - It kept about 150 more states alive (41-50 dead at t = 0 against 120-140).
+  - FID changed by only -0.45 (n.s.), and the late splits hurt the slice-99 fit.
+  - Reading then: the digit is decided at t >= 4, before the first split, and "the number of live states is not the
+    bottleneck by itself".
+- `--hidden-floor` only works with `--hidden-samples`, and it diverged when tried.
+- **Still open:**
+  - ten digits, where states per digit are scarce and K clearly reduces malformed shapes;
+  - shapes measured by the blind count (11-12 measured FID only);
+  - splits or a coarse-to-fine start before t of about 4: near-copies of the high-t winners that share occupation
+    instead of starving (candidate fix 2 of 2026-11-12).
+
+### Ising patch units: built directly in the session (2026-11-14 15:00-15:40; the user: "lets do this!", agents stopped)
+**What it does.** `train_latent.py --patch SIDE:STRIDE:M --patch-kind ising`.
+- The M units of a patch are independent Ising units instead of one M-state Potts unit:
+  F_patch = -T sum_{p,s} log 2cosh(a_ps / T).
+- The same parameter keys (Wp, bp, Qp), geometry, switch-on (`--patch-on-slice`, `--patch-init-scale`) and
+  per-patch learning-rate rules as the Potts patches.
+
+**Code** (candidate in `../latent_physical_SGM_ising_candidate/`; originals frozen in
+`../latent_physical_SGM_pre_ising_patch/` for the bit-for-bit tests):
+- `latent_model.py`:
+  - `patch_terms` / `patch_free_energy` take `kind='potts'|'ising'`. The Ising branch is hidden_terms_quad's Ising
+    formulas per patch.
+  - `make_loss` / `make_loss_per_sample` / `make_force` take `patch_kind`, default 'potts', so every existing call is
+    unchanged.
+  - New:
+    - `patch_ising_trees`: split_tree per patch, label-free, seeds = the Potts k-means seeds.
+    - `patch_ising_reference`: split_reference's formula per patch, bit for bit. Scale lam multiplies W and b.
+    - `patch_ising_lr_scales`, `patch_ising_unit_stats`: decided share |m| > 0.9, weak units, <|m|>, rms |a|/T.
+- `train_latent.py`:
+  - The option and its guard; `patch_kind` recorded in config.json for ising only (Potts and patch-free configs
+    unchanged).
+  - Resume and `--init-from` refuse another kind.
+  - The split-tree reference, start and learning-rate scales; patch_reference.json gains the start field sizes |a|/T.
+  - patchi_* diagnostics and an Ising line in the slice log.
+- `sample_latent.py`: `load_params` gives the patch tuple as (Wp, bp, Qp, kind) (a 3-tuple still means Potts), and
+  the manifest records `patch_kind`. `make_drift` uses the kind; `--fast` still refuses patch runs.
+- `early_slices.py`: Ising rows. `make_gallery.py`: patch_kind in the provenance.
+
+**Tests** (new block 20 in `test_latent.py`, plus block 19 rerun on the candidate as the Potts patch regression):
+- 4243705: block 20 A-F (formulas against autodiff, loss / force / gradient, mixed precision, bit-for-bit default
+  paths, reference = split_reference, sampler drift).
+- 4243706: block 20 G (command lines: guard, 100-slice toy run, resume refused, --patch-on-slice, default sampler
+  with the normal and equil start, --fast refused, a Potts patch run old vs new code bit for bit).
+- 4243707 / 4243708: block 19 A-F / G.
+- **Install only if all pass**, then a GPU smoke run and the real runs.
+
+### Ising patch units: tests passed, installed, four-digit runs submitted (2026-11-14 15:20)
+**Tests: all 88 checks pass** (block 20 A-F 4243705: 28/28; block 20 G 4243706: 9/9; block 19 A-F 4243707: 37/37;
+block 19 G 4243708: 14/14).
+- **Formulas.** Ising patch gradient and Laplacian against autodiff: 5.5e-16 / 6.4e-16. One patch covering the grid
+  = the global Ising unit, 1.1e-16. Loss against a full-autodiff reference: <= 2.1e-16, four model configurations.
+- **Mixed precision.** Gradient error 2-6e-7 relative, cosine 1.00000000 at t = 5 ... 0.
+- **Bit for bit unchanged:** the Potts and no-patch paths (loss value, gradient and jaxpr, force, sampler drift), and
+  a 3-slice Potts patch training run old against new code.
+- **Reference.** The per-patch split-tree reference equals split_reference bit for bit.
+- **Command lines.** The 100-slice toy run, resume refusal, `--patch-on-slice`, the default sampler (normal and equil
+  start) and the `--fast` refusal all work.
+- **Start field sizes** of 7:3 Ising units (M = 32) at the t = 2.22 switch-on (2048 forward samples, four digits):
+
+| --patch-init-scale | median abs(a)/T | 90% | share > 1 |
+|---|---|---|---|
+| 0.06 (the Potts patch value) | 0.12 | 0.30 | 0.000 |
+| 0.25 | 0.49 | 1.24 | 0.18 |
+| 1 | 1.95 | 4.97 | most |
+
+  At 0.06 the Ising units would start in the near-degenerate regime (DESIGN.md section 2: a weak unit gets almost no
+  gradient), so the runs use 0.25 and 1.
+
+**Installed 15:15:** latent_model, train_latent, sample_latent, early_slices, make_gallery, test_latent.
+- The live files were checked unchanged against the frozen copies before the swap. Each file was copied in, then
+  renamed into place, latent_model first.
+- `../latent_physical_SGM_pre_ising_patch/` keeps the pre-change modules (needed by block 20 D). The candidate
+  folder was removed.
+
+**Runs** (four digits, K784, patches 7:3 with 32 Ising units each, from slice 55 = t 2.2, seed 1, n = 500):
+
+| start scale | pipeline | equil:3 | run |
+|---|---|---|---|
+| 0.25 | 4244038 | 4244039 | `..._mixst_isingpatch7s3M32on55s025_seed1` |
+| 1 | 4244040 | 4244041 | `..._mixst_isingpatch7s3M32on55s1_seed1` |
+
+- Follow-ups: FID 4244042, paired against the Potts patch run (7:3:32 from t2.2, seed 1: 7.68 / 6.42) and the
+  global-only K784. Grain 4244043 (stroke texture: speckle, specks, components). Gallery 4244044
+  (`galleries/2026-11-14_four-digits_K784+isingpatch7x7-32units_vs_pottspatch7x7_from-t2.2_seed1/`).
+- **Question:** do 32 independent on/off units per patch clean the strokes as well as one 32-state Potts unit? If
+  yes, the patch level can be built from bistable elements without a winner-take-all.
+- **15:35: switch-on at slice 55 (training logs 4244038 / 4244040).**
+  - The start fields measured on clean training images are larger than on the forward samples of test 20E: median
+    |a|/T 2.78 at scale 0.25 and 11.1 at scale 1 (patch_reference.json).
+  - **Scale 0.25: healthy.**
+    - The Ising patches grow over slices 55-57: |Wp| 2.13 -> 2.67 (reference 7.9); decided share 0.24 -> 0.38;
+      22-27 weak units of 2048; <|m|> 0.60-0.64.
+    - The global unit is unchanged: top-state class accuracy 0.987, about 510 effective states, <max p> 0.93.
+    - The patch force (0.10-0.14) already exceeds the global one (0.02-0.03), as with Potts patches.
+  - **Scale 1: the global unit collapses.**
+    - From slice 55 on, the global Potts unit has 1.00 effective states and class accuracy 0.25 (chance for four
+      digits). The Ising patches (decided 0.79-0.80, force 0.43 against 0.018) take over the late-time score, and the
+      slice-55 validation loss improves by -234.
+    - The run is kept: the digit is decided by t 2.2, so its samples show whether the patch units alone can hold a
+      shape after that.
+
+### Results: Ising patch units get within 1 FID of Potts patch units (2026-11-14 16:40; pipelines 4244038/40, equil 4244039/41, FID 4244042, grain 4244043, gallery 4244044)
+Four digits, K784, 7x7 patches every 3 px, from t = 2.2, seed 1, n = 500 (floor 4.57); real images: speckle 0, etc.
+
+| set | FID noise | FID equil | prec F (eq) | rec F (eq) | confident (eq) | ncomp | specks | speckle |
+|---|---|---|---|---|---|---|---|---|
+| K784, global only | 20.25 | 17.95 | 0.936 | 0.452 | 98.6% | +3.37 | +4.72 | +2.10 |
+| K784 + Potts patches (32 states) | 7.68 | 6.42 | 0.897 | 0.791 | 96.2% | +0.78 | +0.29 | +0.55 |
+| **K784 + Ising patches (32 units), start scale 0.25** | 8.59 | **7.35** | 0.892 | 0.782 | 95.8% | +1.31 | +0.60 | +0.45 |
+| K784 + Ising patches, start scale 1 | 13.30 | 11.99 | 0.820 | 0.783 | 90.8% | +1.75 | +0.94 | +0.65 |
+
+The grain columns are for the equilibrated start, as deviations from the real test images in their SD.
+
+**Paired bootstrap:**
+- Ising at scale 0.25 against Potts: +0.91 [+0.48, +1.34] from noise and +0.93 [+0.56, +1.36] from equilibrated.
+- Against the global-only model: -10.61 (p < 0.01).
+- Ising at scale 1 against Potts: +5.6.
+
+**Findings.**
+1. **Independent Ising units recover about 92% of the Potts patch gain** (global only 17.95 -> Potts 6.42 -> Ising
+   7.35, from the equilibrated start). Precision, recall and the confident share are within 0.01 of Potts.
+   - In the side-by-side, the scale-0.25 rows show the same digits and shapes as the Potts rows, column by column,
+     with equally clean strokes.
+   - The difference is small isolated specks: specks +0.60 against +0.29, components +1.31 against +0.78. Speckle on
+     the ink is even slightly lower (+0.45 against +0.55).
+   - So the patch level does not need a winner-take-all. 32 bistable elements per patch without lateral inhibition
+     do almost the same job, a much simpler hardware story.
+2. **Start scale matters.**
+   - At scale 1 the strong Ising patches took over the late-time score at the switch-on, and the global unit
+     collapsed to one state (effective states 1.00, class accuracy 0.25).
+   - The samples still mostly keep their digit, because it is decided before t 2.2, so the patches alone hold the
+     shape after that. But more strokes break (open 0s, dotted 1s), precision drops to 0.82, the confident share to
+     90.8%, and FID is +5.6 worse than Potts.
+   - Scale 0.25 avoids this: the global unit stays intact (about 510 states, class accuracy 0.99).
+3. **Next possible steps:**
+   - A smaller scale such as 0.12 (closer to the Potts setting, but still with non-degenerate fields) and seeds 2-3
+     for the error bar.
+   - Fewer Ising units per patch (8, 16) for the hardware count.
+   - Ten digits.
+
+### Review: is a deep (tree) hidden architecture trainable on the device? (2026-11-14 17:00, the user's question)
+Claude's reasoning; not yet checked numerically. The automated verification (wf_594cc60d-19b) was stopped by the
+service's safeguards.
+
+**Gradient identities.** For any hidden system, F(x) = -T log sum_h exp(-E(x,h)/T) gives the following, with
+<.> and Cov over p(h | x), x held at the data:
+- grad F = <grad_x E>;
+- Delta F = <Delta_x E> - Var(grad_x E)/T;
+- d_theta grad F = <d_theta grad E> - Cov(d_theta E, grad E)/T, and similar third-order terms for d_theta Delta F.
+
+**1. No negative phase, for any architecture.** The score-matching gradient needs only these conditional statistics
+at clamped data, never the model's distribution over x. So depth alone does not kill on-device training, unlike
+Boltzmann-machine likelihood training.
+
+**2. Locality depends on the form of the rule.**
+- **Force-matching form** (DESIGN.md 2.1, what the code uses):
+  - In one bipartite layer the hidden units are independent given x, so each covariance reduces to the unit's own
+    terms, and the rule is local.
+  - In a tree (global Potts unit -> patch units -> pixels), the units are correlated through the global unit. Each
+    update then needs, besides its local activity, a few scalars broadcast from the clamps: the instantaneous force
+    f(t) projected on psi, |f(t)|^2, and the instantaneous total stiffness. That is a three-factor rule with a global
+    signal.
+- **Short-release (CD-1) form** (DESIGN.md 2, Hyvaerinen 2007; valid for any smooth F):
+  dtheta ∝ <d_theta E>_data - <d_theta E>_after release.
+  - Every parameter needs only its own average activity before and after a short release. For a global-patch
+    coupling that is the co-activation 1[g, s_p].
+  - So **a tree stays fully local**, at the known price of noise (signal-to-noise ratio of order sqrt(dt) per
+    release).
+  - This corrects the earlier table (section "Where we stand ... 5."), which listed only the broadcast variant for the
+    tree.
+
+**3. The real cost of depth is hidden equilibration.**
+- Both forms need the hidden units at equilibrium given clamped x (and x').
+- In a tree, the global and patch units can lock each other exactly when two shapes compete. That means longer
+  sampling per update, and lag (friction; heating with two temperatures, DESIGN.md 4) during generation.
+- In simulation the exact sum removes this.
+- The replica construction for generation (DESIGN.md 3: duplicate the hidden system) gives 2F for any hidden system,
+  so it carries over.
+
+**Bottom line.** A tree is trainable on the device in principle: with a broadcast signal (force-matching form) or
+fully locally (release form, noisier). The binding constraint is how fast the clamped hidden tree mixes, which grows
+with the strength of the global-patch couplings.
+
+**Proposed check (CPU, no GPU).** A small exactly summable tree on 8x8 (K = 4 global, 4:2 patches): verify the
+broadcast-form gradient and the release-form identity (finite dt -> 0) against autodiff of the loss.
+
+### HANDOFF: deep tree build spec (2026-11-14 17:20; to be built in a NEW session; exact training only)
+**The user's decision.**
+- Build the tree (global Potts unit -> patch units) now and run it overnight.
+- Exact training only: ignore on-device learning for now. First find out whether the tree raises expressivity
+  (shape coherence).
+- Continue in a new chat. The old session's /tmp was full, so start Claude Code with
+  `CLAUDE_CODE_TMPDIR=/n/fs/cyrills-part/oscillator_dev/.claude_tmp`.
+
+**Model.**
+- The global Potts unit (K states; a_g = b_g + W_g.x + Q_g.x^2) and the per-patch Potts units (P patches, S states;
+  a_ps = bp_ps + Wp_ps.x_p + Qp_ps.x_p^2) are coupled by a table J (P, K, S): J_p[g, s] is the energy bonus of patch
+  state s when the global state is g.
+- Hidden part of the free energy (exact; tree):
+  F_tree(x) = -T logsumexp_g [ a_g/T + sum_p logsumexp_s ((J_p[g,s] + a_ps)/T) ]
+- **J = 0 must reproduce today's model** (hidden_terms_quad 'potts' + patch_terms) to rounding: the first test, and the
+  natural start.
+
+**Posterior.**
+- p(g | x) = softmax_g(Phi_g / T), Phi_g = a_g + T sum_p log Z_p(g), with Z_p(g) = sum_s exp((J_p[g,s] + a_ps) / T).
+- p(s | g, x) = softmax_s((J_p[g,s] + a_ps) / T).
+- Patch marginal: q_ps = sum_g pi_g p(s | g).
+
+**Force.** With G_g = W_g + 2 Q_g * x and G_ps = Wp_ps + 2 Qp_ps * x_p:
+  grad F = -[ sum_g pi_g G_g + fold(sum_p sum_s q_ps G_ps) ].
+
+**Laplacian.** Delta F = <Delta E> - Var(f)/T, with f the instantaneous hidden force.
+- <Delta E> = -[ sum_g pi_g 2 sum_i Q_gi + sum_p sum_s q_ps 2 sum_j Qp_psj ].
+- Var(f) = E_g[Var(f | g)] + Var_g(E[f | g]). Given g the patches are independent, so:
+  - E_g Var(f | g) = sum_p sum_s q_ps |G_ps|^2 - sum_g pi_g sum_p |gbar_p(g)|^2, with
+    gbar_p(g) = sum_s p(s | g) G_ps (P, d per g);
+  - Var_g(E[f | g]) = sum_g pi_g |m_g|^2 - |sum_g pi_g m_g|^2, with m_g = G_g + fold(sum_p gbar_p(g)) (N per g).
+- Check the whole Laplacian against autodiff of F_tree on 8x8.
+
+**Cost and memory.**
+- Per sample: K P S (784 * 64 * 32 = 1.6M) for the logsumexps, K P d S for gbar, K N for m_g.
+- At batch 512 in float32: about 1.3 GB for m_g plus 3.3 GB for the (B, K, P, S) posteriors, several times that with
+  the backward pass. It should fit the 46 GB L40.
+- Expect training about 3-5x slower than K784 + patches (which takes about 1 h on four digits).
+
+**Code changes** (mirror the --patch-kind ising build of today; same safety pattern):
+- **latent_model.py:**
+  - `tree_terms(W, Q, b, Wp, Qp, bp, J, X, T, with_lap)` -> (grad, lap, ...) and `tree_free_energy(...)`.
+  - In `make_loss_per_sample` / `make_force`: if 'J' in params, use tree_terms in place of the global
+    hidden_terms_quad + patch_terms (local units, harmonic modes and the visible part unchanged).
+  - Potts global unit with Q and Potts patches only (refuse other combinations).
+  - Default paths bit for bit unchanged (no 'J' key: as before).
+- **train_latent.py:**
+  - `--tree` (needs --hidden potts, --quad, K > 0, --patch with --patch-kind potts); config key 'tree': true only when
+    set; resume and --init-from refuse a mismatch.
+  - J (P, K, S) starts at zeros at the patch switch-on slice; zero before, as Wp.
+  - Learning rate of J per patch = the patch bias scale sbp[k][:, None, None] x hidden lr scale x patch lr scale
+    (0 before the switch-on).
+  - Diagnostics: |J|, the force decomposition, the mutual information between g and the patch states (optional).
+  - History: hidden_history.npz member J (100, P, K, S). That is about 1.3 GB in float64: consider float32.
+- **sample_latent.py:** load J (load_params with_patch: a 5th tuple entry, or a separate prov['tree']); make_drift
+  with the tree force (J interpolated like the other parameters); --fast refuses; manifest records tree.
+- early_slices.py / make_gallery.py: tolerate or report the tree.
+- **test_latent.py block 21:**
+  - tree_terms grad and Laplacian against autodiff of tree_free_energy (8x8, 4:2 patches, K 3, S 3, with and without
+    Qp);
+  - J = 0 = today's terms;
+  - the loss against a full-autodiff reference and the gradient against central differences;
+  - mixed precision;
+  - the default paths bit for bit against the pre-change modules (freeze copies as for block 20);
+  - make_drift against autodiff;
+  - command lines on gauss2_8 (toy 100-slice run, sampler, refusals).
+- Build in a sibling candidate folder; CPU tests via Slurm; install only if green.
+
+**Overnight runs** (four digits, K784, seed 1, n = 500, both starts; base flags of the recipe):
+1. **Tree, patches from slice 31 (t 3.4)**: `--patch 7:3:32 --patch-on-slice 31 --patch-init-scale 0.06 --tree`.
+   The decisive one, because shapes are decided at t of about 3.4-2.7. Compare with plain patches from t 3.4
+   (`..._mixst_patch7s3S32on31_seed1`: FID about 10.3 noise / 9.0 equil, broken shapes, precision 0.78) and plain
+   patches from t 2.2 (`..._mixst_patch7s3S32on55_seed1`: 7.68 / 6.42).
+2. **Tree, patches from slice 55 (t 2.2)**: the control, whether J helps at all late.
+3. Then FID, grain, gallery, and a **blind 3-rater count** (blind_gallery.py plus the rater workflow if agents are
+   allowed again; otherwise counted directly).
+
+**Success criterion:** fewer malformed digits in the blind count than plain patches from t 2.2 (4.8% four digits)
+without losing FID; or plain-from-t3.4-level recall with t2.2-level precision.
+
+**State at handoff (17:20).**
+- K6144 + patches sampling is still running (noise start 4243157, about 18:40; equilibrated start 4243472, about
+  21:00). FID 4243062, grain 4243063 and gallery 4243064 depend on them. Then a blind count against K784 / K3072.
+- The Ising patch results are above.
+- The current best recipe is unchanged.

@@ -157,6 +157,11 @@ def main():
                        "states_per_class": per_cls.tolist(), "purity": purity}
             if patch_p is not None and not (np.any(np.asarray(patch_p[0][k])) or np.any(np.asarray(patch_p[1][k]))):
                 rows[k]["patch_absent"] = True       # --patch-on-slice runs: all-zero units before the switch-on
+            elif patch_p is not None and len(patch_p) > 3 and patch_p[3] == "ising":   # --patch-kind ising
+                st_p, _ = lm.patch_ising_unit_stats(patch_p[0][k], patch_p[1][k], None if patch_p[2] is None else
+                                                    patch_p[2][k], tr["X"], lm.TEMP, None, geom_p)
+                rows[k].update(patchi_decided=st_p["patchi_decided"], patchi_weak_units=st_p["patchi_weak_units"],
+                               patchi_mean_abs_m=st_p["patchi_mean_abs_m"])
             elif patch_p is not None:                # the patch units' occupations on these x (their slice-k values)
                 st_p, _ = lm.patch_unit_stats(patch_p[0][k], patch_p[1][k], None if patch_p[2] is None else
                                               patch_p[2][k], tr["X"], lm.TEMP, None, geom_p)
@@ -176,6 +181,9 @@ def main():
             if "patch_eff_median" in r:              # patch runs: one extra row per slice
                 out(f"         patch units: effective states {r['patch_eff_median']:.2f} / {r['patch_eff_min']:.2f} "
                     f"(median / min over the patches), dead {r['patch_dead']}, <max p> {r['patch_mean_max_p']:.3f}")
+            elif "patchi_decided" in r:              # Ising patch runs (--patch-kind ising)
+                out(f"         Ising patch units: decided (|m| > 0.9) {r['patchi_decided']:.3f}, weak units "
+                    f"{r['patchi_weak_units']}, <|m|> {r['patchi_mean_abs_m']:.3f}")
             elif r.get("patch_absent"):
                 out("         patch units: absent at this slice (all zero; switched on later)")
     # group means (label prefix before '_s' / digits) for a compact comparison

@@ -27,6 +27,12 @@ dict, d = SIDE^2). The geometry follows from the shapes (patch_geometry), so the
 added after every other term; strided slices and pads only (no gather or scatter), deterministic on the GPU.
 Reference per patch: prototype_reference's pooled branch on the patch vectors (patch_clusters, patch_reference).
 Without the 'Wp' key every function below is exactly as before.
+
+Optional (train_latent.py --patch ... --patch-kind ising, 2026-11-14): the same keys and geometry, but the STATES
+units of a patch are independent Ising units instead of one Potts unit: F_patch = -T sum_{p,s} log 2cosh(a_ps / T)
+(patch_terms / patch_free_energy with kind='ising'; make_loss / make_loss_per_sample / make_force with
+patch_kind='ising'). Reference per patch: split_reference's label-free split tree on the patch vectors
+(patch_ising_trees, patch_ising_reference). kind / patch_kind default to 'potts': every existing call is unchanged.
 """
 
 import hashlib
@@ -947,6 +953,12 @@ def harmonic_free_energy(V, c, X):
 # ---------------------------------------------------------------------------------------------------------------
 PATCH_KEYS = ("Wp", "bp", "Qp")  # parameters of the per-patch Potts units (train_latent.py --patch)
 PATCH_SEED0 = 20000              # k-means seed of patch p for --seed s: PATCH_SEED0 + 1000 (s - KEY_SEED) + p
+PATCH_KINDS = ("potts", "ising")  # train_latent.py --patch-kind: one Potts unit per patch, or STATES Ising units
+
+
+def _check_patch_kind(kind):
+    if kind not in PATCH_KINDS:
+        raise ValueError(f"patch kind {kind!r}: must be one of {PATCH_KINDS}")
 
 
 def parse_patch_spec(spec, grid):
@@ -1056,7 +1068,7 @@ def _pdot_t(p, w):
     return lax.dot_general(p, w, (((2,), (1,)), ((0,), (0,))))
 
 
-def patch_terms(Wp, Qp, bp, X, T, with_lap=True):
+def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts"):
     """Contributions of P per-patch Potts units (train_latent.py --patch) to grad F and to the Laplacian of F: the
     Potts branch of hidden_terms_quad applied to each patch. Unit p has S states with fields
       a_ps = bp_ps + Wp_ps . x_p (+ Qp_ps . x_p^2),   pi_ps = softmax_s(a_ps / T),   G_ps = Wp_ps + 2 Qp_ps * x_p,
@@ -1064,17 +1076,22 @@ def patch_terms(Wp, Qp, bp, X, T, with_lap=True):
       grad F_patch = -fold(gbar)   (fold: the sum over the patches that contain a pixel; PatchGeometry.fold),
       lap F_patch  = sum_p [ -(sum_s pi_ps |G_ps|^2 - |gbar_p|^2) / T - 2 sum_s pi_ps sum_j Qp_psj ],
       |G_ps|^2 = |Wp_ps|^2 + 4 x_p . (Wp_ps * Qp_ps) + 4 x_p^2 . Qp_ps^2.
+    kind = 'ising' (train_latent.py --patch-kind ising): the S units of patch p are independent Ising units, the Ising
+    branch of hidden_terms_quad per patch: m_ps = tanh(a_ps / T), gbar_p = sum_s m_ps G_ps,
+      grad F_patch = -fold(gbar),   lap F_patch = -sum_p sum_s [ (1 - m_ps^2) |G_ps|^2 / T + 2 m_ps sum_j Qp_psj ];
+    the last return value is then m (P, B, S). kind = 'potts' (default) traces exactly the operations as before.
     The Hessian is a sum of per-patch blocks, so overlapping patches add no cross terms. Wp (P, S, d), Qp (P, S, d) or
     None (no squared-pixel couplings), bp (P, S), X (B, N); the geometry follows from the shapes (patch_geometry).
     Returns (grad (B, N), lap (B,) or None if not with_lap, fields A (P, B, S), posteriors pi (P, B, S)).
-    Strided slices, pads, batched dot_generals, softmax and reductions only (no gather, no scatter)."""
+    Strided slices, pads, batched dot_generals, softmax / tanh and reductions only (no gather, no scatter)."""
+    _check_patch_kind(kind)
     geom = patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
     Xp = geom.unfold(X)                                                   # (P, B, d)
     A = _pdot(Xp, Wp) + bp[:, None, :]
     if Qp is not None:
         X2p = Xp * Xp
         A = A + _pdot(X2p, Qp)
-    p = jax.nn.softmax(A / T, axis=-1)
+    p = jnp.tanh(A / T) if kind == "ising" else jax.nn.softmax(A / T, axis=-1)
     gbar = _pdot_t(p, Wp)
     if Qp is not None:
         gbar = gbar + 2.0 * Xp * _pdot_t(p, Qp)
@@ -1084,19 +1101,26 @@ def patch_terms(Wp, Qp, bp, X, T, with_lap=True):
     GG = jnp.sum(Wp * Wp, axis=-1)[:, None, :]
     if Qp is not None:
         GG = GG + 4.0 * _pdot(Xp, Wp * Qp) + 4.0 * _pdot(X2p, Qp * Qp)
-    lap = -(jnp.sum(p * GG, axis=(0, 2)) - jnp.sum(gbar * gbar, axis=(0, 2))) / T
+    if kind == "ising":
+        lap = -jnp.sum((1.0 - p * p) * GG, axis=(0, 2)) / T
+    else:
+        lap = -(jnp.sum(p * GG, axis=(0, 2)) - jnp.sum(gbar * gbar, axis=(0, 2))) / T
     if Qp is not None:
         lap = lap - 2.0 * jnp.sum(p * jnp.sum(Qp, axis=-1)[:, None, :], axis=(0, 2))
     return grad, lap, A, p
 
 
-def patch_free_energy(Wp, Qp, bp, X, T):
-    """F_patch(x) = -T sum_p logsumexp_s(a_ps / T) of the per-patch units (patch_terms), per sample (B,)."""
+def patch_free_energy(Wp, Qp, bp, X, T, kind="potts"):
+    """F_patch(x) = -T sum_p logsumexp_s(a_ps / T) of the per-patch units (patch_terms), per sample (B,);
+    kind = 'ising': -T sum_p sum_s log 2cosh(a_ps / T) (logaddexp(z, -z), as the global Ising free energy)."""
+    _check_patch_kind(kind)
     geom = patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
     Xp = geom.unfold(X)
     A = _pdot(Xp, Wp) + bp[:, None, :]
     if Qp is not None:
         A = A + _pdot(Xp * Xp, Qp)
+    if kind == "ising":
+        return -T * jnp.sum(jnp.logaddexp(A / T, -A / T), axis=(0, 2))
     return -T * jnp.sum(jax.scipy.special.logsumexp(A / T, axis=-1), axis=0)
 
 
@@ -1115,7 +1139,7 @@ def in_compute_dtype(fn, dtype):
 
 
 def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False, replicates=1,
-                         compute_dtype=None):
+                         compute_dtype=None, patch_kind="potts"):
     """Per-sample implicit score-matching loss at k_B T = T for p ~ exp(-F/T):
     -lap F / T + |grad F|^2 / (2 T^2). hidden = 'ising' (K units) or 'potts' (one unit with K states);
     if params contains 'Q', the hidden units also couple to the squared pixels (hidden_terms_quad);
@@ -1141,7 +1165,10 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     products are float32 at HIGHEST like the hidden units'. Without 'V' every path is exactly as before.
     If params contains 'Wp' (and 'bp', optionally 'Qp'), the per-patch Potts units (patch_terms; train_latent.py
     --patch) are added after everything else, with exact statistics only (samples = 0; ValueError otherwise); in
-    --precision mixed their products are float32 at HIGHEST too. Without 'Wp' every path is exactly as before."""
+    --precision mixed their products are float32 at HIGHEST too. Without 'Wp' every path is exactly as before.
+    patch_kind = 'ising' (train_latent.py --patch-kind ising): the patch keys hold STATES independent Ising units per
+    patch (patch_terms kind='ising'); 'potts' (default) as before."""
+    _check_patch_kind(patch_kind)
     terms = hidden_terms if hidden == "ising" else potts_terms
     if replicates < 1 or (replicates > 1 and samples < 1):
         raise ValueError("replicates must be >= 1, and > 1 only with samples > 0")
@@ -1174,8 +1201,8 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
                 gm, lapm, _ = harmonic_terms(params["V"], params["c"], X)
                 g = g + gm
                 lap = lap + lapm
-            if "Wp" in params:                   # per-patch Potts units (--patch), after the modes
-                gp, lapp, _, _ = patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T)
+            if "Wp" in params:                   # per-patch Potts (or Ising) units (--patch), after the modes
+                gp, lapp, _, _ = patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, kind=patch_kind)
                 g = g + gp
                 lap = lap + lapp
             return -lap / T + jnp.sum(g * g, axis=1) / (2.0 * T * T)
@@ -1208,10 +1235,12 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     return in_compute_dtype(loss, compute_dtype)
 
 
-def make_loss(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False, replicates=1, compute_dtype=None):
+def make_loss(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False, replicates=1, compute_dtype=None,
+              patch_kind="potts"):
     """Batch mean of make_loss_per_sample (the paper's loss for K = 0). With compute_dtype (float32), the per-sample
-    losses are averaged in float64."""
-    per_sample = make_loss_per_sample(vis, T, K, hidden, local, samples, jackknife, replicates, compute_dtype)
+    losses are averaged in float64. patch_kind: as make_loss_per_sample ('potts' default: as before)."""
+    per_sample = make_loss_per_sample(vis, T, K, hidden, local, samples, jackknife, replicates, compute_dtype,
+                                      patch_kind)
 
     if compute_dtype is None:
         def loss(params, X, key=None):
@@ -1229,9 +1258,11 @@ def make_loss(vis, T, K, hidden="ising", local=False, samples=0, jackknife=False
 HIDDEN_KEYS = ("W", "b", "Q", "wl", "bl")
 
 
-def make_force(vis, T, K, hidden="ising", local=False):
+def make_force(vis, T, K, hidden="ising", local=False, patch_kind="potts"):
     """grad F (B, N) of the model of make_loss_per_sample: visible part plus the averaged-out hidden units (and the
-    harmonic modes, if params contains 'V', and the per-patch Potts units, if it contains 'Wp')."""
+    harmonic modes, if params contains 'V', and the per-patch Potts units, if it contains 'Wp'; Ising units per patch
+    with patch_kind='ising')."""
+    _check_patch_kind(patch_kind)
     terms = hidden_terms if hidden == "ising" else potts_terms
 
     def force(params, X):
@@ -1244,8 +1275,8 @@ def make_force(vis, T, K, hidden="ising", local=False):
             g = g + local_terms(params["wl"], params["bl"], X, T)[0]
         if "V" in params:                        # harmonic modes (--harmonic)
             g = g + harmonic_terms(params["V"], params["c"], X)[0]
-        if "Wp" in params:                       # per-patch Potts units (--patch)
-            g = g + patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, with_lap=False)[0]
+        if "Wp" in params:                       # per-patch Potts (or Ising) units (--patch)
+            g = g + patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, with_lap=False, kind=patch_kind)[0]
         return g
 
     return force
@@ -1885,6 +1916,123 @@ def patch_unit_stats(Wp, bp, Qp, X, T, W_ref, geom):
                patch_eff_states_central_median=float(np.median(cen)) if cen.size else None,
                **{"patch_states_below_1e-6": int(dead)}, patch_mean_max_p=maxp / geom.P)
     return out, {"patch_eff": eff.astype(np.float32)}
+
+
+def patch_ising_trees(data, geom, M, seed0):
+    """The tau-independent half of the per-patch Ising reference (train_latent.py --patch-kind ising): for every patch
+    p of geom (PatchGeometry), split_tree on the patch vectors Xp = data[:, idx_p] with M nodes, label-free
+    (pooled=True), seed seed0 + p and n_min = tree_n_min(n, M), and split_reference's tau-independent statistics in its
+    order of operations:
+      Sw = (sum over the M + 1 leaves, in leaf order, of R^T R, R = Xl - mean(Xl)) / (n - M - 1),
+      D = (mu_right - mu_left) / 2,   Mid = (mu_right + mu_left) / 2.
+    Returns dict(D (P, M, d), Mid (P, M, d), n_left / n_right (P, M) (images on each side of node j), Sw (P, d, d),
+    gain (P, M), median_cuts (P,) (nodes cut at the median by the balance guard), seeds (P,), n_min, seconds)."""
+    import time as _time
+    X = np.asarray(data, dtype=np.float64)
+    n = X.shape[0]
+    M = int(M)
+    n_min = tree_n_min(n, M)
+    t0 = _time.time()
+    Ds, Mids, nls, nrs, Sws, gains, med = [], [], [], [], [], [], []
+    for p in range(geom.P):
+        Xp = X[:, geom.idx[p]]
+        tree = split_tree(Xp, None, M, seed=seed0 + p, pooled=True, n_min=n_min)
+        d = Xp.shape[1]
+        Sw = np.zeros((d, d))
+        for leaf in range(M + 1):               # leaf by leaf, as split_reference
+            Xl = Xp[tree["leaf_of"] == leaf]
+            R = Xl - Xl.mean(0)
+            Sw = Sw + R.T @ R
+        Sws.append(Sw / (n - M - 1))
+        Ds.append(0.5 * (tree["mu_right"] - tree["mu_left"]))
+        Mids.append(0.5 * (tree["mu_right"] + tree["mu_left"]))
+        nls.append(tree["n_left"])
+        nrs.append(tree["n_right"])
+        gains.append(tree["gain"])
+        med.append(int(np.sum(tree["kind"] == SPLIT_MEDIAN)))
+    return {"D": np.stack(Ds), "Mid": np.stack(Mids), "n_left": np.stack(nls), "n_right": np.stack(nrs),
+            "Sw": np.stack(Sws), "gain": np.stack(gains), "median_cuts": np.asarray(med),
+            "seeds": seed0 + np.arange(geom.P), "n_min": n_min, "seconds": _time.time() - t0}
+
+
+def patch_ising_reference(trees, taus, T, scale=1.0):
+    """The per-patch Ising reference from patch_ising_trees at each forward time tau of taus: split_reference's
+    formula per patch, in its order of operations (scale 1: equal to split_reference on the patch data bit for bit),
+    with e = exp(-tau):
+      S(tau) = e^2 Sw + T (1 - e^2) I_d,   W_j = T S^-1 e D_j,   b_j = -W_j . (e Mid_j) + (T/2) log(n_right / n_left);
+    scale lam != 1 (train_latent.py --patch-init-scale): W = lam W*, b = lam b*, the field a = lam a* (a tempered unit;
+    small lam starts near the degenerate W = 0 point of DESIGN.md section 2, where an Ising unit gets little gradient).
+    Returns W (len(taus), P, M, d), b (len(taus), P, M), float64."""
+    D, Mid, Sw = trees["D"], trees["Mid"], trees["Sw"]
+    P, M, d = D.shape
+    Ws, bs = [], []
+    for tau in np.asarray(taus, dtype=np.float64):
+        e = math.exp(-tau)
+        Wt, bt = [], []
+        for p in range(P):
+            prior = 0.5 * T * np.log(trees["n_right"][p] / trees["n_left"][p])
+            S = e * e * Sw[p] + T * (1.0 - e * e) * np.eye(d)
+            W = T * np.linalg.solve(S, e * D[p].T).T
+            b = np.array([-(W[j] @ (e * Mid[p, j])) for j in range(M)]) + prior
+            if scale != 1.0:
+                W, b = scale * W, scale * b
+            Wt.append(W)
+            bt.append(b)
+        Ws.append(np.stack(Wt))
+        bs.append(np.stack(bt))
+    return np.stack(Ws), np.stack(bs)
+
+
+def patch_ising_lr_scales(trees, taus, T):
+    """patch_lr_scales for Ising patch units: per slice and patch, the root-mean-square entry of the scale-1 reference
+    W*(t_k) over (M, d), and max(rms of b*(t_k), T). Returns (sWp, sbp), each (len(taus), P)."""
+    sW, sb = [], []
+    for tau in np.asarray(taus, dtype=np.float64):
+        W, b = patch_ising_reference(trees, [tau], T)
+        sW.append(np.sqrt(np.mean(W[0] ** 2, axis=(1, 2))))
+        sb.append(np.maximum(np.sqrt(np.mean(b[0] ** 2, axis=1)), T))
+    return np.stack(sW), np.stack(sb)
+
+
+def patch_ising_unit_stats(Wp, bp, Qp, X, T, W_ref, geom):
+    """Per-slice diagnostics of the per-patch Ising units (train_latent.py --patch-kind ising) on the batch X (numpy,
+    one product per patch), the analogue of patch_unit_stats. W_ref: the scale-1 reference (P, M, d) at the slice's t,
+    or None. Returns (dict, arrays):
+      patch_W_norm, patch_Wref_norm, patch_cos_W_Wref, patch_Q_norm (with Qp), patch_b_rms: as patch_unit_stats;
+      patchi_decided: the share of (sample, unit) pairs with |m| > 0.9, over all patches (patchi_decided_central: over
+        the central patches);
+      patchi_weak_units: the units whose field has a standard deviation below 0.1 T over the batch, summed over the
+        patches (a weak unit carries almost no score);
+      patchi_mean_abs_m: the mean |m|;
+      patchi_field_rms_over_T: the root-mean-square field a / T;
+    arrays: {'patch_dec': (P,) float32, the decided share per patch}."""
+    Wp, bp = np.asarray(Wp, dtype=np.float64), np.asarray(bp, dtype=np.float64)
+    Qp = None if Qp is None else np.asarray(Qp, dtype=np.float64)
+    X = np.asarray(X, dtype=np.float64)
+    dec, weak, mabs, frms = np.zeros(geom.P), 0, 0.0, 0.0
+    for p in range(geom.P):
+        Xp = X[:, geom.idx[p]]
+        A = Xp @ Wp[p].T + bp[p]
+        if Qp is not None:
+            A = A + (Xp * Xp) @ Qp[p].T
+        m = np.tanh(A / T)
+        dec[p] = float(np.mean(np.abs(m) > 0.9))
+        weak += int(np.sum(np.std(A, axis=0) < 0.1 * T))
+        mabs += float(np.mean(np.abs(m)))
+        frms += float(np.mean((A / T) ** 2))
+    nW = float(np.linalg.norm(Wp))
+    out = {"patch_W_norm": nW}
+    if W_ref is not None:
+        W_ref = np.asarray(W_ref, dtype=np.float64)
+        nR = float(np.linalg.norm(W_ref))
+        out.update(patch_Wref_norm=nR, patch_cos_W_Wref=float(np.sum(Wp * W_ref) / (nW * nR + 1e-300)))
+    if Qp is not None:
+        out["patch_Q_norm"] = float(np.linalg.norm(Qp))
+    cen = dec[geom.central]
+    out.update(patch_b_rms=float(np.sqrt(np.mean(bp * bp))), patchi_decided=float(np.mean(dec)),
+               patchi_decided_central=float(np.mean(cen)) if cen.size else None, patchi_weak_units=int(weak),
+               patchi_mean_abs_m=mabs / geom.P, patchi_field_rms_over_T=float(np.sqrt(frms / geom.P)))
+    return out, {"patch_dec": dec.astype(np.float32)}
 
 
 # ---------------------------------------------------------------------------------------------------------------

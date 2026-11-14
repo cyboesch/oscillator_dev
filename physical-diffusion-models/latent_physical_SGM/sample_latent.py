@@ -100,9 +100,11 @@ def load_params(run, with_harmonic=False, with_patch=False):
     (V (100, R, N), c (100, R)), for make_drift(harmonic=...), and the caller pops it like 'local' and 'quad'. For
     every other run with_harmonic changes nothing.
     Likewise a run with per-patch Potts units (train_latent.py --patch; members Wp, bp, Qp) is refused unless
-    with_patch=True; with it, provenance['patch'] is (Wp (100, P, S, d), bp (100, P, S), Qp (100, P, S, d) or None),
-    checked against config.json 'patch', for make_drift(patch=...), which the caller pops, and
-    provenance['patch_units'] the run's spec. For every other run with_patch changes nothing."""
+    with_patch=True; with it, provenance['patch'] is (Wp (100, P, S, d), bp (100, P, S), Qp (100, P, S, d) or None,
+    kind) with kind = config.json 'patch_kind' ('potts' if absent; 'ising': train_latent --patch-kind ising), checked
+    against config.json 'patch', for make_drift(patch=...), which the caller pops, and provenance['patch_units'] the
+    run's spec (plus provenance['patch_kind'] = 'ising' for Ising patch runs). For every other run with_patch changes
+    nothing."""
     if run == "paper":
         sha = lm.sha256_file(lm.PAPER_CKPT)
         if sha != lm.PAPER_CKPT_SHA256:
@@ -152,8 +154,13 @@ def load_params(run, with_harmonic=False, with_patch=False):
             raise RuntimeError(f"{run_dir}: patch units of shapes {Wp.shape}, {bp.shape}"
                                + ("" if Qp is None else f", {Qp.shape}") + f" do not match --patch {spec} "
                                f"({n_sl} slices, P {geom.P}, S {S}, d {geom.d})")
-        prov["patch"] = (Wp, bp, Qp)
+        kind = cfg.get("patch_kind", "potts")     # train_latent --patch-kind (recorded for ising only)
+        if kind not in lm.PATCH_KINDS:
+            raise RuntimeError(f"{run_dir}: config.json records patch_kind {kind!r}, not one of {lm.PATCH_KINDS}")
+        prov["patch"] = (Wp, bp, Qp, kind)
         prov["patch_units"] = lm.patch_spec_str((side, stride, S))
+        if kind != "potts":                       # manifests of Potts patch runs unchanged
+            prov["patch_kind"] = kind
     return th, hid["W"], hid["b"], run_dir, prov, problem
 
 
@@ -196,9 +203,10 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
     harmonic = (V (n_slices, R, N), c (n_slices, R)) (load_params(run, with_harmonic=True)'s prov['harmonic']; train_latent
     --harmonic R): the harmonic modes' force s sum_j (v_j . x + c_j) v_j (s = 2 for the SDE, 1 for the PF-ODE, as for
     every term), V and c interpolated like every other parameter. None (default): no modes, the drift as before.
-    patch = (Wp (n_slices, P, S, d), bp (n_slices, P, S), Qp (n_slices, P, S, d) or None) (load_params(run,
+    patch = (Wp (n_slices, P, S, d), bp (n_slices, P, S), Qp (n_slices, P, S, d) or None[, kind]) (load_params(run,
     with_patch=True)'s prov['patch']; train_latent --patch): the per-patch Potts units' mean force -s grad F_patch
-    (latent_model.patch_terms), Wp, bp, Qp interpolated like every other parameter, after the harmonic modes in the
+    (latent_model.patch_terms; kind 'ising', train_latent --patch-kind ising: S Ising units per patch; a 3-tuple or
+    kind 'potts': Potts units), Wp, bp, Qp interpolated like every other parameter, after the harmonic modes in the
     parameter table (the offsets of every other group are unchanged). None (default): the drift as before."""
     n_theta = theta_hist.shape[1]
     K = W_hist.shape[1]
@@ -220,9 +228,13 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
         parts += [V_h.reshape(V_h.shape[0], -1), c_h]
     Pp = Sp = dp = 0
     with_qp = False
+    patch_kind = "potts"
     if patch is not None:                                # after the modes: the offsets above are unchanged
         Wp_h, bp_h = np.asarray(patch[0]), np.asarray(patch[1])
         Qp_h = None if patch[2] is None else np.asarray(patch[2])
+        patch_kind = patch[3] if len(patch) > 3 else "potts"   # load_params' 4-tuple; a 3-tuple: Potts units
+        if patch_kind not in lm.PATCH_KINDS:
+            raise ValueError(f"patch kind {patch_kind!r}: must be one of {lm.PATCH_KINDS}")
         if Wp_h.ndim != 4 or Wp_h.shape[0] != theta_hist.shape[0]:
             raise ValueError(f"patch units of shape {Wp_h.shape} for a history of {theta_hist.shape[0]} slices")
         _, Pp, Sp, dp = Wp_h.shape
@@ -274,11 +286,11 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
             d = d + scale * ((Vt @ x + ct) @ Vt)
         if Pp:                                         # patch units: -grad F_patch = fold(sum_s pi_ps G_ps)
             o = (n_theta + K * n + K + (K * n if quad is not None else 0) + (2 * n if local is not None else 0)
-                 + R * n + R)
+                 + R * n + R)                          # (Ising patch units: fold(sum_s m_ps G_ps))
             m = Pp * Sp * dp
             Wt, bt = p[o:o + m].reshape(Pp, Sp, dp), p[o + m:o + m + Pp * Sp].reshape(Pp, Sp)
             Qt = p[o + m + Pp * Sp:o + 2 * m + Pp * Sp].reshape(Pp, Sp, dp) if with_qp else None
-            d = d - scale * lm.patch_terms(Wt, Qt, bt, x[None], lm.TEMP, with_lap=False)[0][0]
+            d = d - scale * lm.patch_terms(Wt, Qt, bt, x[None], lm.TEMP, with_lap=False, kind=patch_kind)[0][0]
         return d
 
     def diffusion(t, x, args):

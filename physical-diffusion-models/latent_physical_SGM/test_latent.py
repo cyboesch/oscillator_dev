@@ -46,7 +46,14 @@
       changes of job 4231616 to 1e-6, on the plain seed-1 study run); F the runner and the sampler with patches; G the
       command lines (guards, default paths old vs new, patch runs, resume, --init-from, --patch-on-slice, samplers,
       early_slices.py)
-Usage (from latent_physical_SGM/):  sbatch jobs/run_gpu_neuronic.sh test_latent.py [13|14|15|16|17|18|19]   ('13' ...
+  20. train_latent --patch ... --patch-kind ising (per-patch Ising units, 2026-11-14): A patch_terms kind='ising'
+      against autodiff, one patch = hidden_terms_quad 'ising', the diagnostics, unknown kinds refused; B the loss and
+      force with Ising patches against a full-autodiff reference; C --precision mixed; D the default paths bit for bit
+      against the modules before the option (ISING_PATCH_ORIG); E the split-tree reference per patch against
+      split_reference, the learning-rate scales and the start field sizes; F the sampler drift with Ising patches; G the
+      command lines (guard, a 100-slice run, resume refused, --patch-on-slice, the default sampler, --fast refused, a
+      Potts patch run old vs new)
+Usage (from latent_physical_SGM/):  sbatch jobs/run_gpu_neuronic.sh test_latent.py [13|14|15|16|17|18|19|20]   ('13' ...
 '19': that block alone; all of them also run on the CPU, where block 13's bitwise comparisons test XLA:CPU's compilation
 instead of the GPU's; block 16 there: sbatch --time=00:30:00 --cpus-per-task=4 --mem=16G jobs/run_cpu_neuronic.sh
 test_latent.py 16; blocks 17, 18 and 19: sbatch --time=00:30:00 --cpus-per-task=8 --mem=32G jobs/run_cpu_neuronic.sh
@@ -3541,6 +3548,484 @@ def block_19(parts="ABCDEFG"):
     report(f"   block 19: {time.time() - t19:.0f} s")
 
 
+# modules as installed before --patch-kind (copies of latent_model, train_latent, sample_latent, early_slices and
+# make_gallery taken 2026-11-14 14:40, in a sibling folder of latent_physical_SGM so that their PKG paths are the same)
+ISING_PATCH_ORIG = os.environ.get("ISING_PATCH_ORIG", os.path.join(lm.PKG, "latent_physical_SGM_pre_ising_patch"))
+
+
+def _orig20(name):
+    """The module `name` from before --patch-kind (ISING_PATCH_ORIG/<name>.py), imported in this process as
+    <name>_orig20 (as _orig19: its own 'import latent_model' finds this process's latent_model)."""
+    saved = list(sys.path)
+    try:
+        spec = importlib.util.spec_from_file_location(f"{name}_orig20", os.path.join(ISING_PATCH_ORIG, f"{name}.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path[:] = saved
+    return mod
+
+
+def block_20(parts="ABCDEFG"):
+    """20: per-patch Ising hidden units (train_latent.py --patch SIDE:STRIDE:M --patch-kind ising, 2026-11-14).
+    CPU-sized (8 CPUs). 'test_latent.py 20' runs A-G; 'test_latent.py 20 G' (or any letters) a part.
+    A. patch_terms(kind='ising') gradient and Laplacian against autodiff of patch_free_energy(kind='ising') on 8x8 4:2
+       and 28x28 7:3, with and without Qp; one patch covering the grid = hidden_terms_quad(..., 'ising');
+       patch_ising_unit_stats (zero units: nothing decided, all weak); unknown kinds refused.
+    B. The loss and the force with Ising patches against a full-autodiff reference on 8x8 (four model configurations),
+       the parameter gradient along a random direction against central differences; Potts and Ising patches on the
+       same parameters give different losses (the kind is used).
+    C. --precision mixed with Ising patches 7:3:8 at the scale-1 split-tree reference of mnist28_d0123 (Potts 8 quad
+       local): gradient error against float64 relative to the gradient and to its batch noise at t = 5 ... 0.
+    D. The default paths against the modules before --patch-kind (ISING_PATCH_ORIG): patch_terms / patch_free_energy
+       (Potts), make_loss (value, gradient and jaxpr; no patches, Potts patches, float64 and mixed), make_force, and
+       make_drift with Potts patches (3-tuple and 4-tuple 'potts') bit for bit.
+    E. The reference on mnist28_d0123: patch_ising_reference(patch_ising_trees) = split_reference on the patch data bit
+       for bit (14:14, M = 4, three times); scale 0.25 = 0.25 x scale 1; 7:3 with M = 32 on all images: learning-rate
+       scales finite and positive, and the start fields |a| / T at slice 55 for init scales 0.06, 0.25, 1 (report).
+    F. make_drift with Ising patches (4-tuple 'ising') against x - s grad F by autodiff with interpolated parameters
+       (SDE and PF-ODE, 4 times, with and without Qp); an unknown kind refused.
+    G. Command lines (gauss2_8, Potts 8 --quad --local as block 19; --patch 4:2:4 --patch-kind ising): the guard; a
+       100-slice run (config, history members and shapes, train-log patchi_* keys, patch_reference.json); resuming it
+       without --patch-kind ising refused; --patch-on-slice 50 (zero before, non-zero after); the default sampler with
+       the normal and an equilibrated start (finite samples, manifest patch_kind); --fast refused; a 3-slice Potts
+       patch run with the old and the new train_latent (slice arrays bit for bit, the same config); early_slices.py
+       and make_gallery.py compile."""
+    t20 = time.time()
+    sl, tl = sample_latent, train_latent
+    T = lm.TEMP
+    taus = lm.forward_time_pts()
+    parts = "".join(parts).upper() or "ABCDEFG"
+    have_orig = all(os.path.exists(os.path.join(ISING_PATCH_ORIG, f"{m}.py"))
+                    for m in ("latent_model", "train_latent", "sample_latent"))
+    report(f"   block 20 parts {parts}; modules before --patch-kind: {ISING_PATCH_ORIG} "
+           f"({'present' if have_orig else 'MISSING'})")
+    if "D" in parts or "G" in parts:
+        check("20 the modules from before --patch-kind are present (ISING_PATCH_ORIG)", 0.0 if have_orig else 1.0, 0.5)
+    rng = np.random.default_rng(2020)
+    n8, conn8 = 64, lm.connectivity(8, 1)
+    P8 = conn8.shape[0]
+    conn28 = lm.connectivity(28, 1)
+    P28 = conn28.shape[0]
+    geom8 = lm.PatchGeometry(8, 4, 2)
+    geom28 = lm.PatchGeometry(28, 7, 3)
+
+    # ---- A. formulas -------------------------------------------------------------------------------------------------
+    if "A" in parts:
+        worst_g, worst_l = 0.0, 0.0
+        for geom, M, B, ws in ((geom8, 3, 5, 0.02), (geom28, 4, 2, 0.01)):
+            for quad in (True, False):
+                Wp = jnp.asarray(ws * rng.standard_normal((geom.P, M, geom.d)))
+                bp = jnp.asarray(0.01 * rng.standard_normal((geom.P, M)))
+                Qp = jnp.asarray(0.005 * rng.standard_normal((geom.P, M, geom.d))) if quad else None
+                X = jnp.asarray(0.5 * rng.standard_normal((B, geom.N)))
+                g, lap, _, m = lm.patch_terms(Wp, Qp, bp, X, T, kind="ising")
+                f1 = lambda x, Wp=Wp, Qp=Qp, bp=bp: lm.patch_free_energy(Wp, Qp, bp, x[None], T, kind="ising")[0]  # noqa: E731
+                ga = jax.vmap(jax.grad(f1))(X)
+                la = jnp.stack([jnp.trace(jax.hessian(f1)(X[i])) for i in range(B)])
+                worst_g, worst_l = max(worst_g, rel(g, ga)), max(worst_l, rel(lap, la))
+                report(f"   20A {geom.s}:{geom.r} on {geom.G}x{geom.G}, M {M}{' with Qp' if quad else ''}: |a|/T median "
+                       f"{float(np.median(np.abs(np.arctanh(np.clip(np.asarray(m), -1 + 1e-15, 1 - 1e-15))))):.3g}")
+        check("20A patch_terms kind='ising': gradient vs autodiff of patch_free_energy kind='ising' (8x8 4:2, 28x28 7:3, "
+              "with and without Qp; worst relative)", worst_g, 1e-12)
+        check("20A patch_terms kind='ising': Laplacian vs the autodiff trace of the Hessian (worst relative)", worst_l, 1e-11)
+        W1 = jnp.asarray(0.02 * rng.standard_normal((5, n8)))
+        Q1 = jnp.asarray(0.005 * rng.standard_normal((5, n8)))
+        b1 = jnp.asarray(0.01 * rng.standard_normal(5))
+        X = jnp.asarray(0.5 * rng.standard_normal((4, n8)))
+        gq, lq, _, _ = lm.patch_terms(W1[None], Q1[None], b1[None], X, T, kind="ising")
+        gh, lh, _, _ = lm.hidden_terms_quad(W1, Q1, b1, X, T, "ising")
+        g0, l0, _, _ = lm.patch_terms(W1[None], None, b1[None], X, T, kind="ising")
+        gz, lz, _, _ = lm.hidden_terms_quad(W1, jnp.zeros_like(Q1), b1, X, T, "ising")
+        check("20A one Ising patch covering the 8x8 grid (M = 5) = hidden_terms_quad(..., 'ising'), with Qp and without "
+              "(Q = 0): gradient and Laplacian (worst relative)", max(rel(gq, gh), rel(lq, lh), rel(g0, gz), rel(l0, lz)),
+              1e-13)
+        Xn = np.asarray(0.5 * rng.standard_normal((16, 784)))
+        st0, ar0 = lm.patch_ising_unit_stats(np.zeros((geom28.P, 4, geom28.d)), np.zeros((geom28.P, 4)), None, Xn, T,
+                                             None, geom28)
+        stw, arw = lm.patch_ising_unit_stats(np.asarray(0.05 * rng.standard_normal((geom28.P, 4, geom28.d))),
+                                             np.asarray(0.01 * rng.standard_normal((geom28.P, 4))), None, Xn, T, None,
+                                             geom28)
+        ok_st = (st0["patchi_decided"] == 0.0 and st0["patchi_weak_units"] == geom28.P * 4 and st0["patchi_mean_abs_m"] == 0.0
+                 and ar0["patch_dec"].shape == (geom28.P,) and 0.0 < stw["patchi_decided"] <= 1.0
+                 and stw["patchi_weak_units"] < geom28.P * 4 and np.all(np.isfinite(arw["patch_dec"])))
+        report(f"   20A patch_ising_unit_stats: zero units {st0}; random units decided {stw['patchi_decided']:.3f}, weak "
+               f"{stw['patchi_weak_units']}, <|m|> {stw['patchi_mean_abs_m']:.3f}")
+        check("20A patch_ising_unit_stats: zero units are undecided and all weak; random units partly decided, finite",
+              0.0 if ok_st else 1.0, 0.5)
+        refused = 0
+        vis_r = lm.DenseVisible(conn8, n8)
+        for fn in (lambda: lm.patch_terms(W1[None], None, b1[None], X, T, kind="bogus"),
+                   lambda: lm.patch_free_energy(W1[None], None, b1[None], X, T, kind="bogus"),
+                   lambda: lm.make_loss(vis_r, T, 0, patch_kind="bogus"),
+                   lambda: lm.make_loss_per_sample(vis_r, T, 0, patch_kind="Ising"),
+                   lambda: lm.make_force(vis_r, T, 0, patch_kind="bogus")):
+            try:
+                fn()
+            except ValueError:
+                refused += 1
+        check("20A an unknown patch kind is refused (patch_terms, patch_free_energy, make_loss, make_loss_per_sample, "
+              "make_force)", 5 - refused, 0.5)
+
+    # ---- B. the loss and the force with Ising patches ------------------------------------------------------------------
+    if "B" in parts:
+        vis8 = lm.DenseVisible(conn8, n8)
+        th8 = jnp.asarray(0.3 * rng.standard_normal(vis8.n_theta))
+        X4 = jnp.asarray(0.5 * rng.standard_normal((4, n8)))
+        Sp = 3
+
+        def F_full(x, p, K, hidden, local):
+            f = vis8.energy(p["theta"], x[None])[0]
+            if K:
+                a = p["W"] @ x + p["b"] + (p["Q"] @ (x * x) if "Q" in p else 0.0)
+                f = f - T * (jax.scipy.special.logsumexp(a / T) if hidden == "potts"
+                             else jnp.sum(jnp.logaddexp(a / T, -a / T)))
+            if local:
+                al = p["wl"] * x + p["bl"]
+                f = f - T * jnp.sum(jnp.logaddexp(al / T, -al / T))
+            return f + lm.patch_free_energy(p["Wp"], p.get("Qp"), p["bp"], x[None], T, kind="ising")[0]
+
+        for K, hidden, quad, local in ((0, "potts", True, False), (3, "potts", True, True), (3, "potts", False, False),
+                                       (3, "ising", True, True)):
+            p = {"theta": th8, "W": jnp.asarray(0.05 * rng.standard_normal((K, n8))),
+                 "b": jnp.asarray(0.05 * rng.standard_normal(K)),
+                 "Wp": jnp.asarray(0.05 * rng.standard_normal((geom8.P, Sp, geom8.d))),
+                 "bp": jnp.asarray(0.03 * rng.standard_normal((geom8.P, Sp)))}
+            if quad and K:
+                p["Q"] = jnp.asarray(0.01 * rng.standard_normal((K, n8)))
+            if quad:
+                p["Qp"] = jnp.asarray(0.01 * rng.standard_normal((geom8.P, Sp, geom8.d)))
+            if local:
+                p.update(wl=jnp.asarray(0.3 * rng.standard_normal(n8)), bl=jnp.asarray(0.02 * rng.standard_normal(n8)))
+            lab = (f"K={K} {hidden}{' quad' if quad else ''}{' local' if local else ''} + Ising patches 4:2:3"
+                   f"{'' if quad else ' (no Qp)'}")
+
+            def lref(p_, X_, K=K, hidden=hidden, local=local):
+                def one(x):
+                    g = jax.grad(F_full)(x, p_, K, hidden, local)
+                    return -jnp.trace(jax.hessian(F_full)(x, p_, K, hidden, local)) / T + jnp.sum(g * g) / (2 * T * T)
+                return jnp.mean(jax.lax.map(one, X_))
+
+            lref = jax.jit(lref)
+            lf = lm.make_loss(vis8, T, K, hidden, local, patch_kind="ising")
+            a_, b_ = float(jax.jit(lf)(p, X4)), float(lref(p, X4))
+            check(f"20B loss with Ising patches vs full-autodiff reference, {lab} ({b_:.6g})",
+                  abs(a_ - b_) / max(abs(b_), 1.0), 1e-10)
+            fo = np.asarray(jax.jit(lm.make_force(vis8, T, K, hidden, local, patch_kind="ising"))(p, X4))
+            fr = np.asarray(jax.vmap(jax.grad(F_full), in_axes=(0, None, None, None, None))(X4, p, K, hidden, local))
+            check(f"20B make_force with Ising patches vs autodiff grad F, {lab}", rel(fo, fr), 1e-12)
+            g = jax.jit(jax.grad(lf))(p, X4)
+            kd = jr.fold_in(jr.PRNGKey(2002), K + 10 * quad + 100 * local)
+            d = {kk: jr.normal(jr.fold_in(kd, i), p[kk].shape) * (jnp.abs(p[kk]) + 1e-3) for i, kk in enumerate(p)}
+            fd = (float(lref({kk: p[kk] + 1e-5 * d[kk] for kk in p}, X4))
+                  - float(lref({kk: p[kk] - 1e-5 * d[kk] for kk in p}, X4))) / 2e-5
+            an = float(sum(jnp.sum(g[kk] * d[kk]) for kk in p))
+            check(f"20B loss gradient (every group, Wp, bp{', Qp' if quad else ''} too) along a random direction vs "
+                  f"central difference, {lab} ({an:.6g})", abs(an - fd) / max(abs(fd), 1e-8), 1e-5)
+            if K == 3 and hidden == "potts" and quad and local:
+                lp = float(jax.jit(lm.make_loss(vis8, T, K, hidden, local))(p, X4))
+                check(f"20B the patch kind is used: Potts and Ising patches on the same parameters give different losses "
+                      f"({lp:.6g} vs {a_:.6g})", 0.0 if abs(lp - a_) > 1e-6 * max(abs(a_), 1.0) else 1.0, 0.5)
+
+    # ---- C. mixed precision with Ising patches -------------------------------------------------------------------------
+    if "C" in parts:
+        prob4 = lm.make_problem("mnist28_d0123", 1)
+        data4 = prob4["data"]
+        trees8 = lm.patch_ising_trees(np.asarray(data4, dtype=np.float64), geom28, 8, lm.PATCH_SEED0)
+        report(f"   20C: split trees of the 64 patch sets (M = 8) in {trees8['seconds']:.0f} s")
+        zs = lm.dropped_pair_slices(lm.N, P28, ("lin",))
+        kept_m = np.ones(4 * lm.N + 3 * P28, bool)
+        for s_ in zs + (lm.k6_slice(lm.N),):
+            kept_m[s_] = False
+        k1, k2, k3, k4, k5, k6 = jr.split(jr.PRNGKey(2003), 6)
+        th_q = lm.quartic_initial_theta(lm.paper_theta_layout(P28)[0], lm.N, P28)
+        th_q = jnp.where(kept_m, th_q + 0.2 * jr.normal(k1, th_q.shape), 0.0)
+        pq = {"theta": th_q, "W": 0.02 * jr.normal(k2, (8, lm.N)), "b": 0.02 * jr.normal(k3, (8,)),
+              "Q": 0.005 * jr.normal(k4, (8, lm.N)), "wl": 0.3 * jr.normal(k5, (lm.N,)), "bl": 0.02 * jr.normal(k6, (lm.N,))}
+        vis_d = lm.DenseVisible(conn28)
+        vis_st = lm.make_visible(conn28, lm.N, "stencil", ("lin",), sextic=False)
+        vg_d = jax.jit(jax.value_and_grad(lm.make_loss(vis_d, T, 8, "potts", True, patch_kind="ising")))
+        vg_m = jax.jit(jax.value_and_grad(lm.make_loss(vis_st, T, 8, "potts", True, compute_dtype=jnp.float32,
+                                                       patch_kind="ising")))
+        on = lambda g, a: np.asarray(a)[kept_m] if g == "theta" else np.asarray(a).ravel()   # noqa: E731
+        rows, bad = [], []
+        for i, t in enumerate((5.0, 2.5, 1.0, 0.5, 0.0)):
+            Wr, br = lm.patch_ising_reference(trees8, [t], T)
+            rmsw = float(np.sqrt(np.mean(Wr[0] ** 2)))
+            p = dict(pq, Wp=jnp.asarray(Wr[0]), bp=jnp.asarray(br[0]),
+                     Qp=jnp.asarray(0.05 * rmsw * rng.standard_normal(Wr[0].shape)))
+            kx1, kx2 = jr.split(jr.fold_in(jr.PRNGKey(2004), i))
+            X1 = sample_forward_process(t, 64, T, lm.SIGMA_FORWARD, data4, kx1, beta=1)
+            X2 = sample_forward_process(t, 64, T, lm.SIGMA_FORWARD, data4, kx2, beta=1)
+            (L_d, G_d), (_, G_d2), (L_m, G_m) = vg_d(p, X1), vg_d(p, X2), vg_m(p, X1)
+            err = {g: float(np.linalg.norm(on(g, G_m[g]) - on(g, G_d[g]))) for g in G_d}
+            nrm = {g: float(np.linalg.norm(on(g, G_d[g]))) for g in G_d}
+            noise = {g: float(np.linalg.norm(on(g, G_d[g]) - on(g, G_d2[g]))) / np.sqrt(2.0) for g in G_d}
+            relg = {g: err[g] / max(nrm[g], 1e-300) for g in G_d}
+            eon = {g: err[g] / max(noise[g], 1e-300) for g in G_d}
+            vd = np.concatenate([on(g, G_d[g]) for g in sorted(G_d)])
+            vm = np.concatenate([on(g, G_m[g]) for g in sorted(G_d)])
+            cos = float(vd @ vm / (np.linalg.norm(vd) * np.linalg.norm(vm)))
+            med_rel, med_eon = float(np.median(list(relg.values()))), float(np.median(list(eon.values())))
+            rows.append(f"t {t:g}: loss {float(L_d):.6g} (mixed rel {abs(float(L_m) - float(L_d)) / abs(float(L_d)):.1e}); "
+                        f"relative gradient error median {med_rel:.1e} (Wp {relg['Wp']:.1e}, bp {relg['bp']:.1e}, Qp "
+                        f"{relg['Qp']:.1e}, worst {max(relg.values()):.1e}); cosine {cos:.8f}; error / batch noise "
+                        f"median {med_eon:.1e} (worst {max(eon.values()):.1e})")
+            if t > 0:
+                bad += [f"t {t:g}"] if not (med_rel <= 1e-3 and cos >= 0.9999 and med_eon <= 1e-2) else []
+            else:
+                bad += ["t 0"] if not med_eon <= 1e-2 else []
+        report("   20C mixed vs float64 with Ising patches 7:3:8 at the scale-1 reference (Potts 8 quad local):\n      "
+               + "\n      ".join(rows))
+        check(f"20C mixed precision with Ising patches: median relative gradient error <= 1e-3, cosine >= 0.9999 and "
+              f"error / batch noise median <= 1e-2 at t = 5, 2.5, 1, 0.5; at t = 0 error / noise <= 1e-2 (failures {bad})",
+              len(bad), 0.5)
+
+    # ---- D. the default paths against the modules before --patch-kind ------------------------------------------------
+    if "D" in parts and have_orig:
+        lm_o = _orig20("latent_model")
+        sl_o = _orig20("sample_latent")
+        same = []
+        for geom, M, quad in ((geom8, 3, True), (geom8, 3, False), (geom28, 4, True)):
+            Wp = jnp.asarray(0.05 * rng.standard_normal((geom.P, M, geom.d)))
+            bp = jnp.asarray(0.01 * rng.standard_normal((geom.P, M)))
+            Qp = jnp.asarray(0.005 * rng.standard_normal((geom.P, M, geom.d))) if quad else None
+            X = jnp.asarray(0.5 * rng.standard_normal((3, geom.N)))
+            new, old = lm.patch_terms(Wp, Qp, bp, X, T), lm_o.patch_terms(Wp, Qp, bp, X, T)
+            new_k = lm.patch_terms(Wp, Qp, bp, X, T, kind="potts")
+            same.append(all(np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(new, old))
+                        and all(np.array_equal(np.asarray(a), np.asarray(b)) for a, b in zip(new_k, old)))
+            same.append(np.array_equal(np.asarray(lm.patch_free_energy(Wp, Qp, bp, X, T)),
+                                       np.asarray(lm_o.patch_free_energy(Wp, Qp, bp, X, T))))
+        check(f"20D patch_terms and patch_free_energy (Potts, default and kind='potts') = the modules before --patch-kind "
+              f"bit for bit ({sum(same)} of {len(same)})", len(same) - sum(same), 0.5)
+        vis_d = lm.DenseVisible(conn28)
+        vis_st = lm.make_visible(conn28, lm.N, "stencil", ("lin",), sextic=False)
+        th = jnp.asarray(0.2 * rng.standard_normal(vis_d.n_theta))
+        base = {"theta": th, "W": jnp.asarray(0.02 * rng.standard_normal((8, lm.N))),
+                "b": jnp.asarray(0.02 * rng.standard_normal(8)), "Q": jnp.asarray(0.005 * rng.standard_normal((8, lm.N))),
+                "wl": jnp.asarray(0.3 * rng.standard_normal(lm.N)), "bl": jnp.asarray(0.02 * rng.standard_normal(lm.N))}
+        withp = dict(base, Wp=jnp.asarray(0.05 * rng.standard_normal((geom28.P, 4, geom28.d))),
+                     bp=jnp.asarray(0.01 * rng.standard_normal((geom28.P, 4))),
+                     Qp=jnp.asarray(0.005 * rng.standard_normal((geom28.P, 4, geom28.d))))
+        Xd = jnp.asarray(0.5 * rng.standard_normal((4, lm.N)))
+        bad = []
+        for lab, vis_, kw in (("dense f64", vis_d, {}), ("stencil mixed", vis_st, {"compute_dtype": jnp.float32})):
+            for plab, p in (("no patches", base), ("Potts patches 7:3:4", withp)):
+                fn_n, fn_o = lm.make_loss(vis_, T, 8, "potts", True, **kw), lm_o.make_loss(vis_, T, 8, "potts", True, **kw)
+                (Ln, Gn), (Lo, Go) = jax.jit(jax.value_and_grad(fn_n))(p, Xd), jax.jit(jax.value_and_grad(fn_o))(p, Xd)
+                ok = (np.array_equal(np.asarray(Ln), np.asarray(Lo))
+                      and all(np.array_equal(np.asarray(Gn[g]), np.asarray(Go[g])) for g in Gn)
+                      and str(jax.make_jaxpr(jax.value_and_grad(fn_n))(p, Xd))
+                      == str(jax.make_jaxpr(jax.value_and_grad(fn_o))(p, Xd)))
+                bad += [] if ok else [f"{lab} {plab}"]
+        fo_n = np.asarray(jax.jit(lm.make_force(vis_d, T, 8, "potts", True))(withp, Xd))
+        fo_o = np.asarray(jax.jit(lm_o.make_force(vis_d, T, 8, "potts", True))(withp, Xd))
+        bad += [] if np.array_equal(fo_n, fo_o) else ["make_force"]
+        check(f"20D make_loss (value, gradient and jaxpr; dense f64 and stencil mixed; with and without Potts patches) "
+              f"and make_force = the modules before --patch-kind bit for bit (failures {bad})", len(bad), 0.5)
+        h = _synth_hist19(n8, conn8, 4, 0, geom8, 3, 2005)
+        kw8 = dict(problem="gauss2_8", hidden="potts", local=(h["wl"], h["bl"]), quad=h["Q"], radius=1,
+                   neighbourhood="chebyshev")
+        bad = []
+        for smp in ("sde", "ode"):
+            d_o, _ = sl_o.make_drift(h["theta"], h["W"], h["b"], smp, patch=(h["Wp"], h["bp"], h["Qp"]), **kw8)
+            for ptup in ((h["Wp"], h["bp"], h["Qp"]), (h["Wp"], h["bp"], h["Qp"], "potts")):
+                d_n, _ = sl.make_drift(h["theta"], h["W"], h["b"], smp, patch=ptup, **kw8)
+                for t_rev in (0.0, 1.234, 4.9):
+                    x = jnp.asarray(0.4 * rng.standard_normal(n8))
+                    if not np.array_equal(np.asarray(jax.jit(d_n)(t_rev, x, ())), np.asarray(jax.jit(d_o)(t_rev, x, ()))):
+                        bad.append(f"{smp} {len(ptup)}-tuple t {t_rev}")
+        check(f"20D make_drift with Potts patches (3-tuple and 4-tuple 'potts'; SDE and PF-ODE) = the sampler before "
+              f"--patch-kind bit for bit (failures {bad})", len(bad), 0.5)
+
+    # ---- E. the split-tree reference per patch ------------------------------------------------------------------------
+    if "E" in parts:
+        prob4 = lm.make_problem("mnist28_d0123", 1)
+        data4 = np.asarray(prob4["data"], dtype=np.float64)
+        g14 = lm.PatchGeometry(28, 14, 14)
+        tr = lm.patch_ising_trees(data4, g14, 4, lm.PATCH_SEED0)
+        tsel = taus[[0, 50, 99]]
+        Wi, bi = lm.patch_ising_reference(tr, tsel, T)
+        same = []
+        for p in range(g14.P):
+            Ws, bs_, _ = lm.split_reference(data4[:, g14.idx[p]], None, tsel, T, 4, seed=lm.PATCH_SEED0 + p, pooled=True,
+                                            n_min=lm.tree_n_min(data4.shape[0], 4))
+            same.append(np.array_equal(Ws, Wi[:, p]) and np.array_equal(bs_, bi[:, p]))
+        check(f"20E patch_ising_reference(patch_ising_trees) = split_reference on each patch's data bit for bit (14:14, "
+              f"M = 4, t = 5, {tsel[1]:.3f}, 0; {sum(same)} of {len(same)} patches)", len(same) - sum(same), 0.5)
+        Wl, bl = lm.patch_ising_reference(tr, tsel, T, scale=0.25)
+        check("20E scale 0.25 = 0.25 x the scale-1 reference, W and b bit for bit",
+              0.0 if (np.array_equal(Wl, 0.25 * Wi) and np.array_equal(bl, 0.25 * bi)) else 1.0, 0.5)
+        tr73 = lm.patch_ising_trees(data4, geom28, 32, lm.PATCH_SEED0)
+        sW, sb = lm.patch_ising_lr_scales(tr73, taus, T)
+        ok = bool(np.all(np.isfinite(sW)) and np.all(sW > 0) and np.all(np.isfinite(sb)) and np.all(sb > 0))
+        report(f"   20E 7:3, M = 32 on {data4.shape[0]} images: split trees in {tr73['seconds']:.0f} s, median cuts "
+               f"{int(np.sum(tr73['median_cuts']))}, lr scale W median {np.median(sW[0]):.3g} (t = 5) -> "
+               f"{np.median(sW[-1]):.3g} (t = 0), b {np.median(sb[0]):.3g} -> {np.median(sb[-1]):.3g}")
+        check("20E learning-rate scales of the 7:3 Ising reference (M = 32): finite and positive at every slice",
+              0.0 if ok else 1.0, 0.5)
+        W55, b55 = lm.patch_ising_reference(tr73, taus[55:56], T)
+        Xt = np.asarray(sample_forward_process(float(taus[55]), 2048, T, lm.SIGMA_FORWARD, prob4["data"],
+                                               jr.PRNGKey(2006), beta=1), dtype=np.float64)
+        a1 = np.stack([np.abs(Xt[:, geom28.idx[p]] @ W55[0, p].T + b55[0, p]) / T for p in range(geom28.P)])
+        rows = [f"scale {lam:g}: median {lam * np.median(a1):.3g}, 90% {lam * np.quantile(a1, 0.9):.3g}, share above 1 "
+                f"{np.mean(lam * a1 > 1.0):.3f}" for lam in (0.06, 0.25, 1.0)]
+        report(f"   20E start fields |a| / T of the 7:3 Ising units (M = 32) at slice 55 (t = {taus[55]:.4f}) on 2048 "
+               f"forward samples: " + "; ".join(rows))
+
+    # ---- F. the sampler with Ising patches -------------------------------------------------------------------------
+    if "F" in parts:
+        efn = setup_energy_fn(jnp.asarray(conn8), lm.paper_theta_layout(P8, n8)[1])
+
+        def F_samp(x, q):
+            a = q["W"] @ x + q["Q"] @ (x * x) + q["b"]
+            al = q["wl"] * x + q["bl"]
+            f = efn(x, q["theta"]) - T * jax.scipy.special.logsumexp(a / T) - T * jnp.sum(jnp.logaddexp(al / T, -al / T))
+            return f + lm.patch_free_energy(q["Wp"], q.get("Qp"), q["bp"], x[None], T, kind="ising")[0]
+
+        worst = 0.0
+        for quad in (True, False):
+            h = _synth_hist19(n8, conn8, 4, 0, geom8, 3, 2007 + quad, quad=quad)
+            patch_h = (h["Wp"], h["bp"], h.get("Qp"), "ising")
+            for smp, s_ in (("sde", 2.0), ("ode", 1.0)):
+                dr, _ = sl.make_drift(h["theta"], h["W"], h["b"], smp, "gauss2_8", "potts", (h["wl"], h["bl"]), h["Q"], 1,
+                                      "chebyshev", patch=patch_h)
+                for t_rev in (0.0, 0.7777, 2.5, 4.9999):
+                    tau = lm.T_FORWARD - t_rev
+                    k = min(int(np.searchsorted(-taus, -tau, side="right")) - 1, lm.N_TIME_STEPS - 2)
+                    lw = (tau - taus[k + 1]) / (taus[k] - taus[k + 1])
+                    q = {g: jnp.asarray(h[g][k + 1] + lw * (h[g][k] - h[g][k + 1]))
+                         for g in ("theta", "W", "b", "Q", "wl", "bl", "Wp", "bp", "Qp") if g in h}
+                    x = jnp.asarray(0.4 * rng.standard_normal(n8))
+                    worst = max(worst, rel(dr(t_rev, x, ()), x - s_ * jax.grad(F_samp)(x, q)))
+        check("20F make_drift with Ising patches 4:2:3 (Potts 4 quad local, with and without Qp; SDE and PF-ODE, 4 times "
+              "between knots) vs x - s grad F by autodiff with interpolated parameters (worst relative)", worst, 1e-10)
+        try:
+            sl.make_drift(h["theta"], h["W"], h["b"], "sde", "gauss2_8", "potts", (h["wl"], h["bl"]), h["Q"], 1,
+                          "chebyshev", patch=(h["Wp"], h["bp"], h.get("Qp"), "bogus"))
+            refused = False
+        except ValueError:
+            refused = True
+        check("20F make_drift refuses an unknown patch kind", 0.0 if refused else 1.0, 0.5)
+
+    # ---- G. command lines ------------------------------------------------------------------------------------------
+    if "G" in parts:
+        py, env = sys.executable, dict(os.environ, JAX_PLATFORMS="cpu")
+        FL = ["--problem", "gauss2_8", "--K", "8", "--hidden", "potts", "--quad", "--local", "--select", "ema",
+              "--visible", "quartic", "--radius", "1", "--pair-terms", "lin", "--proto-init", "pooled",
+              "--visible-impl", "stencil", "--precision", "mixed"]
+        PFI = ["--patch", "4:2:4", "--patch-kind", "ising"]
+        mn = ["--steps-schedule", "0:0.001"]
+        runs20 = os.path.join(OUT, "b20_runs")
+        os.makedirs(runs20, exist_ok=True)
+        tl_cur, sl_cur = os.path.join(HERE, "train_latent.py"), os.path.join(HERE, "sample_latent.py")
+        tl_old = os.path.join(ISING_PATCH_ORIG, "train_latent.py")
+
+        def tcmd(script, name, *extra):
+            return [py, "-u", script, "--name", name, "--out-root", runs20] + FL + list(extra)
+
+        def run_(cmd, tag):
+            r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            with open(os.path.join(OUT, f"b20_{tag}.log"), "w") as f:
+                f.write(shlex.join(cmd) + "\n" + r.stdout + "\n--- stderr ---\n" + r.stderr)
+            return r.returncode, r.stdout + r.stderr
+
+        bg = {}
+        jobs20 = [("ising", tcmd(tl_cur, "b20_ising", *PFI, *mn)),
+                  ("on50", tcmd(tl_cur, "b20_ising_on50", *PFI, "--patch-on-slice", "50", "--patch-init-scale", "0.06",
+                                *mn)),
+                  ("potts_new", tcmd(tl_cur, "b20_potts_new", "--patch", "4:2:4", "--max-slices", "3",
+                                     "--steps-schedule", "0:0.01"))]
+        if have_orig:
+            jobs20.append(("potts_old", tcmd(tl_old, "b20_potts_old", "--patch", "4:2:4", "--max-slices", "3",
+                                             "--steps-schedule", "0:0.01")))
+        for tag, cmd in jobs20:                  # in the background, in parallel (8 CPUs)
+            logp = os.path.join(OUT, f"b20_{tag}.log")
+            with open(logp, "w") as f:
+                f.write(shlex.join(cmd) + "\n")
+            bg[tag] = subprocess.Popen(cmd, env=env, stdout=open(logp, "a"), stderr=subprocess.STDOUT)
+        rc, out_ = run_(tcmd(tl_cur, "b20_guard", "--patch-kind", "ising"), "guard")
+        check("20G --patch-kind without --patch is refused (exit != 0, message names --patch-kind)",
+              0.0 if (rc != 0 and "--patch-kind" in out_) else 1.0, 0.5)
+        rcs = {tag: p_.wait() for tag, p_ in bg.items()}
+        report(f"   20G exit codes {rcs}")
+        rd = os.path.join(runs20, "b20_ising")
+        ok, info = False, ""
+        if rcs["ising"] == 0:
+            with open(os.path.join(rd, "config.json")) as f:
+                cfg = json.load(f)
+            hh = np.load(os.path.join(rd, "hidden_history.npz"))
+            with open(os.path.join(rd, "train_log.jsonl")) as f:
+                recs = [json.loads(ln) for ln in f if ln.strip()]
+            with open(os.path.join(rd, "patch_reference.json")) as f:
+                pref = json.load(f)
+            shp = (hh["Wp"].shape, hh["bp"].shape, hh["Qp"].shape)
+            fin = all(np.all(np.isfinite(hh[g])) for g in ("Wp", "bp", "Qp"))
+            keys_ok = all("patchi_decided" in r and "patchi_weak_units" in r for r in recs[-3:])
+            ok = (cfg.get("patch_kind") == "ising" and cfg.get("patch") == "4:2:4" and shp == ((100, 9, 4, 16), (100, 9, 4),
+                  (100, 9, 4, 16)) and fin and keys_ok and pref.get("kind") == "ising" and len(recs) == 100)
+            info = (f"config patch_kind {cfg.get('patch_kind')}, history {shp}, finite {fin}, records {len(recs)} with "
+                    f"patchi keys {keys_ok}, reference kind {pref.get('kind')}, start |a|/T median "
+                    f"{pref.get('start_abs_field_over_T_median_p90')}; last slice decided {recs[-1].get('patchi_decided')}")
+        report(f"   20G Ising patch run: {info}")
+        check("20G a 100-slice --patch 4:2:4 --patch-kind ising run: config, history members and shapes, finite, patchi_* "
+              "records, patch_reference.json kind ising", 0.0 if ok else 1.0, 0.5)
+        rc, out_ = run_(tcmd(tl_cur, "b20_ising", "--patch", "4:2:4", *mn), "resume_potts")
+        check("20G resuming the Ising patch run without --patch-kind ising is refused (patch_kind in the message)",
+              0.0 if (rc != 0 and "patch_kind" in out_) else 1.0, 0.5)
+        ok = False
+        if rcs["on50"] == 0:
+            hh = np.load(os.path.join(runs20, "b20_ising_on50", "hidden_history.npz"))
+            ok = (not np.any(hh["Wp"][:50]) and not np.any(hh["bp"][:50])
+                  and all(np.any(hh["Wp"][k]) for k in range(50, 100)))
+        check("20G --patch-kind ising --patch-on-slice 50: zero units in slices 0-49, non-zero from slice 50",
+              0.0 if ok else 1.0, 0.5)
+        rel_run = os.path.relpath(rd, lm.OUT_ROOT)
+        smp_ok = []
+        for tag, extra in (("sample", []), ("sample_equil", ["--init-dist", "equil:0.5"])):
+            rc, out_ = run_([py, "-u", sl_cur, "--run", rel_run, "--n", "4", "--chunk", "4"] + extra, tag)
+            stem = "sde_base_n4" + ("_init-equil0.5" if extra else "")
+            fp = os.path.join(rd, "samples", stem + ".npy")
+            good = rc == 0 and os.path.exists(fp)
+            if good:
+                xs = np.load(fp)
+                with open(os.path.join(rd, "samples", stem + ".json")) as f:
+                    man = json.load(f)
+                good = xs.shape == (4, 64) and bool(np.all(np.isfinite(xs))) and man.get("patch_kind") == "ising"
+            smp_ok.append(good)
+            report(f"   20G sampler {tag}: exit {rc}, ok {good}")
+        check("20G the default sampler on the Ising patch run (normal start and equil:0.5): finite samples, manifest "
+              "patch_kind ising", len(smp_ok) - sum(smp_ok), 0.5)
+        rc, out_ = run_([py, "-u", sl_cur, "--run", rel_run, "--n", "4", "--chunk", "4", "--fast"], "fast")
+        check("20G --fast refuses the Ising patch run", 0.0 if (rc != 0 and "patch" in out_) else 1.0, 0.5)
+        if have_orig:
+            ok, diff = False, "runs failed"
+            if rcs.get("potts_new") == 0 and rcs.get("potts_old") == 0:
+                diff = []
+                for k in range(3):
+                    a = np.load(os.path.join(runs20, "b20_potts_new", "slices", f"slice_{k:03d}.npz"))
+                    b = np.load(os.path.join(runs20, "b20_potts_old", "slices", f"slice_{k:03d}.npz"))
+                    for g in a.files:
+                        if g == "record":
+                            continue
+                        if g not in b.files or not np.array_equal(a[g], b[g]):
+                            diff.append(f"slice {k} {g}")
+                with open(os.path.join(runs20, "b20_potts_new", "config.json")) as f:
+                    cn = json.load(f)
+                with open(os.path.join(runs20, "b20_potts_old", "config.json")) as f:
+                    co = json.load(f)
+                skip = {"name", "sha256", "started", "slurm_job", "devices", "jax", "git_commit"}
+                diff += [f"config {k}" for k in set(cn) | set(co) if k not in skip and cn.get(k) != co.get(k)]
+                ok = not diff
+            check(f"20G a 3-slice --patch 4:2:4 (Potts) run with the new and the old train_latent: slice arrays bit for "
+                  f"bit, the same config (differences {diff})", 0.0 if ok else 1.0, 0.5)
+        rc, out_ = run_([py, "-m", "py_compile", os.path.join(HERE, "early_slices.py"), os.path.join(HERE, "make_gallery.py")],
+                        "compile")
+        check("20G early_slices.py and make_gallery.py compile", 0.0 if rc == 0 else 1.0, 0.5)
+    report(f"   block 20: {time.time() - t20:.0f} s")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     t_all = time.time()
@@ -3567,6 +4052,9 @@ def main():
         finish(t_all)
     if sys.argv[1:2] == ["19"]:         # block 19 alone (CPU-sized: 8 CPUs); '19 G' (or other letters): those parts
         block_19(sys.argv[2:] or "ABCDEFG")
+        finish(t_all)
+    if sys.argv[1:2] == ["20"]:         # block 20 alone (CPU-sized: 8 CPUs); '20 G' (or other letters): those parts
+        block_20(sys.argv[2:] or "ABCDEFG")
         finish(t_all)
     key = jr.PRNGKey(123)
     conn = lm.connectivity()

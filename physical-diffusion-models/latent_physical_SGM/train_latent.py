@@ -111,6 +111,14 @@ patch_init_scale, patch_lr_scale, patch_on_slice; '', 0.25, 1.0, 0 for runs from
 same values, --init-from takes only a source with the same patch, init scale and on-slice (patch_lr_scale is free).
 Needs exact hidden statistics, the exact rule with per-element Adam, trained units and both classes (not with
 --hidden-samples, --hidden-rule cd1, --hidden-norm other than element, --hidden-fixed or --cls).
+--patch-kind ising (2026-11-14): the STATES units of a patch are independent Ising units instead of one Potts unit
+(F_patch = -T sum log 2cosh(a / T); latent_model.patch_terms kind='ising'), with the same keys Wp, bp, Qp, geometry,
+switch-on and learning-rate rules. Reference per patch: split_reference's label-free split tree on the patch vectors
+(latent_model.patch_ising_trees / patch_ising_reference; tree seeds = the Potts k-means seeds), start --patch-init-scale
+x that reference (W and b scaled: the field a = lam a*), learning-rate scales from it (patch_ising_lr_scales),
+diagnostics patchi_* (decided share |m| > 0.9, weak units, <|m|>, rms a / T; patch_ising_unit_stats), patch_dec in
+the slice files. config.json records 'patch_kind': 'ising' (Potts and patch-free configs unchanged); resume and
+--init-from refuse another kind.
 Every slice file also stores the per-sample losses on the fixed validation batch (and the paper checkpoint's, for
 mnist28), for paired comparisons between runs (the validation batch of slice k is drawn with the key of k at the
 slice's t, so runs on different grids share it only where their slice times agree: slices 0 and 99 for power:P
@@ -368,6 +376,12 @@ def parse():
                          "--freeze-hidden-slices); K > 0: no patch units in slices 0..K-1 (exactly the plain "
                          "computation), switched on at slice K at --patch-init-scale x the reference at t_K and trained "
                          "from slice K on")
+    ap.add_argument("--patch-kind", choices=lm.PATCH_KINDS, default="potts",
+                    help="with --patch: potts (default) one Potts unit with STATES states per patch; ising: STATES "
+                         "independent Ising units per patch, F_patch = -T sum log 2cosh(a / T) (latent_model.patch_terms "
+                         "kind='ising'), started from --patch-init-scale x the per-patch split-tree reference "
+                         "(latent_model.patch_ising_trees / patch_ising_reference, label-free, the Potts k-means seeds); "
+                         "the same parameter keys Wp, bp, Qp; recorded in config.json as 'patch_kind'")
     ap.add_argument("--seed", type=int, default=lm.KEY_SEED,
                     help="training seed (>= 1 for Potts units and for Ising units other than the K = 1 Fisher unit): "
                          "the optimisation key chain jr.PRNGKey(seed) and, for Potts units, the k-means seeds "
@@ -953,8 +967,10 @@ def main():
                                              and 0.0 < args.harmonic_lr_tmin <= lm.T_FORWARD):
         raise ValueError(f"--harmonic-lr-tmin {args.harmonic_lr_tmin}: needs --harmonic R > 0 and a time in "
                          f"(0, {lm.T_FORWARD:g}]")
-    if patch is None and (args.patch_init_scale is not None or args.patch_lr_scale != 1.0 or args.patch_on_slice != 0):
-        raise ValueError("--patch-init-scale, --patch-lr-scale and --patch-on-slice need --patch SIDE:STRIDE:STATES")
+    if patch is None and (args.patch_init_scale is not None or args.patch_lr_scale != 1.0 or args.patch_on_slice != 0
+                          or args.patch_kind != "potts"):
+        raise ValueError("--patch-init-scale, --patch-lr-scale, --patch-on-slice and --patch-kind need --patch "
+                         "SIDE:STRIDE:STATES")
     if patch is not None:
         if (args.hidden_samples > 0 or args.hidden_rule != "exact" or args.hidden_norm != "element" or args.hidden_fixed
                 or args.cls != "none"):
@@ -1018,6 +1034,8 @@ def main():
         "patch": lm.patch_spec_str(patch), "patch_init_scale": lam_p, "patch_lr_scale": args.patch_lr_scale,
         "patch_on_slice": K_on,
     }
+    if args.patch_kind != "potts":               # --patch-kind ising only: Potts and patch-free configs as before
+        config["patch_kind"] = args.patch_kind
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
                       cd1_hidden_samples=args.cd1_hidden_samples)
@@ -1040,7 +1058,7 @@ def main():
                 "harmonic_fixed_slices": 0, "harmonic_ref": "full",
                 "harmonic_lr_tmin": 0.0,
                 "patch": "", "patch_init_scale": 0.25, "patch_lr_scale": 1.0,
-                "patch_on_slice": 0}                                            # runs from before these options
+                "patch_on_slice": 0, "patch_kind": "potts"}                     # runs from before these options
     code_sha = {f: lm.sha256_file(os.path.join(HERE, f)) for f in ("latent_model.py", "train_latent.py")}
     cfg_path = os.path.join(out_dir, "config.json")
     if os.path.exists(cfg_path):
@@ -1048,6 +1066,8 @@ def main():
             old = json.load(f)
         diff = {k: (old.get(k, defaults.get(k)), v) for k, v in config.items()
                 if k != "assemble" and old.get(k, defaults.get(k)) != v}   # --assemble: the same bytes either way
+        if old.get("patch_kind", "potts") != args.patch_kind:   # recorded for ising only: check both directions
+            diff["patch_kind"] = (old.get("patch_kind", "potts"), args.patch_kind)
         if diff:
             raise RuntimeError(f"existing run {out_dir} has a different config: {diff}")
         if old.get("sha256") != code_sha:
@@ -1119,8 +1139,10 @@ def main():
                   f"before --steps-scale / --steps-schedule; lr {lr_v[0]:.4g} (t = 5) to {lr_v[-1]:.4g} (t = 0)")
     jk = (2 if args.hidden_jackknife_order == 2 else True) if args.hidden_jackknife else False
     loss_fn = lm.make_loss(vis, lm.TEMP, K, args.hidden, args.local, samples=args.hidden_samples,
-                           jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt)
-    loss_ps = jax.jit(lm.make_loss_per_sample(vis_dense, lm.TEMP, K, args.hidden, args.local))
+                           jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt,
+                           patch_kind=args.patch_kind)
+    loss_ps = jax.jit(lm.make_loss_per_sample(vis_dense, lm.TEMP, K, args.hidden, args.local,
+                                              patch_kind=args.patch_kind))
     loss_ps_k0 = jax.jit(lm.make_loss_per_sample(vis_dense, lm.TEMP, 0))
     cd1_grad = None
     if args.hidden_rule == "cd1":
@@ -1137,7 +1159,8 @@ def main():
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
         run_late, _ = build_runner(
             lm.make_loss(vis, lm.TEMP, K, args.hidden, args.local, samples=args.hidden_samples_late,
-                         jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt),
+                         jackknife=jk, replicates=args.hidden_replicates, compute_dtype=cdt,
+                         patch_kind=args.patch_kind),
             data_train, n_vis, args.ema_steps, args.visible, vis.P, loss_key=True,
             floor=args.hidden_floor, floor_samples=args.hidden_samples_late, hidden_norm=args.hidden_norm,
             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices, **lean)
@@ -1303,15 +1326,24 @@ def main():
         km_fn_p = lm.kmeans_jax if args.ref_kmeans == "gpu" else None      # as for the global reference
         seed0_p = lm.PATCH_SEED0 + 1000 * (args.seed - lm.KEY_SEED)
         data64 = np.asarray(data, dtype=np.float64)
-        clus = lm.patch_clusters(data64, geom, S_p, seed0_p, km_fn_p)
-        # the learning-rate scales always come from the seed-1 clustering, as the global unit's from k-means seed 0
-        clus_lr = clus if seed0_p == lm.PATCH_SEED0 else lm.patch_clusters(data64, geom, S_p, lm.PATCH_SEED0, km_fn_p)
-        del data64
-        sWp, sbp = lm.patch_lr_scales(clus_lr, taus, lm.TEMP)
+        if args.patch_kind == "ising":           # --patch-kind ising: label-free split trees per patch (numpy k-means)
+            clus = lm.patch_ising_trees(data64, geom, S_p, seed0_p)
+            clus_lr = clus if seed0_p == lm.PATCH_SEED0 else lm.patch_ising_trees(data64, geom, S_p, lm.PATCH_SEED0)
+            del data64
+            patch_ref, patch_stats = lm.patch_ising_reference, lm.patch_ising_unit_stats
+            sWp, sbp = lm.patch_ising_lr_scales(clus_lr, taus, lm.TEMP)
+        else:
+            clus = lm.patch_clusters(data64, geom, S_p, seed0_p, km_fn_p)
+            # the learning-rate scales always come from the seed-1 clustering, as the global unit's from k-means seed 0
+            clus_lr = clus if seed0_p == lm.PATCH_SEED0 else lm.patch_clusters(data64, geom, S_p, lm.PATCH_SEED0,
+                                                                               km_fn_p)
+            del data64
+            patch_ref, patch_stats = lm.patch_reference, lm.patch_unit_stats
+            sWp, sbp = lm.patch_lr_scales(clus_lr, taus, lm.TEMP)
         if not (np.all(np.isfinite(sWp)) and np.all(sWp > 0) and np.all(np.isfinite(sbp)) and np.all(sbp > 0)):
             raise RuntimeError(f"--patch {lm.patch_spec_str(patch)}: the per-patch learning-rate scales are not all finite "
                                f"and positive")
-        Wp0, bp0 = (a[0] for a in lm.patch_reference(clus, taus[K_on:K_on + 1], lm.TEMP, scale=lam_p))   # the start
+        Wp0, bp0 = (a[0] for a in patch_ref(clus, taus[K_on:K_on + 1], lm.TEMP, scale=lam_p))   # the start
         if not (np.all(np.isfinite(Wp0)) and np.all(np.isfinite(bp0))):
             raise RuntimeError(f"--patch {lm.patch_spec_str(patch)}: the start templates are not finite (--seed "
                                f"{args.seed}, k-means seeds {seed0_p} + patch)")
@@ -1322,24 +1354,47 @@ def main():
                 h.update(np.ascontiguousarray(a).tobytes())
             return h.hexdigest()
 
-        ev, cnt = clus["explained_variance"], clus["counts"]
         mmm = lambda a: [float(np.min(a)), float(np.median(a)), float(np.max(a))]     # noqa: E731
-        pref = {"spec": lm.patch_spec_str(patch), "P": geom.P, "d": geom.d, "S": S_p,
-                "coverage_min_max_mean": [int(geom.coverage.min()), int(geom.coverage.max()), float(geom.coverage.mean())],
-                "kmeans": "numpy" if km_fn_p is None else "gpu",
-                "kmeans_seeds": [int(clus["seeds"][0]), int(clus["seeds"][-1])],
-                "kmeans_seconds": float(clus["seconds"]),
-                "lr_kmeans_seeds": [int(clus_lr["seeds"][0]), int(clus_lr["seeds"][-1])],
-                "lr_kmeans_seconds": 0.0 if clus_lr is clus else float(clus_lr["seconds"]),
-                "explained_variance_median_min_central_median": [
-                    float(np.median(ev)), float(np.min(ev)), float(np.median(ev[geom.central])) if geom.central.any()
-                    else None],
-                "empty_clusters": int(np.sum(cnt == 0)), "clusters_below_20_images": int(np.sum(cnt < 20)),
-                "lr_scale_W_min_median_max": [mmm(v) for v in sWp], "lr_scale_b_min_median_max": [mmm(v) for v in sbp],
-                "init_scale": lam_p, "on_slice": K_on, "start_t": float(taus[K_on]), "lr_scale": args.patch_lr_scale,
-                "start_sha256": _sha(Wp0, bp0), "lr_scales_sha256": _sha(sWp, sbp),
-                "slice_t": [float(v) for v in taus], "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"),
-                "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+        if args.patch_kind == "ising":           # split-tree record in place of the k-means one
+            a_start = []                         # the start fields |a| / T on the first 2048 images (diagnostic)
+            Xs = np.asarray(data[:2048], dtype=np.float64)
+            for p in range(geom.P):
+                a_start.append(np.abs(Xs[:, geom.idx[p]] @ Wp0[p].T + bp0[p]) / lm.TEMP)
+            a_start = np.stack(a_start)
+            pref = {"kind": "ising", "spec": lm.patch_spec_str(patch), "P": geom.P, "d": geom.d, "M": S_p,
+                    "coverage_min_max_mean": [int(geom.coverage.min()), int(geom.coverage.max()),
+                                              float(geom.coverage.mean())],
+                    "split_tree_seeds": [int(clus["seeds"][0]), int(clus["seeds"][-1])], "n_min": int(clus["n_min"]),
+                    "split_tree_seconds": float(clus["seconds"]),
+                    "lr_split_tree_seeds": [int(clus_lr["seeds"][0]), int(clus_lr["seeds"][-1])],
+                    "lr_split_tree_seconds": 0.0 if clus_lr is clus else float(clus_lr["seconds"]),
+                    "median_cuts_total": int(np.sum(clus["median_cuts"])),
+                    "gain_min_median_max": mmm(clus["gain"]),
+                    "start_abs_field_over_T_median_p90": [float(np.median(a_start)), float(np.quantile(a_start, 0.9))],
+                    "start_share_abs_field_above_T": float(np.mean(a_start > 1.0)),
+                    "lr_scale_W_min_median_max": [mmm(v) for v in sWp], "lr_scale_b_min_median_max": [mmm(v) for v in sbp],
+                    "init_scale": lam_p, "on_slice": K_on, "start_t": float(taus[K_on]), "lr_scale": args.patch_lr_scale,
+                    "start_sha256": _sha(Wp0, bp0), "lr_scales_sha256": _sha(sWp, sbp),
+                    "slice_t": [float(v) for v in taus], "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"),
+                    "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+        else:
+            ev, cnt = clus["explained_variance"], clus["counts"]
+            pref = {"spec": lm.patch_spec_str(patch), "P": geom.P, "d": geom.d, "S": S_p,
+                    "coverage_min_max_mean": [int(geom.coverage.min()), int(geom.coverage.max()), float(geom.coverage.mean())],
+                    "kmeans": "numpy" if km_fn_p is None else "gpu",
+                    "kmeans_seeds": [int(clus["seeds"][0]), int(clus["seeds"][-1])],
+                    "kmeans_seconds": float(clus["seconds"]),
+                    "lr_kmeans_seeds": [int(clus_lr["seeds"][0]), int(clus_lr["seeds"][-1])],
+                    "lr_kmeans_seconds": 0.0 if clus_lr is clus else float(clus_lr["seconds"]),
+                    "explained_variance_median_min_central_median": [
+                        float(np.median(ev)), float(np.min(ev)), float(np.median(ev[geom.central])) if geom.central.any()
+                        else None],
+                    "empty_clusters": int(np.sum(cnt == 0)), "clusters_below_20_images": int(np.sum(cnt < 20)),
+                    "lr_scale_W_min_median_max": [mmm(v) for v in sWp], "lr_scale_b_min_median_max": [mmm(v) for v in sbp],
+                    "init_scale": lam_p, "on_slice": K_on, "start_t": float(taus[K_on]), "lr_scale": args.patch_lr_scale,
+                    "start_sha256": _sha(Wp0, bp0), "lr_scales_sha256": _sha(sWp, sbp),
+                    "slice_t": [float(v) for v in taus], "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"),
+                    "created": time.strftime("%Y-%m-%d %H:%M:%S")}
         pref_path = os.path.join(out_dir, "patch_reference.json")
         if not os.path.exists(pref_path):
             with open(pref_path + ".tmp", "w") as f:
@@ -1354,16 +1409,32 @@ def main():
                           f"{str(old_pref.get('start_sha256'))[:16]} -> {pref['start_sha256'][:16]}, lr scales "
                           f"{str(old_pref.get('lr_scales_sha256'))[:16]} -> {pref['lr_scales_sha256'][:16]}); the slices "
                           f"from here on use the new ones")
-        log(logf, f"patch units {pref['spec']}: P {geom.P}, d {geom.d}, S {S_p}; k-means ({pref['kmeans']}) seeds "
-                  f"{pref['kmeans_seeds'][0]}-{pref['kmeans_seeds'][1]} in {clus['seconds']:.0f} s"
-                  + ("" if clus_lr is clus else f" (lr scales from seeds {pref['lr_kmeans_seeds'][0]}-"
-                                                f"{pref['lr_kmeans_seeds'][1]}, {clus_lr['seconds']:.0f} s)")
-                  + f"; explained variance median {np.median(ev):.3f} (min {np.min(ev):.3f}); empty clusters "
-                  f"{pref['empty_clusters']}, < 20 images {pref['clusters_below_20_images']}; lr scales W median "
-                  f"{np.median(sWp[0]):.3g} (t = {taus[0]:g}) -> {np.median(sWp[-1]):.3g} (t = {taus[-1]:g}), b median "
-                  f"{np.median(sbp[0]):.3g} -> {np.median(sbp[-1]):.3g} (x {args.hidden_lr_scale:g} x "
-                  f"{args.patch_lr_scale:g}); start {lam_p:g} x the reference at slice {K_on} (t = {taus[K_on]:.4f}), "
-                  f"|Wp| {np.linalg.norm(Wp0):.4g}" + (f"; no patch units in slices 0-{K_on - 1}" if K_on else ""))
+        if args.patch_kind == "ising":
+            log(logf, f"patch units {pref['spec']} (Ising): P {geom.P}, d {geom.d}, M {S_p} Ising units per patch; "
+                      f"split trees seeds {pref['split_tree_seeds'][0]}-{pref['split_tree_seeds'][1]} (n_min "
+                      f"{pref['n_min']}) in {clus['seconds']:.0f} s"
+                      + ("" if clus_lr is clus else f" (lr scales from seeds {pref['lr_split_tree_seeds'][0]}-"
+                                                    f"{pref['lr_split_tree_seeds'][1]}, {clus_lr['seconds']:.0f} s)")
+                      + f"; median cuts {pref['median_cuts_total']}; lr scales W median {np.median(sWp[0]):.3g} "
+                      f"(t = {taus[0]:g}) -> {np.median(sWp[-1]):.3g} (t = {taus[-1]:g}), b median "
+                      f"{np.median(sbp[0]):.3g} -> {np.median(sbp[-1]):.3g} (x {args.hidden_lr_scale:g} x "
+                      f"{args.patch_lr_scale:g}); start {lam_p:g} x the reference at slice {K_on} (t = "
+                      f"{taus[K_on]:.4f}), |Wp| {np.linalg.norm(Wp0):.4g}, start |a|/T median "
+                      f"{pref['start_abs_field_over_T_median_p90'][0]:.3g} (90%: "
+                      f"{pref['start_abs_field_over_T_median_p90'][1]:.3g}), share above 1 "
+                      f"{pref['start_share_abs_field_above_T']:.3f}"
+                      + (f"; no patch units in slices 0-{K_on - 1}" if K_on else ""))
+        else:
+            log(logf, f"patch units {pref['spec']}: P {geom.P}, d {geom.d}, S {S_p}; k-means ({pref['kmeans']}) seeds "
+                      f"{pref['kmeans_seeds'][0]}-{pref['kmeans_seeds'][1]} in {clus['seconds']:.0f} s"
+                      + ("" if clus_lr is clus else f" (lr scales from seeds {pref['lr_kmeans_seeds'][0]}-"
+                                                    f"{pref['lr_kmeans_seeds'][1]}, {clus_lr['seconds']:.0f} s)")
+                      + f"; explained variance median {np.median(ev):.3f} (min {np.min(ev):.3f}); empty clusters "
+                      f"{pref['empty_clusters']}, < 20 images {pref['clusters_below_20_images']}; lr scales W median "
+                      f"{np.median(sWp[0]):.3g} (t = {taus[0]:g}) -> {np.median(sWp[-1]):.3g} (t = {taus[-1]:g}), b median "
+                      f"{np.median(sbp[0]):.3g} -> {np.median(sbp[-1]):.3g} (x {args.hidden_lr_scale:g} x "
+                      f"{args.patch_lr_scale:g}); start {lam_p:g} x the reference at slice {K_on} (t = {taus[K_on]:.4f}), "
+                      f"|Wp| {np.linalg.norm(Wp0):.4g}" + (f"; no patch units in slices 0-{K_on - 1}" if K_on else ""))
 
         @jax.jit
         def force_rms(params, X):
@@ -1383,7 +1454,7 @@ def main():
             if "V" in params:
                 out["force_rms_harm"] = rms(lm.harmonic_terms(params["V"], params["c"], X)[0])
             out["force_rms_patch"] = rms(lm.patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, lm.TEMP,
-                                                        with_lap=False)[0])
+                                                        with_lap=False, kind=args.patch_kind)[0])
             return out
 
     # Paper checkpoint, for a per-slice comparison of the validation loss (paper problem, joint data only)
@@ -1419,6 +1490,8 @@ def main():
                if k not in free and k in defaults and scfg.get(k, defaults.get(k)) != v}
         bad.update({k: (scfg.get(k), config[k]) for k in ("K", "cls", "hidden_lr_scale", "freeze_hidden_slices")
                     if scfg.get(k) != config[k]})
+        if scfg.get("patch_kind", "potts") != args.patch_kind:   # Ising patch units need an Ising-patch source
+            bad["patch_kind"] = (scfg.get("patch_kind", "potts"), args.patch_kind)
         if bad:
             raise RuntimeError(f"--init-from {src}: different model config {bad}")
         if scfg.get("init_from"):
@@ -1741,8 +1814,8 @@ def main():
         if "Wp" in params:                       # patch units against this slice's scale-1 reference, forces
             Wpn, bpn = np.asarray(params["Wp"]), np.asarray(params["bp"])
             Qpn = np.asarray(params["Qp"]) if "Qp" in params else None
-            W_ref_p = lm.patch_reference(clus, [t_curr], lm.TEMP)[0][0]
-            st_p, arr_p = lm.patch_unit_stats(Wpn, bpn, Qpn, np.asarray(Xv), lm.TEMP, W_ref_p, geom)
+            W_ref_p = patch_ref(clus, [t_curr], lm.TEMP)[0][0]   # Potts: patch_reference; Ising: the split trees'
+            st_p, arr_p = patch_stats(Wpn, bpn, Qpn, np.asarray(Xv), lm.TEMP, W_ref_p, geom)
             rec.update(st_p)
             rec.update({q: float(v) for q, v in force_rms(params, jnp.asarray(Xv)).items()})
             extra.update(Wp=Wpn, bp=bpn, **({"Qp": Qpn} if Qpn is not None else {}), **arr_p)
@@ -1794,7 +1867,14 @@ def main():
                     f"{rec['harm_added_var']:.4g} (ref {rec['harm_added_var_ref']:.4g}; {rec['harm_n_beyond_iso']} modes "
                     f"beyond T/iso {rec['harm_iso_spring']:.4g}), curvature at 0: springs {rec['harm_vis_curv_min']:.3g}, "
                     f"with the modes {rec['harm_curv_min']:.3g}")
-        if "patch_W_norm" in rec:
+        if "patch_W_norm" in rec and "patchi_decided" in rec:      # --patch-kind ising
+            fr = lambda q: f"{rec[q]:.3g}" if q in rec else "n/a"      # noqa: E731
+            msg += (f"; Ising patches |Wp| {rec['patch_W_norm']:.4g} (ref {rec['patch_Wref_norm']:.4g}), cos "
+                    f"{rec['patch_cos_W_Wref']:.3f}, decided {rec['patchi_decided']:.3f}, weak units "
+                    f"{rec['patchi_weak_units']}, <|m|> {rec['patchi_mean_abs_m']:.3f}, rms |a|/T "
+                    f"{rec['patchi_field_rms_over_T']:.3g}; force patch/glob/loc {fr('force_rms_patch')}/"
+                    f"{fr('force_rms_glob')}/{fr('force_rms_loc')}")
+        elif "patch_W_norm" in rec:
             fr = lambda q: f"{rec[q]:.3g}" if q in rec else "n/a"      # noqa: E731
             msg += (f"; patches |Wp| {rec['patch_W_norm']:.4g} (ref {rec['patch_Wref_norm']:.4g}), cos "
                     f"{rec['patch_cos_W_Wref']:.3f}, eff states {rec['patch_eff_states_median']:.2f}/"

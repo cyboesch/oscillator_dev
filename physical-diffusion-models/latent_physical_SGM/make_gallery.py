@@ -68,8 +68,9 @@ def provenance(spec):
     """Lines for README.txt: each sample file of 'PATH[+PATH...]' with its run's key settings (config.json) and the
     sampler settings (the sample file's .json manifest), so a gallery says what was done without the job log."""
     lines = []
-    keys_cfg = ("K", "hidden", "seed", "patch", "patch_on_slice", "patch_init_scale", "steps_schedule", "harmonic")
-    keys_man = ("sampler", "n", "init_dist", "oracle_start", "quench", "patch_units")
+    keys_cfg = ("K", "hidden", "seed", "patch", "patch_kind", "patch_on_slice", "patch_init_scale", "steps_schedule",
+                "harmonic")
+    keys_man = ("sampler", "n", "init_dist", "oracle_start", "quench", "patch_units", "patch_kind")
     for p in spec.split("+"):
         path = p if os.path.isabs(p) else os.path.join(lm.OUT_ROOT, p)
         lines.append(f"sample file: {p}")
