@@ -2996,3 +2996,321 @@ n = 2000, floor 1.69. Gallery: `galleries/2026-11-13_ten-digits_patch7x7-from-t2
     this small CNN on Fashion), cached as `fid/classifier_fashion_28.npz`.
   - The K784 global-only pipeline 4246691 trains normally (slices 0-1 fine). The other two pipelines start as GPUs
     free up.
+- **23:20: early K784-only comparison:** FID 4247127 and gallery 4247128
+  (`galleries/2026-11-14_fashion-mnist-10-classes_K784-only_patch7x7-from-t2.2_vs_global-only_seed1/`), after the
+  K784 equilibrated sampling; not held up by K3072.
+
+### Fashion-MNIST sweep: patch onset, patch size, K (submitted 2026-11-14 23:35; the user: "play with the hyperparameters")
+All ten classes, seed 1, n = 2000, both starts. Compared, paired, with K784 + patch7x7 from t2.2 (4246692 / 4246695).
+
+| run | pipeline | equil:3 |
+|---|---|---|
+| K784 + patch7x7 from t2.7 (slice 45) | 4247140 | 4247141 |
+| K784 + patch7x7 from t1.5 (slice 70) | 4247142 | 4247143 |
+| K784 + patch8x8 every 2 px from t2.2 (121 patches) | 4247144 | 4247145 |
+| K784 + patch14x14 every 7 px, 64 states, from t2.2 (9 patches; for Fashion's larger textures) | 4247146 | 4247147 |
+| K1536 + patch7x7 from t2.2 (with K784 and K3072: three points in K) | 4247148 | 4247149 |
+
+- Follow-ups: FID 4247150, grain 4247151, gallery 4247152
+  (`galleries/2026-11-15_fashion-mnist-10-classes_sweep_patch-onset_patch-size_K_seed1/`).
+- K6144 is held back unless K3072 shows a large gain over K784 (5.5 h of sampling and memory workarounds).
+
+### Results: Fashion-MNIST, K784 with and without patches (2026-11-15 01:00; FID 4247127, gallery 4247128)
+- n = 2000. Fashion-classifier features: the FID scale differs from MNIST's.
+- Floor: real training images 0.40. Real images are only 73.8% confidently classified (Fashion classes overlap:
+  shirt / T-shirt / pullover / coat).
+
+| set | FID noise | FID equil | prec F (eq) | rec F (eq) | confident (eq) |
+|---|---|---|---|---|---|
+| K784, global only | 6.67 | 6.39 | 0.867 | 0.457 | 58.6% |
+| **K784 + patch7x7 from t2.2** | 3.91 | **3.49** | 0.921 | 0.633 | 61.1% |
+
+- **Patches:** -2.76 from noise and -2.90 from equilibrated (both p < 0.01); recall 0.46 -> 0.63.
+- **Images** (gallery `2026-11-14_fashion-mnist-10-classes_K784-only_patch7x7-from-t2.2_vs_global-only_seed1/`):
+  - Items of every class are recognisable: T-shirts, trousers, pullovers, dresses, coats, bags, sneakers, ankle boots.
+  - As on MNIST, the patches remove the speckle and keep each item's shape, column by column.
+  - Defects:
+    - **sandals** (and some sneaker soles) come out as fragmented, speckled shapes;
+    - textures are washed out: real items have fine stripes, prints and grey levels, while the samples are smoother,
+      often brighter and blotchy;
+    - a few dark items (dark pullovers, bags) are noisy.
+- **Reading.** The recipe transfers. The remaining gap looks like texture and fine-structure detail (sandal straps,
+  prints), the regime the patch-size sweep tests (8x8 every 2 px; 14x14 with 64 states).
+
+### Results: Fashion-MNIST sweep, onset / patch size / K (2026-11-15 03:40; FID 4247150, grain 4247151, gallery 4247152)
+All ten classes, seed 1, n = 2000; floor 0.40. Paired differences are against K784 + patch7x7 from t2.2 from the
+equilibrated start (3.49).
+
+| set (equilibrated start) | FID | paired diff | prec F | rec F | confident |
+|---|---|---|---|---|---|
+| K784 + patch7x7 from t2.2 (reference) | 3.49 | | 0.921 | 0.633 | 61.1% |
+| from t2.7 | 3.65 | +0.16 [-0.01, +0.32] | 0.894 | 0.702 | 60.0% |
+| from t1.5 | 3.53 | +0.04 [-0.13, +0.20] | 0.954 | 0.539 | 61.9% |
+| patch8x8 every 2 px | 3.62 | +0.13 [+0.02, ...] | 0.931 | 0.638 | 61.5% |
+| patch14x14 every 7 px, 64 states | 3.54 | about +0.05 | 0.928 | 0.590 | 61.6% |
+| **K1536 + patch7x7 from t2.2** | **3.22** | **-0.27 [-0.54, -0.03]** | 0.917 | 0.660 | 61.6% |
+
+**Findings.**
+1. **The patch hyperparameters are near their optimum.** Every onset and size variant is within 0.16 FID of the
+   reference.
+   - Onset trades precision against recall exactly as on MNIST: earlier (t2.7) gives more recall (0.70) and less
+     precision (0.89); later (t1.5) the reverse (0.95 / 0.54). t2.2 is the balance.
+2. **Patch size changes texture only.** In the side-by-side, every column shows the same item and shape in all
+   variants. 8x8 every 2 px gives the smoothest fills; 14x14 with 64 states gives visibly noisier, speckled fills.
+3. **K is the lever, as on MNIST.** K1536 gives -0.27 (significant), and K3072 + patches (4246693, in the morning)
+   gives the next point.
+4. **Sandals stay fragmented in every variant.** Their thin straps are a shape problem decided before the patches
+   act (global unit), not a texture problem. The same holds for the washed-out prints.
+
+**Next.** Wait for K3072. If it gains clearly over K1536, run K6144 (costly: 5.5 h of sampling at chunk 25 with the
+platform allocator). Otherwise the Fashion result is: the recipe transfers, and the remaining gap is fine shape
+structure.
+- **Grain** (4247151, equilibrated start, deviation from the Fashion test images in their SD): speckle on the items is
+  +0.75 global only, +0.25 for patch7x7, **+0.09 for patch8x8 every 2 px** (closest to real), +0.49 for patch14x14 with
+  64 states. The 8x8 layout gives the cleanest texture at almost the same FID (+0.13), as on MNIST.
+
+### Results: Fashion-MNIST, K3072 + patches; K saturates early (2026-11-15 06:40; pipeline 4246693, equil 4246696, FID 4246697, gallery 4246699)
+| Fashion, 10 classes, patch7x7 from t2.2 | FID noise | FID equil | prec F (eq) | rec F (eq) | confident (eq) |
+|---|---|---|---|---|---|
+| K784 | 3.91 | 3.49 | 0.921 | 0.633 | 61.1% |
+| K1536 | 3.49 | **3.22** | 0.917 | 0.660 | 61.6% |
+| K3072 | 3.46 | 3.34 | 0.926 | 0.672 | 62.1% |
+
+- **K3072 against K784:** -0.15 [-0.39, +0.13], not significant. K3072 is no better than K1536 (3.34 against 3.22).
+- **On Fashion the gain from K is used up at about K1536**, unlike ten-digit MNIST (where it kept paying up to K6144).
+  So **K6144 is not run**.
+- **Images** (`galleries/2026-11-14_fashion-mnist-10-classes_K784-K3072_patch7x7-from-t2.2_vs_global-only_seed1/`):
+  - The same picture as K784: recognisable items, smooth fills.
+  - Sandals still fragmented; prints and stripes still missing.
+- **Fashion summary so far.**
+  - The MNIST recipe transfers: patches -2.9 FID. The best is K1536 + patch7x7 from t2.2 at 3.22 (floor 0.40), and
+    8x8 every 2 px is the cleanest texture.
+  - The remaining defects (sandal straps, prints) are not fixed by K, onset or patch size: fine structure that a
+    template mixture plus local patches does not produce.
+- **Possible next steps:**
+  - K1536 + patch8x8 every 2 px (combines the best K and the cleanest texture);
+  - seeds 2-3 for error bars;
+  - the conceptual question (tree, or per-state modes) as for MNIST.
+- **06:50: submitted K1536 + patch8x8 every 2 px from t2.2, seeds 1-3** (the best K with the cleanest texture; error
+  bars). Pipeline / equil: seed1: 4250490/4250491 seed2: 4250492/4250493 seed3: 4250494/4250495. FID 4250496 (paired with K1536 + patch7x7, seed 1), grain 4250497, gallery 4250498
+  (`galleries/2026-11-15_fashion-mnist-10-classes_K1536+patch8x8-every2px-from-t2.2_seeds1-3/`). Expected about
+  12:00-13:00.
+
+### Standard Inception FID for MNIST and Fashion-MNIST (2026-11-15 10:10; the user: "could we calculate the real FID?")
+
+- **What:** new script `inception_fid.py`, the FID papers report. It complements the small-classifier FID of
+  `fid_score.py`.
+  - **Network:** the original TTUR Inception-v3 graph (`inception-2015-12-05.tgz`), downloaded to
+    `out/latent_physical_SGM/fid/inception/`, sha256 `009d6814...`. These are the weights pytorch-fid and clean-fid
+    reproduce. The input is remapped to a free batch size; features come from `pool_3` (2048-d). TF32 is off.
+  - **Images:** grey replicated to 3 channels, 0..255; the graph resizes to 299 itself. Samples are clipped to [0, 1]
+    and quantised to 8 bit.
+  - **Reference:** train split (60k, the paper convention) and test split (10k).
+  - **Per set:** FID at n = 2000; FID_inf (fit FID(n) = FID_inf + b/n over n = 400-2000, Chong & Forsyth 2020), the
+    number to compare with 50k-sample FIDs in papers; KID; real-test floor.
+- **Smoke test (GPU 4252540):**
+  - TF sees the L40; 500 images/s.
+  - Batch size 1 vs 8: largest feature difference 3e-3 (rms 0.47).
+  - Real vs real at n = 1000: FID 11.1, i.e. the strong small-n bias, hence FID_inf.
+- **First results (MNIST 4252541; Fashion 4252542 timed out before its K3072 row):**
+
+  | MNIST, ten digits (n = 2000) | FID train | FID_inf | KID x1e3 |
+  |---|---|---|---|
+  | real test images (floor) | 3.70 | 1.12 | - |
+  | K784, equil start | 112.8 | 110.5 | 126.7 |
+  | K784 + patch7x7 from t2.2, equil | 66.2 | 63.4 | 76.8 |
+  | K3072 + patch7x7 from t2.2, equil | 58.3 | 56.0 | 66.4 |
+  | K6144 (no patches), noise start | 89.1 | 86.6 | 97.3 |
+  | K6144 + patch7x7 from t2.2, noise | 55.3 | 52.3 | 63.7 |
+  | K6144 + patch7x7 from t2.2, equil | 55.9 | 53.3 | 64.2 |
+
+  | Fashion, ten classes (n = 2000) | FID train | FID_inf | KID x1e3 |
+  |---|---|---|---|
+  | real test images (floor) | 7.17 | 1.90 | - |
+  | K784, equil | 131.1 | 126.6 | 113.1 |
+  | K784 + patch7x7 from t2.2, equil | 70.0 | 65.4 | 49.7 |
+  | K784 + patch7x7 from t2.7, equil | 70.4 | 66.2 | 50.9 |
+  | K784 + patch7x7 from t1.5, equil | 76.8 | 72.9 | 55.9 |
+  | K784 + patch8x8 every 2 px from t2.2, equil | **56.7** | **51.7** | **38.2** |
+  | K784 + patch14x14 64 states from t2.2, equil | 95.0 | 90.0 | 73.6 |
+  | K1536 + patch7x7 from t2.2, noise | 70.3 | 65.1 | 50.9 |
+  | K1536 + patch7x7 from t2.2, equil | 68.6 | 64.3 | 48.4 |
+
+- **Reading:**
+  - The ranking mostly agrees with the classifier FID: patches help a lot, and more K helps on MNIST.
+  - But Inception weighs texture much more:
+    - 8x8 every 2 px (the cleanest grain) is clearly best on Fashion, 14 FID below 7x7. In the classifier FID it was
+      level.
+    - 14x14 patches (the noisiest) are much worse than 7x7.
+    - K1536 vs K784 is nearly level.
+  - The absolute values (about 50-65) are far above the floor (1-2) and above what published diffusion models reach on
+    MNIST (single digits). Suspect: faint pixel noise and grain in the background, to which Inception is known to be
+    very sensitive (real MNIST backgrounds are exactly 0).
+- **10:45: submitted diagnostics** (MNIST 4253087, Fashion 4253088): real test images + N(0, 0.01^2) and
+  N(0, 0.02^2) noise; each sample set with faint pixels (< 0.1) set to 0; faint-pixel share per set. The report is now
+  written after every row (no loss on timeout).
+
+### Comparison: Wang & Achour, "Generative Models on Analog Hardware with Dynamics", arXiv 2606.27294 (2026-11-15 11:10)
+
+- **Their model:**
+  - "AIS": KuraSHIL oscillators (Kuramoto + second-harmonic injection locking).
+  - Deterministic ODE, 80 Euler steps; start N(0, 0.25).
+  - 56x56 grid = 3136 elements: 784 visible (the pixels) + 2352 hidden (visible nodes surrounded by hidden ones).
+  - 24 couplings per node (5x5 neighbourhood), asymmetric.
+  - c = 4 time-piecewise weight sets; 326k parameters.
+  - No encoder / decoder: the visible oscillators are the pixels.
+  - Trained by WGAN-GP: a digital DCGAN discriminator on the terminal state only, backpropagation through the ODE
+    solver (not local, not on-device).
+- **Their FID, MNIST / Fashion** (average over 4 seeds; n and implementation not stated):
+
+  | Model | MNIST | Fashion |
+  |---|---|---|
+  | KuraSHIL c4 (best) | 27.6 | 80.8 |
+  | 4 bit + noise 0.025 | 29.1 | 75.1 |
+  | no hidden states | 43.0 | 84.3 |
+  | c = 1 | 62.7 | 84.4 |
+  | DTM (their re-run of Extropic's denoising thermodynamic model) | 107.8 | 112.8 |
+  | NLM (Neural Langevin Machine) | 230.5 | 200.8 |
+
+- **Ours (Inception FID against train; job 4252541 / 4252542; n = 2000, so biased upward by about 3-7 at that n):**
+
+  | Model | MNIST | Fashion |
+  |---|---|---|
+  | best model | 55.3 (FID_inf 52.3; K6144 + patch7x7) | 56.7 (FID_inf 51.7; K784 + patch8x8 every 2 px) |
+
+- **Reading:**
+  - MNIST: they are about 2x better.
+  - Fashion: we are clearly better (about 52-57 vs 75-81).
+  - Their Fashion number is unusually poor relative to their MNIST one.
+- **Differences in kind:**
+  - Ours: score matching with a local rule, stochastic; hidden Potts units summed out.
+  - Ours is far larger and dense: per time slice about 0.6M (K784) to 4.8M (K6144) global couplings + about 0.1M patch
+    couplings, 100 slices. Theirs: 326k parameters in total, nearest-neighbour.
+- **Pending:** noise diagnostics (4253087 / 4253088). If faint background noise costs much, the MNIST gap may shrink.
+
+### Results: Inception FID noise diagnostics (2026-11-15 11:05; MNIST 4253087, Fashion 4253088)
+
+- **Faint pixel noise is the larger part of our Inception FID on MNIST.**
+  - Real test images + N(0, 0.01^2) noise alone: FID 38.5 (MNIST) and 16.2 (Fashion) at n = 2000. With
+    N(0, 0.02^2): 61.1 and 27.7.
+  - Our samples have the same faint-pixel share as noisy real images: 36% (MNIST) and 27% (Fashion), against 1.7% and
+    4.6% for clean real images. The models reproduce the sigma = 0.01 pixel noise of the training data, as they should.
+  - Inception counts that noise as a large distribution difference.
+- **Faint pixels (< 0.1) set to 0** (diagnostic, not the model's number; FID against train, n = 2000):
+
+  | Model | as sampled | faint zeroed |
+  |---|---|---|
+  | MNIST K784 | 112.8 | 90.8 |
+  | MNIST K784 + patch7x7 | 66.2 | 35.3 |
+  | MNIST K3072 + patch7x7 | 58.3 | 27.7 |
+  | MNIST K6144 (no patches) | 89.1 | 64.4 |
+  | MNIST K6144 + patch7x7, equil | 55.9 | **24.1** |
+  | Fashion K784 + patch7x7 | 70.0 | 58.8 |
+  | Fashion K784 + patch8x8 every 2 px | 56.7 | **45.8** |
+  | Fashion K1536 + patch7x7 | 68.6 | 57.5 |
+  | Fashion K3072 + patch7x7 | 68.0 | 56.7 |
+  | Fashion K784 + patch14x14 | 95.0 | 77.9 |
+
+- **Reading:**
+  - With the background cleaned, the best MNIST model (24.1 at n = 2000, of which about 3 is small-n bias) is at or
+    below Wang & Achour's 27.6.
+  - Fashion (45.8) stays well below their 80.8.
+  - Rankings are unchanged; the patches gain the most from cleaning (the global unit alone stays poor: shapes).
+  - Fashion has real faint texture, so thresholding is cruder there.
+- **The principled version:** not thresholding, but a final denoising step at the end of sampling, x <- x +
+  sigma^2 * score(x, t_end) (Tweedie), or training on noise-free pixels. Both are physically natural (one more
+  relaxation step / no extra noise in the data). Not done yet.
+- **K3072 vs K1536 on Fashion (Inception):** 68.0 vs 68.6, level, as in the classifier FID.
+
+### Parked: reducing the number of parameters (2026-11-15 11:40; the user: "note this down, but let's not go there for now")
+
+- **Decision:** write the paper first; try parameter reduction at the end. If it works, it becomes a paper section; if
+  not, the paper stands without it.
+- **Motivation:**
+  - Wang & Achour (arXiv 2606.27294): 326k stored parameters and 75k nearest-neighbour couplers in total.
+  - Ours: K x 784 global couplers per slice (615k at K784, 4.8M at K6144) + about 100k patch couplers, over 100
+    independent slices.
+  - Two costs: couplers (energy and area; their power model scales with them) and stored parameters (memory, DAC
+    programming, every time copy).
+- **Options, roughly by payoff:**
+  1. **Share parameters across time.** One template matrix with per-slice per-state gains and biases (an exact mixture
+     has time-independent templates; only the temperature changes), or 5-10 knots with interpolation. Stored
+     parameters down 10-100x, couplers unchanged. Caveat: state identity across slices (DESIGN.md: "align the
+     gauge").
+  2. **Prune dead global states.** Effective states are only about 600/784, 1400/3072, 1800/6144; Fashion saturates at
+     K1536. Couplers down 1.5-3.5x.
+  3. **Small K + patches** (K128 / K256 + patches, untested). Patches gave the biggest gain; shapes may need fewer
+     templates. Couplers down 3-25x; the existing code can run it.
+  4. **Low-rank global unit.** W = U V, with r ~ 64 linear nodes as an intermediate layer; still exactly summable;
+     K6144: about 0.44M instead of 4.8M. The local rule becomes three-layer.
+  5. **Sparse or local templates.** Magnitude pruning, or a window per state. Couplers down 3-10x.
+  6. **Shared patch dictionary.** One 32 x 49 dictionary plus a bias per position: patch parameters down 64x, couplers
+     unchanged.
+  7. **Low-bit weights.** 4 / 3 / 2 bits post hoc; their 4-bit model loses nothing.
+- **Cheap first batch when we get there:**
+  - Sampling-only jobs on the best models (MNIST K6144 + patch7x7, Fashion K784 + patch8x8 every 2 px):
+    - (a) every 5th / 10th / 25th slice, interpolated;
+    - (b) dead states pruned;
+    - (c) 4 / 3 / 2-bit weights;
+    - (d) templates sparsified to 10% / 25% of weights.
+  - Needs a small sampler option to load modified parameters.
+  - Plus retrain K128 / K256 + patches on MNIST and Fashion.
+  - Output: a curve of quality vs parameters (couplers and stored).
+- **Also still open (not parameter reduction):** a final denoising step at the end of sampling,
+  x <- x + sigma^2 score(x, t_end), to remove the sigma = 0.01 pixel noise that inflates the Inception FID (see the
+  noise diagnostics above).
+
+### Results: Fashion-MNIST, K1536 + patch8x8 every 2 px from t2.2, seeds 1-3 (2026-11-15 11:25; FID 4250496, grain 4250497, gallery 4250498)
+
+- **Classifier FID (equil / noise start):**
+
+  | Model | equil | noise |
+  |---|---|---|
+  | K1536 + patch8x8 every 2 px, seed 1 | 3.43 | 3.65 |
+  | seed 2 | 3.44 | 3.92 |
+  | seed 3 | 3.31 | 3.77 |
+  | **mean +- sd over seeds** | **3.39 +- 0.06** | 3.78 +- 0.11 |
+  | K1536 + patch7x7, seed 1 (reference) | 3.22 | - |
+
+  - Paired, seed 1: 8x8 - 7x7 = +0.22 [+0.08, +0.33], p = 0.005. In the classifier FID, 7x7 stays slightly better.
+  - The seed spread (0.06) is small: one seed is enough to rank settings at differences above about 0.15.
+  - Equil start beats noise start in every seed (about -0.4).
+- **Grain:** 8x8 is closer to real than 7x7 on every grain measure.
+
+  | Measure | 8x8, seed 1 | 7x7 | real test |
+  |---|---|---|---|
+  | speckle | 0.0368 | 0.0391 | 0.0357 |
+  | holes | 1.52 | 1.67 | 1.26 |
+  | components | 3.27 | 3.40 | 3.01 |
+
+- **Gallery** (`galleries/2026-11-15_fashion-mnist-10-classes_K1536+patch8x8-every2px-from-t2.2_seeds1-3/`):
+  - The three seeds give nearly the same item in each column (shared start and noise): training is reproducible.
+  - Sandals are still fragmented and prints still missing, as in every variant.
+- **Inception FID** for these sets submitted (4254741) to settle 7x7 vs 8x8. The two metrics disagree: the classifier
+  prefers 7x7 slightly, while Inception preferred 8x8 strongly at K784 (56.7 vs 70.0).
+- **Inception FID result (4254741, 11:31; against train, n = 2000):**
+
+  | Model | FID | FID_inf | faint zeroed |
+  |---|---|---|---|
+  | K1536 + patch7x7, seed 1 | 68.6 | 64.1 | 57.5 |
+  | K1536 + patch8x8, seed 1 | 55.6 | 51.2 | 44.8 |
+  | seed 2 | 55.8 | 51.5 | 45.6 |
+  | seed 3 | 56.2 | 51.5 | 44.8 |
+  | **8x8, mean over seeds** | **55.9 +- 0.3** | **51.4** | 45.1 |
+  | K784 + patch8x8, seed 1 (earlier) | 56.7 | 51.7-52.2 | 45.8 |
+
+  - Inception prefers 8x8 by about 13 points, far beyond the seed spread (0.3). That matches the grain measures; the
+    classifier FID's slight preference for 7x7 (+0.2) is small by comparison.
+  - K1536 vs K784 with 8x8 patches: level (55.9 vs 56.7).
+  - **Best Fashion setting: K784 or K1536 + patch8x8 every 2 px from t2.2, equil start.** Inception FID about 56
+    (FID_inf about 51), against Wang & Achour's 80.8.
+
+### Figure: Inception FID across models, MNIST and Fashion (2026-11-15 11:40)
+
+- **File:** `out/latent_physical_SGM/figures/inception_fid_mnist_fashion.png` (and `.pdf`), made by `plot_inception_fid.py`
+  (CPU jobs 4254806 and later re-renders).
+- **Content:** two panels; for each model, the FID against train at n = 2000 as sampled (bars), and the faint-zeroed
+  diagnostic (dots). Lines: real test images and Wang & Achour.
+- **Data source:** the plot reads `report.txt`, not `metrics.json`. In the `metrics.json` of 4253087 / 4253088 /
+  4254741, every 'faint zeroed' row had the same key, so only the last one survived. Fixed in `inception_fid.py`: the
+  key is now `<label> [faint zeroed]`.
