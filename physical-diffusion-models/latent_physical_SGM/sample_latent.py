@@ -103,8 +103,9 @@ def load_params(run, with_harmonic=False, with_patch=False):
     with_patch=True; with it, provenance['patch'] is (Wp (100, P, S, d), bp (100, P, S), Qp (100, P, S, d) or None,
     kind) with kind = config.json 'patch_kind' ('potts' if absent; 'ising': train_latent --patch-kind ising), checked
     against config.json 'patch', for make_drift(patch=...), which the caller pops, and provenance['patch_units'] the
-    run's spec (plus provenance['patch_kind'] = 'ising' for Ising patch runs). For every other run with_patch changes
-    nothing."""
+    run's spec (plus provenance['patch_kind'] = 'ising' for Ising patch runs). A deep-tree run (train_latent.py --tree;
+    member J of hidden_history.npz, config.json 'tree') gets the 5-tuple (Wp, bp, Qp, 'potts', J (100, P, K, S)) and
+    provenance['tree'] = True. For every other run with_patch changes nothing."""
     if run == "paper":
         sha = lm.sha256_file(lm.PAPER_CKPT)
         if sha != lm.PAPER_CKPT_SHA256:
@@ -161,6 +162,17 @@ def load_params(run, with_harmonic=False, with_patch=False):
         prov["patch_units"] = lm.patch_spec_str((side, stride, S))
         if kind != "potts":                       # manifests of Potts patch runs unchanged
             prov["patch_kind"] = kind
+        if "J" in hid.files or cfg.get("tree", False):   # deep tree (train_latent --tree): J (100, P, K, S)
+            K_g = hid["W"].shape[1]
+            if not (cfg.get("tree", False) and "J" in hid.files):
+                raise RuntimeError(f"{run_dir}: config.json tree {cfg.get('tree', False)} but hidden_history.npz "
+                                   f"{'has' if 'J' in hid.files else 'has no'} J")
+            J = hid["J"]
+            if J.shape != (n_sl, geom.P, K_g, S) or kind != "potts" or "Q" not in hid.files:
+                raise RuntimeError(f"{run_dir}: tree couplings J of shape {J.shape} do not fit ({n_sl} slices, P "
+                                   f"{geom.P}, K {K_g}, S {S}; Potts patches)")
+            prov["patch"] = (Wp, bp, Qp, kind, J)
+            prov["tree"] = True
     return th, hid["W"], hid["b"], run_dir, prov, problem
 
 
@@ -207,7 +219,10 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
     with_patch=True)'s prov['patch']; train_latent --patch): the per-patch Potts units' mean force -s grad F_patch
     (latent_model.patch_terms; kind 'ising', train_latent --patch-kind ising: S Ising units per patch; a 3-tuple or
     kind 'potts': Potts units), Wp, bp, Qp interpolated like every other parameter, after the harmonic modes in the
-    parameter table (the offsets of every other group are unchanged). None (default): the drift as before."""
+    parameter table (the offsets of every other group are unchanged). None (default): the drift as before.
+    A 5-tuple (Wp, bp, Qp, 'potts', J (n_slices, P, K, S)) (train_latent --tree; J None: as the 4-tuple): the deep
+    tree's mean force -s grad F_tree (latent_model.tree_terms) in place of the global unit's and the patch units'
+    (needs hidden 'potts', K > 0 and quad), J interpolated like every other parameter, after Qp in the table."""
     n_theta = theta_hist.shape[1]
     K = W_hist.shape[1]
     grid, r0 = lm.problem_geometry(problem)
@@ -229,6 +244,7 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
     Pp = Sp = dp = 0
     with_qp = False
     patch_kind = "potts"
+    tree_on = False
     if patch is not None:                                # after the modes: the offsets above are unchanged
         Wp_h, bp_h = np.asarray(patch[0]), np.asarray(patch[1])
         Qp_h = None if patch[2] is None else np.asarray(patch[2])
@@ -246,6 +262,15 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
         parts += [Wp_h.reshape(Wp_h.shape[0], -1), bp_h.reshape(bp_h.shape[0], -1)]
         if with_qp:
             parts += [Qp_h.reshape(Qp_h.shape[0], -1)]
+        if len(patch) > 4 and patch[4] is not None:      # deep tree (train_latent --tree): J after Qp
+            J_h = np.asarray(patch[4], dtype=np.float64)
+            if not (hidden == "potts" and K > 0 and quad is not None and patch_kind == "potts"):
+                raise ValueError("the deep tree (J) needs a global Potts unit with quad (hidden 'potts', K > 0, quad) "
+                                 "and Potts patch units")
+            if J_h.shape != (theta_hist.shape[0], Pp, K, Sp):
+                raise ValueError(f"tree couplings J of shape {J_h.shape}: expected {(theta_hist.shape[0], Pp, K, Sp)}")
+            tree_on = True
+            parts += [J_h.reshape(J_h.shape[0], -1)]
     stacked = np.concatenate(parts, axis=1)
     taus = lm.forward_time_pts() if taus is None else np.asarray(taus, dtype=np.float64)
     if taus.shape != (stacked.shape[0],):
@@ -264,7 +289,7 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
         p = interp(lm.T_FORWARD - t)
         th = p[:n_theta]
         d = -grad_E(x, scale * th - th_lin)
-        if K > 0:
+        if K > 0 and not tree_on:
             W = p[n_theta:n_theta + K * n].reshape(K, n)
             b = p[n_theta + K * n:n_theta + K * n + K]
             if quad is not None:                       # a_j = b_j + W_j.x + Q_j.x^2; force sum_j m_j (W_j + 2 Q_j x)
@@ -290,7 +315,15 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
             m = Pp * Sp * dp
             Wt, bt = p[o:o + m].reshape(Pp, Sp, dp), p[o + m:o + m + Pp * Sp].reshape(Pp, Sp)
             Qt = p[o + m + Pp * Sp:o + 2 * m + Pp * Sp].reshape(Pp, Sp, dp) if with_qp else None
-            d = d - scale * lm.patch_terms(Wt, Qt, bt, x[None], lm.TEMP, with_lap=False, kind=patch_kind)[0][0]
+            if not tree_on:
+                d = d - scale * lm.patch_terms(Wt, Qt, bt, x[None], lm.TEMP, with_lap=False, kind=patch_kind)[0][0]
+            else:                                      # deep tree: -grad F_tree = sum pi G_g + fold(sum q G_ps)
+                oj = o + (2 if with_qp else 1) * m + Pp * Sp
+                Jt = p[oj:oj + Pp * K * Sp].reshape(Pp, K, Sp)
+                Wg = p[n_theta:n_theta + K * n].reshape(K, n)
+                bg = p[n_theta + K * n:n_theta + K * n + K]
+                Qg = p[n_theta + K * n + K:n_theta + 2 * K * n + K].reshape(K, n)
+                d = d - scale * lm.tree_terms(Wg, Qg, bg, Wt, Qt, bt, Jt, x[None], lm.TEMP, with_lap=False)[0][0]
         return d
 
     def diffusion(t, x, args):
@@ -681,7 +714,8 @@ def main():
           f"jax {jax.__version__}; devices {jax.devices()}; run {args.run}; K {W_hist.shape[1]}; {args.sampler}, "
           f"set {args.set}, n {args.n}; time grid {prov['time_grid']}"
           + (f"; harmonic modes {prov['harmonic'][0].shape[1]}" if "harmonic" in prov else "")
-          + (f"; patch units {prov['patch_units']}" if "patch" in prov else ""), flush=True)
+          + (f"; patch units {prov['patch_units']}" if "patch" in prov else "")
+          + (" coupled to the global unit (deep tree, J)" if prov.get("tree") else ""), flush=True)
 
     local_p, quad_p = prov.pop("local", None), prov.pop("quad", None)
     harm_p = prov.pop("harmonic", None)       # harmonic modes (train_latent --harmonic): (V, c) histories, or None
@@ -699,7 +733,8 @@ def main():
         local_p = None if local_p is None else (local_p[0][keep], local_p[1][keep])
         quad_p = None if quad_p is None else quad_p[keep]
         harm_p = None if harm_p is None else (harm_p[0][keep], harm_p[1][keep])
-        patch_p = None if patch_p is None else tuple(None if a is None else a[keep] for a in patch_p)
+        patch_p = None if patch_p is None else tuple(a if a is None or isinstance(a, str) else a[keep]
+                                                     for a in patch_p)
         prov["thin_knots"] = {"spec": args.thin_knots, "dropped_slices": dropped}
         print(f"--thin-knots {args.thin_knots}: {len(dropped)} slices dropped ({dropped}); {len(keep)} knots; "
               f"writes {stem}.npy", flush=True)

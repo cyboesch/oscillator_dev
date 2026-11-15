@@ -168,6 +168,12 @@ def main():
                 rows[k].update(patch_eff_median=st_p["patch_eff_states_median"],
                                patch_eff_min=st_p["patch_eff_states_min"],
                                patch_dead=st_p["patch_states_below_1e-6"], patch_mean_max_p=st_p["patch_mean_max_p"])
+                if len(patch_p) > 4 and patch_p[4] is not None:   # deep tree (train_latent --tree): J's effect
+                    st_t = lm.tree_stats(W[k], quad_p[k], b[k], patch_p[0][k], None if patch_p[2] is None else
+                                         patch_p[2][k], patch_p[1][k], np.asarray(patch_p[4][k], np.float64),
+                                         tr["X"], lm.TEMP)
+                    rows[k].update(tree_J_rms_over_T=st_t["tree_J_over_T_rms"], tree_mi=st_t["tree_mi_mean"],
+                                   tree_mi_max_patch=st_t["tree_mi_max_patch"])
         res[label] = rows
         del th, W, b, drift, f
         out(f"\n=== {label} = {run} ({time.time() - t0:.0f} s)")
@@ -181,6 +187,9 @@ def main():
             if "patch_eff_median" in r:              # patch runs: one extra row per slice
                 out(f"         patch units: effective states {r['patch_eff_median']:.2f} / {r['patch_eff_min']:.2f} "
                     f"(median / min over the patches), dead {r['patch_dead']}, <max p> {r['patch_mean_max_p']:.3f}")
+                if "tree_mi" in r:                   # deep tree (train_latent --tree)
+                    out(f"         tree: rms J/T {r['tree_J_rms_over_T']:.3g}, I(global; patch state) {r['tree_mi']:.3g} "
+                        f"nats (max patch {r['tree_mi_max_patch']:.3g})")
             elif "patchi_decided" in r:              # Ising patch runs (--patch-kind ising)
                 out(f"         Ising patch units: decided (|m| > 0.9) {r['patchi_decided']:.3f}, weak units "
                     f"{r['patchi_weak_units']}, <|m|> {r['patchi_mean_abs_m']:.3f}")

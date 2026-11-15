@@ -69,8 +69,8 @@ def provenance(spec):
     sampler settings (the sample file's .json manifest), so a gallery says what was done without the job log."""
     lines = []
     keys_cfg = ("K", "hidden", "seed", "patch", "patch_kind", "patch_on_slice", "patch_init_scale", "steps_schedule",
-                "harmonic")
-    keys_man = ("sampler", "n", "init_dist", "oracle_start", "quench", "patch_units", "patch_kind")
+                "harmonic", "tree")
+    keys_man = ("sampler", "n", "init_dist", "oracle_start", "quench", "patch_units", "patch_kind", "tree")
     for p in spec.split("+"):
         path = p if os.path.isabs(p) else os.path.join(lm.OUT_ROOT, p)
         lines.append(f"sample file: {p}")

@@ -33,6 +33,13 @@ units of a patch are independent Ising units instead of one Potts unit: F_patch 
 (patch_terms / patch_free_energy with kind='ising'; make_loss / make_loss_per_sample / make_force with
 patch_kind='ising'). Reference per patch: split_reference's label-free split tree on the patch vectors
 (patch_ising_trees, patch_ising_reference). kind / patch_kind default to 'potts': every existing call is unchanged.
+
+Optional (train_latent.py --tree, 2026-11-14): the deep tree. The global Potts unit (K states) and the per-patch Potts
+units (S states) are coupled by J (P, K, S) (J_p[g, s]: the energy bonus of patch state s when the global state is g),
+all integrated out exactly: F_tree = -T logsumexp_g [a_g / T + sum_p logsumexp_s ((J_p[g, s] + a_ps) / T)]
+(tree_terms, tree_free_energy, tree_stats; parameter 'J' in the params dict, which alone switches it on, in place of
+the global unit's and the patches' terms; J = 0 is the model without it). Without the 'J' key every function below
+is exactly as before.
 """
 
 import hashlib
@@ -1124,6 +1131,173 @@ def patch_free_energy(Wp, Qp, bp, X, T, kind="potts"):
     return -T * jnp.sum(jax.scipy.special.logsumexp(A / T, axis=-1), axis=0)
 
 
+# ---------------------------------------------------------------------------------------------------------------
+# Deep tree: the global Potts unit coupled to every patch Potts unit (train_latent.py --tree; 2026-11-14)
+# ---------------------------------------------------------------------------------------------------------------
+TREE_KEYS = ("J",)               # the coupling table J (P, K, S) of train_latent.py --tree
+TREE_CHUNK = 64                  # samples per chunk of tree_terms (lax.map over chunks, each rematerialised)
+
+
+def _tree_fields(W, Q, b, Wp, Qp, bp, J, X, T):
+    """Shared first half of tree_terms / tree_free_energy: the global fields over T (B, K), the patch vectors Xp
+    (P, B, d) (and their squares, or None), L = (J_p[g, s] + a_ps) / T (P, B, K, S) and lz = logsumexp_s L (P, B, K)."""
+    A = X @ W.T + b
+    if Q is not None:
+        A = A + (X * X) @ Q.T
+    geom = patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
+    Xp = geom.unfold(X)                                                   # (P, B, d)
+    Ap = _pdot(Xp, Wp) + bp[:, None, :]
+    X2p = None
+    if Qp is not None:
+        X2p = Xp * Xp
+        Ap = Ap + _pdot(X2p, Qp)
+    L = (J[:, None, :, :] + Ap[:, :, None, :]) / T                         # (P, B, K, S)
+    lz = jax.scipy.special.logsumexp(L, axis=-1)                          # log Z_p(g) (P, B, K)
+    return A / T, geom, Xp, X2p, L, lz
+
+
+def tree_free_energy(W, Q, b, Wp, Qp, bp, J, X, T):
+    """Hidden part of F of the deep tree (train_latent.py --tree), exact, per sample (B,):
+      F_tree(x) = -T logsumexp_g [ a_g / T + sum_p logsumexp_s ((J_p[g, s] + a_ps) / T) ]
+    a_g = b_g + W_g . x (+ Q_g . x^2) the global Potts unit's fields (K states), a_ps = bp_ps + Wp_ps . x_p
+    (+ Qp_ps . x_p^2) the patch units' (P patches, S states), J (P, K, S): J_p[g, s] the energy bonus of patch state s
+    when the global state is g. J = 0 gives potts_free_energy (quad) + patch_free_energy. Not chunked (tests)."""
+    Ag, _, _, _, _, lz = _tree_fields(W, Q, b, Wp, Qp, bp, J, X, T)
+    return -T * jax.scipy.special.logsumexp(Ag + jnp.sum(lz, axis=0), axis=-1)
+
+
+def _tree_core(W, Q, b, Wp, Qp, bp, J, X, T, with_lap):
+    """tree_terms on one chunk of samples, everything materialised. Returns (grad (B, N), lap (B,) or zeros, F (B,),
+    pi (B, K), q (B, P, S))."""
+    Ag, geom, Xp, X2p, L, lz = _tree_fields(W, Q, b, Wp, Qp, bp, J, X, T)
+    P, B, K, S = L.shape
+    phi = Ag + jnp.sum(lz, axis=0)                                        # Phi_g / T (B, K)
+    lZ = jax.scipy.special.logsumexp(phi, axis=-1)
+    pi = jnp.exp(phi - lZ[:, None])                                       # p(g | x)
+    c = jnp.exp(L - lz[..., None])                                        # p(s | g, x) (P, B, K, S)
+    q = jnp.sum(c * pi[None, :, :, None], axis=2)                         # patch marginals (P, B, S)
+    g_glob = pi @ W                                                       # sum_g pi_g G_g
+    if Q is not None:
+        g_glob = g_glob + 2.0 * X * (pi @ Q)
+    gq = _pdot_t(q, Wp)                                                   # sum_s q_ps G_ps (P, B, d)
+    if Qp is not None:
+        gq = gq + 2.0 * Xp * _pdot_t(q, Qp)
+    mbar = g_glob + geom.fold(gq)                                         # E f = -grad F
+    F = -T * lZ
+    if not with_lap:
+        return -mbar, jnp.zeros_like(F), F, pi, jnp.transpose(q, (1, 0, 2))
+    dE = 0.0                                                              # <lap E> = -2 [sum pi sQ + sum q sQp]
+    if Q is not None:
+        dE = dE - 2.0 * (pi @ jnp.sum(Q, axis=1))
+    if Qp is not None:
+        dE = dE - 2.0 * jnp.sum(q * jnp.sum(Qp, axis=-1)[:, None, :], axis=(0, 2))
+    GGp = jnp.sum(Wp * Wp, axis=-1)[:, None, :]                           # |G_ps|^2 (P, B, S)
+    if Qp is not None:
+        GGp = GGp + 4.0 * _pdot(Xp, Wp * Qp) + 4.0 * _pdot(X2p, Qp * Qp)
+    t1 = jnp.sum(q * GGp, axis=(0, 2))                                    # sum_ps q_ps |G_ps|^2
+    cf = c.reshape(P, B * K, S)
+    gb = _pdot_t(cf, Wp).reshape(P, B, K, -1)                             # gbar_p(g) (P, B, K, d)
+    if Qp is not None:
+        gb = gb + 2.0 * Xp[:, :, None, :] * _pdot_t(cf, Qp).reshape(P, B, K, -1)
+    t2 = jnp.sum(pi * jnp.sum(gb * gb, axis=(0, 3)), axis=1)              # sum_g pi_g sum_p |gbar_p(g)|^2
+    Gg = W[None, :, :] if Q is None else W[None, :, :] + 2.0 * Q[None, :, :] * X[:, None, :]   # G_g (B, K, N)
+    dm = Gg + geom.fold(gb.reshape(P, B * K, -1)).reshape(B, K, -1) - mbar[:, None, :]          # m_g - E f
+    t3 = jnp.sum(pi * jnp.sum(dm * dm, axis=-1), axis=1)                  # Var_g(E[f | g])
+    lap = dE - (t1 - t2 + t3) / T
+    return -mbar, lap, F, pi, jnp.transpose(q, (1, 0, 2))
+
+
+def tree_terms(W, Q, b, Wp, Qp, bp, J, X, T, with_lap=True, chunk=None):
+    """Contributions of the deep tree (train_latent.py --tree: the global Potts unit with K states coupled by J
+    (P, K, S) to the P patch Potts units with S states; tree_free_energy) to grad F and to the Laplacian of F, exact.
+      p(g | x) = softmax_g(Phi_g / T),  Phi_g = a_g + T sum_p log Z_p(g),  Z_p(g) = sum_s exp((J_p[g, s] + a_ps) / T)
+      p(s | g, x) = softmax_s((J_p[g, s] + a_ps) / T),  q_ps = sum_g pi_g p(s | g)  (the patch marginals)
+    With G_g = W_g + 2 Q_g * x and G_ps = Wp_ps + 2 Qp_ps * x_p (f: the instantaneous hidden force):
+      grad F = -[ sum_g pi_g G_g + fold(sum_p sum_s q_ps G_ps) ]
+      lap F  = <lap E> - Var(f) / T,  <lap E> = -2 [ sum_g pi_g sum_i Q_gi + sum_ps q_ps sum_j Qp_psj ],
+      Var(f) = sum_ps q_ps |G_ps|^2 - sum_g pi_g sum_p |gbar_p(g)|^2 + sum_g pi_g |m_g - sum_g' pi_g' m_g'|^2,
+      gbar_p(g) = sum_s p(s | g) G_ps,  m_g = G_g + fold(sum_p gbar_p(g))
+    (given g the patches are independent: the first two terms are E_g Var(f | g), the last Var_g E[f | g]).
+    J = 0 reproduces hidden_terms_quad(..., 'potts') + patch_terms to rounding. Q or Qp may be None (no
+    squared-pixel couplings). The cost per sample is K P S (the posteriors) and K P d (gbar), so the batch is processed
+    in chunks of `chunk` samples (default TREE_CHUNK) by lax.map, each chunk rematerialised in the backward pass
+    (jax.checkpoint): the memory is that of one chunk. Returns (grad (B, N), lap (B,) or None if not with_lap,
+    F_tree (B,), pi (B, K), q (B, P, S))."""
+    chunk = TREE_CHUNK if chunk is None else int(chunk)
+    B, N = X.shape
+    prm = (W, Q, b, Wp, Qp, bp, J)
+    if B <= chunk:
+        out = _tree_core(*prm, X, T, with_lap)
+    else:
+        n_c = -(-B // chunk)
+        pad = n_c * chunk - B
+        Xc = jnp.concatenate([X, jnp.zeros((pad, N), X.dtype)]) if pad else X
+        core = jax.checkpoint(lambda prm_, x_: _tree_core(*prm_, x_, T, with_lap))
+        outs = lax.map(lambda x_: core(prm, x_), Xc.reshape(n_c, chunk, N))
+        out = tuple(o.reshape((n_c * chunk,) + o.shape[2:])[:B] for o in outs)
+    grad, lap, F, pi, q = out
+    return grad, (lap if with_lap else None), F, pi, q
+
+
+@partial(jax.jit, static_argnames=("T", "chunk"))
+def _tree_stats_arrays(W, Q, b, Wp, Qp, bp, J, X, T, chunk):
+    """Per-sample arrays of tree_stats: I(g; s_p | x) (B, P), H(pi) (B,), |sum pi G_g|^2 and |fold(sum q G)|^2 (B,)."""
+    def one(x_):
+        Ag, geom, Xp, _, L, lz = _tree_fields(W, Q, b, Wp, Qp, bp, J, x_, T)
+        phi = Ag + jnp.sum(lz, axis=0)
+        lpi = phi - jax.scipy.special.logsumexp(phi, axis=-1, keepdims=True)
+        pi = jnp.exp(lpi)
+        c = jnp.exp(L - lz[..., None])
+        Hc = lz - jnp.sum(c * L, axis=-1)                                 # H(p(. | g)) (P, B, K)
+        q = jnp.sum(c * pi[None, :, :, None], axis=2)
+        Hq = -jnp.sum(q * jnp.log(jnp.maximum(q, jnp.finfo(q.dtype).tiny)), axis=-1)   # (P, B)
+        mi = Hq - jnp.sum(pi[None] * Hc, axis=-1)
+        Hpi = -jnp.sum(pi * lpi, axis=-1)
+        g_glob = pi @ W + (0.0 if Q is None else 2.0 * x_ * (pi @ Q))
+        gq = _pdot_t(q, Wp) + (0.0 if Qp is None else 2.0 * Xp * _pdot_t(q, Qp))
+        return mi.T, Hpi, jnp.sum(g_glob * g_glob, axis=1), jnp.sum(geom.fold(gq) ** 2, axis=1)
+
+    B, N = X.shape
+    n_c = -(-B // chunk)
+    pad = n_c * chunk - B
+    Xc = jnp.concatenate([X, jnp.zeros((pad, N), X.dtype)]) if pad else X
+    return tuple(o.reshape((n_c * chunk,) + o.shape[2:])[:B] for o in lax.map(one, Xc.reshape(n_c, chunk, N)))
+
+
+def tree_stats(W, Q, b, Wp, Qp, bp, J, X, T, chunk=None):
+    """Diagnostics of the deep tree on a batch X (train_latent.py --tree), as floats:
+    tree_J_norm |J|, tree_J_absmax, tree_J_over_T_rms rms J / T; tree_mi_mean the mutual information I(g; s_p | x)
+    = H(q_p) - sum_g pi_g H(p(. | g)) in nats, averaged over patches and samples (0 for J = 0), tree_mi_max_patch the
+    largest patch mean; tree_eff_global_median exp(H(pi)) median (effective global states per sample);
+    force_rms_tree_glob / force_rms_tree_patch the rms of the two parts of the hidden force (sum_g pi_g G_g;
+    fold(sum_ps q_ps G_ps))."""
+    chunk = TREE_CHUNK if chunk is None else int(chunk)
+    X = jnp.asarray(X)
+    mi, Hpi, s_g, s_p = (np.asarray(o, dtype=np.float64)
+                         for o in _tree_stats_arrays(W, Q, b, Wp, Qp, bp, J, X, float(T), chunk))
+    N = X.shape[1]
+    Jn = np.asarray(J, dtype=np.float64)
+    return {"tree_J_norm": float(np.linalg.norm(Jn)), "tree_J_absmax": float(np.max(np.abs(Jn))),
+            "tree_J_over_T_rms": float(np.sqrt(np.mean(Jn * Jn)) / T),
+            "tree_mi_mean": float(np.mean(mi)), "tree_mi_max_patch": float(np.max(np.mean(mi, axis=0))),
+            "tree_eff_global_median": float(np.median(np.exp(Hpi))),
+            "force_rms_tree_glob": float(np.sqrt(np.mean(s_g) / N)),
+            "force_rms_tree_patch": float(np.sqrt(np.mean(s_p) / N))}
+
+
+def check_tree(params, K, hidden, patch_kind):
+    """ValueError unless params with 'J' describe a deep tree this code computes: one global Potts unit (hidden 'potts',
+    K > 0, with 'Q') and Potts patch units ('Wp', patch_kind 'potts'), J of shape (P, K, S)."""
+    if not (hidden == "potts" and K > 0 and "Q" in params and "Wp" in params and patch_kind == "potts"):
+        raise ValueError("the deep tree ('J' in params; train_latent.py --tree) needs one global Potts unit with "
+                         "squared-pixel couplings (hidden 'potts', K > 0, 'Q') and Potts patch units ('Wp', patch_kind "
+                         "'potts')")
+    P, S = params["Wp"].shape[0], params["Wp"].shape[1]
+    if tuple(params["J"].shape) != (P, params["W"].shape[0], S):
+        raise ValueError(f"tree couplings J of shape {tuple(params['J'].shape)}: expected (P, K, S) = "
+                         f"({P}, {params['W'].shape[0]}, {S})")
+
+
 def in_compute_dtype(fn, dtype):
     """--precision mixed: fn(params, X, key) evaluated with the parameters and X cast to `dtype` (float32) and every
     matrix product at full float32 precision (HIGHEST: XLA may otherwise use TF32 for float32 products, whose
@@ -1167,7 +1341,10 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     --patch) are added after everything else, with exact statistics only (samples = 0; ValueError otherwise); in
     --precision mixed their products are float32 at HIGHEST too. Without 'Wp' every path is exactly as before.
     patch_kind = 'ising' (train_latent.py --patch-kind ising): the patch keys hold STATES independent Ising units per
-    patch (patch_terms kind='ising'); 'potts' (default) as before."""
+    patch (patch_terms kind='ising'); 'potts' (default) as before.
+    If params contains 'J' (train_latent.py --tree), the global Potts unit and the patch Potts units are coupled
+    (tree_terms, in place of the global unit's and the patches' terms; check_tree: hidden 'potts', K > 0, 'Q', 'Wp',
+    patch_kind 'potts'). Without 'J' every path is exactly as before."""
     _check_patch_kind(patch_kind)
     terms = hidden_terms if hidden == "ising" else potts_terms
     if replicates < 1 or (replicates > 1 and samples < 1):
@@ -1181,11 +1358,19 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     def loss(params, X, key=None):
         if "Wp" in params and samples > 0:       # trace time only: the default jaxpr is unchanged
             raise ValueError("patch units need exact hidden statistics")
+        tree = "J" in params                     # deep tree (--tree): replaces the global unit and the patch units
+        if tree:
+            check_tree(params, K, hidden, patch_kind)
         gv, lapv = vis.grad_lap(params["theta"], X)
 
         def per_sample(st_h, st_l):              # summation order as before (exact path bit-identical)
             g, lap = gv, lapv
-            if K > 0 and "Q" in params:
+            if tree:                             # --tree: the global unit and the patch units together, in its place
+                gt, lapt = tree_terms(params["W"], params["Q"], params["b"], params["Wp"], params.get("Qp"),
+                                      params["bp"], params["J"], X, T)[:2]
+                g = g + gt
+                lap = lap + lapt
+            elif K > 0 and "Q" in params:
                 gh, laph, _, _ = hidden_terms_quad(params["W"], params["Q"], params["b"], X, T, hidden, stat=st_h)
                 g = g + gh
                 lap = lap + laph
@@ -1201,7 +1386,7 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
                 gm, lapm, _ = harmonic_terms(params["V"], params["c"], X)
                 g = g + gm
                 lap = lap + lapm
-            if "Wp" in params:                   # per-patch Potts (or Ising) units (--patch), after the modes
+            if "Wp" in params and not tree:      # per-patch Potts (or Ising) units (--patch), after the modes
                 gp, lapp, _, _ = patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, kind=patch_kind)
                 g = g + gp
                 lap = lap + lapp
@@ -1261,13 +1446,18 @@ HIDDEN_KEYS = ("W", "b", "Q", "wl", "bl")
 def make_force(vis, T, K, hidden="ising", local=False, patch_kind="potts"):
     """grad F (B, N) of the model of make_loss_per_sample: visible part plus the averaged-out hidden units (and the
     harmonic modes, if params contains 'V', and the per-patch Potts units, if it contains 'Wp'; Ising units per patch
-    with patch_kind='ising')."""
+    with patch_kind='ising'; with 'J' the deep tree, tree_terms, in place of the global and the patch units)."""
     _check_patch_kind(patch_kind)
     terms = hidden_terms if hidden == "ising" else potts_terms
 
     def force(params, X):
         g, _ = vis.grad_lap(params["theta"], X)
-        if K > 0 and "Q" in params:
+        tree = "J" in params                     # deep tree (--tree): the global and the patch units together
+        if tree:
+            check_tree(params, K, hidden, patch_kind)
+            g = g + tree_terms(params["W"], params["Q"], params["b"], params["Wp"], params.get("Qp"), params["bp"],
+                               params["J"], X, T, with_lap=False)[0]
+        elif K > 0 and "Q" in params:
             g = g + hidden_terms_quad(params["W"], params["Q"], params["b"], X, T, hidden)[0]
         elif K > 0:
             g = g + terms(params["W"], params["b"], X, T)[0]
@@ -1275,7 +1465,7 @@ def make_force(vis, T, K, hidden="ising", local=False, patch_kind="potts"):
             g = g + local_terms(params["wl"], params["bl"], X, T)[0]
         if "V" in params:                        # harmonic modes (--harmonic)
             g = g + harmonic_terms(params["V"], params["c"], X)[0]
-        if "Wp" in params:                       # per-patch Potts (or Ising) units (--patch)
+        if "Wp" in params and not tree:          # per-patch Potts (or Ising) units (--patch)
             g = g + patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, with_lap=False, kind=patch_kind)[0]
         return g
 

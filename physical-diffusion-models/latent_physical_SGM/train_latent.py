@@ -119,6 +119,15 @@ x that reference (W and b scaled: the field a = lam a*), learning-rate scales fr
 diagnostics patchi_* (decided share |m| > 0.9, weak units, <|m|>, rms a / T; patch_ising_unit_stats), patch_dec in
 the slice files. config.json records 'patch_kind': 'ising' (Potts and patch-free configs unchanged); resume and
 --init-from refuse another kind.
+--tree (2026-11-14): the deep tree. The global Potts unit and the patch Potts units are coupled by J (P, K, S), J_p[g, s]
+the energy bonus of patch state s when the global state is g, all integrated out exactly (latent_model.tree_terms; J = 0
+is the model without it). Needs --hidden potts, --quad, --K > 0 and --patch with Potts patches; not with --split-dead.
+J starts at zero where the patch units are switched on (slice 0, or --patch-on-slice) and is absent before (zero arrays
+in the slice files); learning rate per patch = that of the patch biases bp (--hidden-lr-scale x --patch-lr-scale x the
+bias scale of the patch reference). Diagnostics tree_* (|J|, rms J / T, the mutual information between the global
+state and the patch states, effective global states, the two parts of the hidden force; latent_model.tree_stats).
+J is saved in every slice file and, in float32, as the last member of hidden_history.npz. config.json records
+'tree': true (other configs unchanged); resume and --init-from refuse a mismatch.
 Every slice file also stores the per-sample losses on the fixed validation batch (and the paper checkpoint's, for
 mnist28), for paired comparisons between runs (the validation batch of slice k is drawn with the key of k at the
 slice's t, so runs on different grids share it only where their slice times agree: slices 0 and 99 for power:P
@@ -376,6 +385,10 @@ def parse():
                          "--freeze-hidden-slices); K > 0: no patch units in slices 0..K-1 (exactly the plain "
                          "computation), switched on at slice K at --patch-init-scale x the reference at t_K and trained "
                          "from slice K on")
+    ap.add_argument("--tree", action="store_true",
+                    help="deep tree: couple the global Potts unit to every patch Potts unit by J (P, K, S), exact "
+                         "(latent_model.tree_terms); J starts at 0 where the patches are switched on. Needs --hidden "
+                         "potts, --quad, --K > 0, --patch (Potts patches); recorded in config.json as 'tree'")
     ap.add_argument("--patch-kind", choices=lm.PATCH_KINDS, default="potts",
                     help="with --patch: potts (default) one Potts unit with STATES states per patch; ising: STATES "
                          "independent Ising units per patch, F_patch = -T sum log 2cosh(a / T) (latent_model.patch_terms "
@@ -532,17 +545,17 @@ def split_dead_states(params, X, spread, temp=lm.TEMP, dead_below=1e-6, n_power=
 
 
 def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, harmonic=False, patch=False,
-                  patch_quad=False):
+                  patch_quad=False, tree=False):
     """The sampler's input: params_history.npy (theta per slice) and hidden_history.npz (W, b, t, then wl, bl with
     --local, then Q with --quad and K > 0, then V, c with --harmonic, then Wp, bp with --patch and Qp with --patch and
-    --quad), stacked in slice order. Slices in `held`
+    --quad, then J in float32 with --tree), stacked in slice order. Slices in `held`
     (slice -> the arrays as saved in its slice file; --assemble memory) are taken from memory, all others are read
     from their slice files (every slice with --assemble files, and slices made by an earlier job: resume,
     --init-from). The same arrays in the same order either way, so the files hold the same bytes (the zip entries of
     the .npz carry their write time). Returns the shape of the theta history."""
     held = held or {}
     thetas, Ws, bs, wls, bls, Qs, Vs, cs = [], [], [], [], [], [], [], []
-    Wps, bps, Qps = [], [], []
+    Wps, bps, Qps, Js = [], [], [], []
     for k in range(n_slices):
         s = held[k] if k in held else np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
         thetas.append(s["theta"])
@@ -561,6 +574,8 @@ def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, ha
             bps.append(s["bp"])
             if patch_quad:
                 Qps.append(s["Qp"])
+            if tree:
+                Js.append(np.asarray(s["J"], dtype=np.float32))
     tmp = os.path.join(out_dir, "params_history.tmp.npy")
     theta_hist = np.stack(thetas)
     np.save(tmp, theta_hist)
@@ -575,6 +590,8 @@ def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, ha
         loc.update(Wp=np.stack(Wps), bp=np.stack(bps))
         if patch_quad:
             loc["Qp"] = np.stack(Qps)
+        if tree:                                 # --tree: J (n_slices, P, K, S) in float32, last
+            loc["J"] = np.stack(Js)
     np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
     os.replace(tmp, os.path.join(out_dir, "hidden_history.npz"))
     return theta_hist.shape
@@ -989,6 +1006,12 @@ def main():
         if args.patch_on_slice > 0 and args.patch_init_scale is None:
             raise ValueError(f"--patch-on-slice {args.patch_on_slice} needs an explicit --patch-init-scale: 0.06 is the "
                              f"measured safe value at slice 31, where 0.25 costs +27 loss units (job 4231616)")
+    if args.tree and not (patch is not None and args.patch_kind == "potts" and args.hidden == "potts" and args.quad
+                          and args.K > 0):
+        raise ValueError("--tree needs --hidden potts, --quad, --K > 0 and --patch SIDE:STRIDE:STATES with Potts patches "
+                         "(--patch-kind potts)")
+    if args.tree and split_slices:
+        raise ValueError("--tree does not support --split-dead (J rows of re-seeded states are not copied)")
     lam_p = 0.25 if args.patch_init_scale is None else float(args.patch_init_scale)   # resolved (0.25 when inactive)
     K_on = int(args.patch_on_slice)              # --patch-on-slice (0: from slice 0)
     geom = None
@@ -1036,6 +1059,8 @@ def main():
     }
     if args.patch_kind != "potts":               # --patch-kind ising only: Potts and patch-free configs as before
         config["patch_kind"] = args.patch_kind
+    if args.tree:                                # --tree only: every other config as before
+        config["tree"] = True
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
                       cd1_hidden_samples=args.cd1_hidden_samples)
@@ -1068,6 +1093,8 @@ def main():
                 if k != "assemble" and old.get(k, defaults.get(k)) != v}   # --assemble: the same bytes either way
         if old.get("patch_kind", "potts") != args.patch_kind:   # recorded for ising only: check both directions
             diff["patch_kind"] = (old.get("patch_kind", "potts"), args.patch_kind)
+        if bool(old.get("tree", False)) != args.tree:            # recorded for --tree only: both directions
+            diff["tree"] = (bool(old.get("tree", False)), args.tree)
         if diff:
             raise RuntimeError(f"existing run {out_dir} has a different config: {diff}")
         if old.get("sha256") != code_sha:
@@ -1100,7 +1127,9 @@ def main():
               + (f"; patch units {lm.patch_spec_str(patch)}: P {geom.P}, d {geom.d}, S {patch[2]}, coverage "
                  f"{int(geom.coverage.min())}-{int(geom.coverage.max())} (mean {geom.coverage.mean():.2f}), W+Q couplings "
                  f"{geom.P * patch[2] * geom.d * (2 if args.quad else 1):,}, initial scale {lam_p:g}, on slice {K_on}, lr "
-                 f"scale {args.patch_lr_scale:g}" if patch is not None else ""))
+                 f"scale {args.patch_lr_scale:g}" if patch is not None else "")
+              + (f"; deep tree: J ({geom.P}, {args.K}, {patch[2]}) = {geom.P * args.K * patch[2]:,} couplings, zero at slice {K_on}"
+                 if args.tree else ""))
 
     # ---- data -------------------------------------------------------------------------------------------------
     prob = lm.make_problem(args.problem, args.radius, args.neighbourhood)
@@ -1436,6 +1465,11 @@ def main():
                       f"{args.patch_lr_scale:g}); start {lam_p:g} x the reference at slice {K_on} (t = {taus[K_on]:.4f}), "
                       f"|Wp| {np.linalg.norm(Wp0):.4g}" + (f"; no patch units in slices 0-{K_on - 1}" if K_on else ""))
 
+        def tree_stats(params, X):
+            """--tree diagnostics on the validation batch (float64; latent_model.tree_stats)."""
+            return lm.tree_stats(params["W"], params["Q"], params["b"], params["Wp"], params.get("Qp"), params["bp"],
+                                 params["J"], X, lm.TEMP)
+
         @jax.jit
         def force_rms(params, X):
             """Force decomposition on the validation batch (float64): sqrt(mean over samples and pixels of g^2) of
@@ -1492,6 +1526,8 @@ def main():
                     if scfg.get(k) != config[k]})
         if scfg.get("patch_kind", "potts") != args.patch_kind:   # Ising patch units need an Ising-patch source
             bad["patch_kind"] = (scfg.get("patch_kind", "potts"), args.patch_kind)
+        if bool(scfg.get("tree", False)) != args.tree:            # --tree needs a --tree source, and vice versa
+            bad["tree"] = (bool(scfg.get("tree", False)), args.tree)
         if bad:
             raise RuntimeError(f"--init-from {src}: different model config {bad}")
         if scfg.get("init_from"):
@@ -1549,6 +1585,8 @@ def main():
             params.update(Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
             if args.quad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
+            if args.tree:                        # --tree: J = 0, the model without it
+                params["J"] = jnp.zeros((geom.P, K, patch[2]))
     else:
         prev = np.load(os.path.join(slice_dir, f"slice_{done - 1:03d}.npz"))
         params = {"theta": jnp.asarray(prev["theta"]), "W": jnp.asarray(prev["W"]), "b": jnp.asarray(prev["b"])}
@@ -1567,6 +1605,11 @@ def main():
                 raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {lm.patch_spec_str(patch)} patch units to "
                                    f"continue from")
             params.update({g: jnp.asarray(prev[g]) for g in need})
+            if args.tree:
+                if "J" not in prev.files or prev["J"].shape != (geom.P, K, patch[2]):
+                    raise RuntimeError(f"slice {done - 1} of {slice_dir} has no tree couplings J {(geom.P, K, patch[2])} "
+                                       f"to continue from")
+                params["J"] = jnp.asarray(prev["J"])
         optimization_key = jnp.asarray(prev["key"])
         where = f"t = {taus[done]:.4f}" if done < n_slices else "all slices present; assembling"
         log(logf, f"resuming at slice {done} ({where}) from {slice_dir}")
@@ -1597,8 +1640,10 @@ def main():
             params = dict(params, Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
             if args.quad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
+            if args.tree:                        # --tree: J = 0 at the switch-on
+                params["J"] = jnp.zeros((geom.P, K, patch[2]))
             log(logf, f"slice {k}: patch units {lm.patch_spec_str(patch)} switched on at {lam_p:g} x the reference at "
-                      f"t = {t_curr:.4f}")
+                      f"t = {t_curr:.4f}" + ("; tree couplings J = 0" if args.tree else ""))
         split_info = None
         if k in split_slices and k >= args.freeze_hidden_slices:   # --split-dead: dead states become copies
             Xsp = sample_forward_process(t_curr, VAL_N, lm.TEMP, lm.SIGMA_FORWARD, data_train,
@@ -1630,6 +1675,8 @@ def main():
             lrs["bp"] = jnp.asarray(f_p * sbp[k][:, None] if on else np.zeros((geom.P, 1)))
             if "Qp" in params:
                 lrs["Qp"] = lrs["Wp"]
+            if "J" in params:                    # --tree: J per patch at the patch biases' rate
+                lrs["J"] = jnp.asarray(f_p * sbp[k][:, None, None] if on else np.zeros((geom.P, 1, 1)))
         lrs = {g: v * args.lr_scale for g, v in lrs.items()}
         lr_log = {"W": lrs["W"], "b": lrs["b"]}       # scalars for the log (--ising-weak-boost makes lrs per unit)
         n_boost = None
@@ -1819,9 +1866,13 @@ def main():
             rec.update(st_p)
             rec.update({q: float(v) for q, v in force_rms(params, jnp.asarray(Xv)).items()})
             extra.update(Wp=Wpn, bp=bpn, **({"Qp": Qpn} if Qpn is not None else {}), **arr_p)
+            if "J" in params:                    # --tree: |J|, mutual information, the two parts of the hidden force
+                rec.update(tree_stats(params, jnp.asarray(Xv)))
+                extra["J"] = np.asarray(params["J"])
         elif patch is not None:                  # --patch-on-slice, before the switch-on: zero arrays, no record keys
             extra.update(Wp=np.zeros((geom.P, patch[2], geom.d)), bp=np.zeros((geom.P, patch[2])),
-                         **({"Qp": np.zeros((geom.P, patch[2], geom.d))} if args.quad else {}))
+                         **({"Qp": np.zeros((geom.P, patch[2], geom.d))} if args.quad else {}),
+                         **({"J": np.zeros((geom.P, K, patch[2]))} if args.tree else {}))
         save_atomic(os.path.join(slice_dir, f"slice_{k:03d}.npz"),
                     theta=np.asarray(params["theta"]), W=np.asarray(params["W"]), b=np.asarray(params["b"]),
                     key=np.asarray(optimization_key), loss_trace=losses[::10].astype(np.float32),
@@ -1830,7 +1881,7 @@ def main():
         if held is not None:                     # --assemble memory: the arrays just saved, for write_history
             held[k] = {"theta": np.asarray(params["theta"]), "W": np.asarray(params["W"]),
                        "b": np.asarray(params["b"]),
-                       **{g: extra[g] for g in ("Q", "wl", "bl", "V", "c", "Wp", "bp", "Qp") if g in extra}}
+                       **{g: extra[g] for g in ("Q", "wl", "bl", "V", "c", "Wp", "bp", "Qp", "J") if g in extra}}
         with open(os.path.join(out_dir, "train_log.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
         msg = (f"slice {k:3d} t {t_curr:.4f}: {n_steps} steps in {t_train:.0f} s ({rec['steps_per_s']:.0f}/s); "
@@ -1881,20 +1932,26 @@ def main():
                     f"{rec['patch_eff_states_min']:.2f} (median/min), dead {rec['patch_states_below_1e-6']}, <max p> "
                     f"{rec['patch_mean_max_p']:.3f}; force patch/glob/loc {fr('force_rms_patch')}/{fr('force_rms_glob')}/"
                     f"{fr('force_rms_loc')}")
+            if "tree_J_norm" in rec:             # --tree
+                msg += (f"; tree |J| {rec['tree_J_norm']:.4g} (rms J/T {rec['tree_J_over_T_rms']:.3g}, max |J| "
+                        f"{rec['tree_J_absmax']:.3g}), I(g; s_p) {rec['tree_mi_mean']:.3g} nats (max patch "
+                        f"{rec['tree_mi_max_patch']:.3g}), eff global {rec['tree_eff_global_median']:.3g}, coupled force "
+                        f"glob/patch {rec['force_rms_tree_glob']:.3g}/{rec['force_rms_tree_patch']:.3g}")
         log(logf, msg)
 
     # ---- assemble ---------------------------------------------------------------------------------------------
     if n_slices == lm.N_TIME_STEPS and held is not None:      # --assemble memory: the same files (write_history)
         t_asm = time.time()
         shape = write_history(out_dir, slice_dir, n_slices, taus, args.local, args.quad and K > 0, held,
-                              harmonic=bool(R_h), patch=patch is not None, patch_quad=patch is not None and args.quad)
+                              harmonic=bool(R_h), patch=patch is not None, patch_quad=patch is not None and args.quad,
+                              tree=args.tree)
         with open(os.path.join(out_dir, "DONE"), "w") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
         log(logf, f"assembled params_history.npy {shape} and hidden_history.npz in {time.time() - t_asm:.1f} s "
                   f"({len(held)} slices from memory, {n_slices - len(held)} from their files); DONE")
     elif n_slices == lm.N_TIME_STEPS:
         thetas, Ws, bs, wls, bls, Qs, Vs, cs = [], [], [], [], [], [], [], []
-        Wps, bps, Qps = [], [], []
+        Wps, bps, Qps, Js = [], [], [], []
         for k in range(n_slices):
             s = np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
             thetas.append(s["theta"])
@@ -1913,6 +1970,8 @@ def main():
                 bps.append(s["bp"])
                 if args.quad:
                     Qps.append(s["Qp"])
+                if args.tree:
+                    Js.append(np.asarray(s["J"], dtype=np.float32))
         tmp = os.path.join(out_dir, "params_history.tmp.npy")
         np.save(tmp, np.stack(thetas))
         os.replace(tmp, os.path.join(out_dir, "params_history.npy"))
@@ -1926,6 +1985,8 @@ def main():
             loc.update(Wp=np.stack(Wps), bp=np.stack(bps))
             if args.quad:
                 loc["Qp"] = np.stack(Qps)
+            if args.tree:                        # --tree: J in float32, last (write_history)
+                loc["J"] = np.stack(Js)
         np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
         os.replace(tmp, os.path.join(out_dir, "hidden_history.npz"))
         with open(os.path.join(out_dir, "DONE"), "w") as f:

@@ -2824,3 +2824,111 @@ without losing FID; or plain-from-t3.4-level recall with t2.2-level precision.
   21:00). FID 4243062, grain 4243063 and gallery 4243064 depend on them. Then a blind count against K784 / K3072.
 - The Ising patch results are above.
 - The current best recipe is unchanged.
+
+### Deep tree: built in a candidate folder, tests running (2026-11-14 18:50)
+**Built from the handoff spec** in `../latent_physical_SGM_tree_candidate/`; the live modules are frozen in
+`../latent_physical_SGM_pre_tree/` for the bit-for-bit tests (block 21 D, G).
+- `latent_model.py`:
+  - `tree_terms` (grad, Laplacian, F, pi, q), `tree_free_energy`, `tree_stats`, `check_tree`.
+  - The Laplacian's between-g part is computed centred, as Var_g = sum_g pi_g |m_g - E f|^2.
+  - **Memory fix:** the spec's estimate left out gbar_p(g), (B, K, P, d), about 5 GB at batch 512 in float32. So
+    tree_terms runs over chunks of TREE_CHUNK = 64 samples (lax.map, each chunk rematerialised in the backward pass by
+    jax.checkpoint). Memory is then that of one chunk.
+  - `make_loss` / `make_loss_per_sample` / `make_force`: with 'J' in params the tree replaces the global unit's and the
+    patches' terms. Without 'J' nothing changes.
+- `train_latent.py`:
+  - `--tree`: needs --hidden potts, --quad, K > 0 and Potts --patch; refused with --split-dead.
+  - J starts at zero at the patch switch-on. Learning rate per patch = the patch biases' rate.
+  - config 'tree': true only when set. Resume and --init-from refuse a mismatch.
+  - Slice files hold J in float64 (zeros before the switch-on). hidden_history.npz holds J in float32, as the last
+    member (0.64 GB at K784).
+  - Diagnostics tree_*: |J|, rms J/T, I(g; s_p), effective global states, the two parts of the coupled force.
+- `sample_latent.py`: the patch tuple becomes a 5-tuple (Wp, bp, Qp, 'potts', J). make_drift uses tree_terms in place of
+  the global and patch forces. The manifest records `tree`. `--fast` still refuses patch runs. Also fixed: --thin-knots
+  crashed on the patch kind string.
+- `early_slices.py` reports rms J/T and I(g; s_p); `make_gallery.py` lists `tree` in the README.
+
+**Tests** (block 21 of the candidate's test_latent.py, CPU):
+- 4245123: parts A-E (formulas against autodiff, chunking, J = 0 = today's terms, loss / force / gradient along J,
+  mixed precision, default paths bit for bit, sampler drift).
+- 4245124: part G (command lines).
+
+**GPU benchmark** 4245127 (`tree_bench.py`): step time and memory at K784, 7:3:32, batch 512, chunks 32/64/128;
+mixed against float64 on the real slice-31/55/80 parameters; the drift at --chunk 250; the validation loss; the
+estimated training time.
+
+### Deep tree: tests passed, installed, overnight runs submitted (2026-11-14 19:20)
+**Tests: all 37 checks pass** (block 21 A-E 4245123: 28/28; block 21 G 4245128: 9/9; the first G job 4245124 failed on
+a log line that used K before it was defined; fixed).
+- **Formulas.** tree_terms gradient and Laplacian against autodiff of tree_free_energy: 9.6e-15 / 1.5e-14. Chunked =
+  one chunk 3.9e-15. J = 0 = the global unit plus the patches 2.8e-14. Loss against a full-autodiff reference:
+  <= 2.6e-16, three configurations (with/without Qp, local, harmonic modes). Gradient along J against central
+  differences: 3e-9 to 2e-8.
+- **Mixed precision** (7:3:8 patches at the scale-1 reference, J rms 2 T, 96 samples, so the chunked path): gradient
+  error 1e-6 to 8e-5 relative, cosine 1.00000000 at t = 5 ... 0.
+- **Bit for bit unchanged:** make_loss (value, gradient, jaxpr; no patches, Potts and Ising patches; float64 and
+  mixed), make_force, make_drift (3/4/5-tuples), and a 3-slice Potts patch training run old against new code.
+- **Command lines.** Guards, 100-slice toy run (J float32 (100, 9, 8, 4), last slice = the slice file), resume without
+  --tree refused, --patch-on-slice 50 (J zero in 0-49), the sampler with the normal and equil start (manifest tree),
+  --fast refused.
+- **Note on the diagnostic** I(g; s_p | x): on the toy run it is about 1e-15 although rms J/T = 0.34, because the
+  global unit is decided there (pi a delta given x, so no mutual information given x). On the real runs it is non-zero
+  only where the global state is uncertain. The coupled force parts (force_rms_tree_glob / _patch) show what J does.
+
+**Installed 19:10:** latent_model, train_latent, sample_latent, early_slices, make_gallery, test_latent, tree_bench (new).
+The live files were checked unchanged against `../latent_physical_SGM_pre_tree/` before the swap. That folder keeps
+the pre-tree modules (block 21 D, G). The candidate folder is kept until the runs are through.
+
+**Runs** (four digits, K784, Potts patches 7:3:32, start scale 0.06, J = 0 at the switch-on, seed 1, n = 500; the base
+flags of the recipe plus `--tree`; pipelines with a 24 h limit because the step cost was not measured yet):
+
+| patches from | pipeline | equil:3 | run |
+|---|---|---|---|
+| slice 31 (t 3.4), the decisive one | 4245704 | 4245705 | `..._mixst_treepatch7s3S32on31_seed1` |
+| slice 55 (t 2.2), the control | 4245706 | 4245707 | `..._mixst_treepatch7s3S32on55_seed1` |
+
+- Follow-ups after all four: FID 4245708 (pairs: tree against plain patches at the same switch-on and start; tree
+  t3.4 against plain t2.2, equil), grain 4245709, gallery 4245710
+  (`galleries/2026-11-14_four-digits_K784+treepatch7x7_vs_pottspatch7x7_from-t3.4-and-t2.2_seed1/`).
+- Then the blind count. **Success:** fewer malformed digits than plain patches from t 2.2 (4.8%) without losing FID
+  (7.68 noise / 6.42 equil).
+- GPU benchmark 4245127 still queued: step time, memory, chunk size, drift cost at --chunk 250.
+
+### Deep tree: far too slow to train; overnight runs cancelled (2026-11-14 19:50)
+**GPU benchmark 4245127** (`tree_bench.py`, L40, K784, 7:3:32, batch 512, mixed, parameters of the plain t3.4 run):
+- One training step: **621 ms with the tree, 1.2 ms with plain patches (540 x)**. The temporary memory is only 1.1 GB,
+  so memory is not the limit. The chunk size (32/64/128) made no difference (the benchmark may have reused one
+  compiled trace; 64 is what training uses).
+- Estimated training time: **about 340 h from slice 31, 240 h from slice 55** (the plain run takes 0.74 h).
+- Sampler drift at --chunk 250: 50.8 ms against 2.2 ms per call (23 x).
+- Validation loss on 4096 samples in float64: 11.3 s (15.5 GB).
+- Precision is fine: mixed against float64, J/W/Wp gradient error 5e-6 to 2e-4 at t 3.4 ... 1. (The theta numbers in the
+  report compare the stencil with the dense visible energy without masking the dropped pair terms: not a defect.)
+- What J does at the real parameters (random J): with rms J = 1 T, I(g; s_p) = 0.18 nats at t 3.4 and the effective
+  global states drop from 5.8 to 3.5. So J at this size would change the model at the times that matter.
+- **Why:** per sample the tree touches K P S = 1.6 M posteriors and K P d = 2.5 M gbar entries, against K N = 0.6 M for
+  the global unit. At batch 512 these are tensors of about 1e9 elements, read and written many times (forward,
+  backward, recomputation). The spec's estimate of 3-5 x was off by two orders of magnitude.
+
+**Cancelled** before they started: pipelines 4245704 / 4245706, equil 4245705 / 4245707, FID / grain / gallery
+4245708-10. The code stays installed (unused without --tree; default paths bit for bit unchanged).
+
+**Options** (decision for the user):
+1. **Tied J:** the 784 global states share J rows within C groups (for example the prototypes' k-means, C = 32-64), so
+   J_p[g, s] = J_p[c(g), s]. Exact. The patch part costs C instead of K, about 12-25 x less: perhaps 25-50 ms per
+   step, so still about 10-20 h from slice 31. Needs a benchmark.
+2. **Top-k truncation:** use only each sample's k most probable global states (k about 8-16; the benchmark shows 1-6
+   effective states at t <= 3.4). Exact up to the dropped posterior mass, which can be measured. Choosing the top k
+   still needs Z_p(g) for every g.
+3. **A small separate root:** a new unit with C = 16-32 states coupled to the patches; the K784 global unit stays
+   independent. Exact and the cheapest, but the coupled unit is not the one that decides the shapes now.
+
+
+### Deep tree: parked on this branch (2026-11-14 23:00; the user: a different research question, first see what the RBM structure gives; maybe the paper's outlook)
+- Branch `deep_tree` = commit 2bc2691 (Ising patches) plus the tree build above. The working branch latent_physical_SGM
+  does not carry the tree code.
+- To resume: the tests are block 21 of test_latent.py (TREE_ORIG = a folder with the 2bc2691 modules for parts D and G);
+  the cost options are in the section above.
+- Outlook material: the exact formulas (checked against autodiff), the measured effect of J at the real parameters
+  (I(g; s_p) = 0.18 nats at t 3.4 for rms J = 1 T), and the GPU cost (540 x per step), which is a cost of simulating
+  the tree; a physical tree relaxes all units in parallel (unverified).

@@ -53,7 +53,13 @@
       split_reference, the learning-rate scales and the start field sizes; F the sampler drift with Ising patches; G the
       command lines (guard, a 100-slice run, resume refused, --patch-on-slice, the default sampler, --fast refused, a
       Potts patch run old vs new)
-Usage (from latent_physical_SGM/):  sbatch jobs/run_gpu_neuronic.sh test_latent.py [13|14|15|16|17|18|19|20]   ('13' ...
+  21. train_latent --tree (the deep tree: the global Potts unit coupled by J to the patch Potts units, 2026-11-14): A
+      tree_terms against autodiff of tree_free_energy, the chunked path, J = 0 = the global unit plus the patches,
+      tree_stats, check_tree; B the loss and force with the tree against a full-autodiff reference, the gradient along J
+      against central differences, the guards; C --precision mixed; D the default paths bit for bit against the
+      modules before the option (TREE_ORIG); E the sampler drift with the tree; G the command lines (guards, a 100-slice
+      run, resume refused, --patch-on-slice, the default sampler, --fast refused, a Potts patch run old vs new)
+Usage (from latent_physical_SGM/):  sbatch jobs/run_gpu_neuronic.sh test_latent.py [13|14|15|16|17|18|19|20|21]   ('13' ...
 '19': that block alone; all of them also run on the CPU, where block 13's bitwise comparisons test XLA:CPU's compilation
 instead of the GPU's; block 16 there: sbatch --time=00:30:00 --cpus-per-task=4 --mem=16G jobs/run_cpu_neuronic.sh
 test_latent.py 16; blocks 17, 18 and 19: sbatch --time=00:30:00 --cpus-per-task=8 --mem=32G jobs/run_cpu_neuronic.sh
@@ -4026,6 +4032,526 @@ def block_20(parts="ABCDEFG"):
     report(f"   block 20: {time.time() - t20:.0f} s")
 
 
+TREE_ORIG = os.environ.get("TREE_ORIG", os.path.join(lm.PKG, "latent_physical_SGM_pre_tree"))
+
+
+def _orig21(name):
+    """The module `name` from before --tree (TREE_ORIG/<name>.py), imported in this process as <name>_orig21 (as
+    _orig20: its own 'import latent_model' finds this process's latent_model)."""
+    saved = list(sys.path)
+    try:
+        spec = importlib.util.spec_from_file_location(f"{name}_orig21", os.path.join(TREE_ORIG, f"{name}.py"))
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+    finally:
+        sys.path[:] = saved
+    return mod
+
+
+def block_21(parts="ABCDEFG"):
+    """21: the deep tree (train_latent.py --tree: the global Potts unit coupled by J (P, K, S) to the patch Potts units,
+    2026-11-14). CPU-sized (8 CPUs). 'test_latent.py 21' runs A-G; 'test_latent.py 21 G' (or any letters) a part.
+    A. tree_terms gradient and Laplacian against autodiff of tree_free_energy (8x8 4:2, K 3, S 3, with and without Qp;
+       28x28 7:3, K 4, S 3), its F against tree_free_energy, the chunked path (lax.map with padding) against one chunk;
+       J = 0 = hidden_terms_quad(..., 'potts') + patch_terms (gradient, Laplacian, F); tree_stats (mutual information 0
+       at J = 0, > 0 otherwise; the force parts add up to the force); check_tree refusals.
+    B. The loss and the force with the tree against a full-autodiff reference on 8x8 (three model configurations), the
+       parameter gradient (J included) along a random direction against central differences; J = 0 = the loss without
+       J; the guards (Ising global unit, Ising patches, K = 0, no Q, sampled statistics) refused.
+    C. --precision mixed with the tree (7:3:8 patches at the scale-1 reference of mnist28_d0123, Potts 8 quad local,
+       J of rms 2 T): gradient error against float64 relative to the gradient and to its batch noise at t = 5 ... 0;
+       96 samples (the chunked path with padding).
+    D. The default paths against the modules before --tree (TREE_ORIG): make_loss (value, gradient and jaxpr; no
+       patches, Potts and Ising patches; dense float64 and stencil mixed), make_force, make_drift (Potts patches 3- and
+       4-tuple, Ising 4-tuple; the 5-tuple with J None = the 4-tuple) bit for bit.
+    E. make_drift with the tree (5-tuple) against x - s grad F by autodiff with interpolated parameters (SDE and PF-ODE,
+       4 times, with and without Qp); the refusals (J with Ising patches, J of a wrong shape).
+    G. Command lines (gauss2_8, Potts 8 --quad --local, --patch 4:2:4 --tree): the guards; a 100-slice run (config,
+       history J float32 (100, 9, 8, 4), train-log tree_* keys, J non-zero); resuming it without --tree refused;
+       --patch-on-slice 50 (J zero before, non-zero after); the default sampler with the normal and an equilibrated start
+       (finite samples, manifest tree); --fast refused; a 3-slice Potts patch run with the old and the new train_latent
+       (slice arrays bit for bit, the same config); early_slices.py on the tree run; make_gallery.py compiles."""
+    t21 = time.time()
+    sl, tl = sample_latent, train_latent
+    T = lm.TEMP
+    taus = lm.forward_time_pts()
+    parts = "".join(parts).upper() or "ABCDEFG"
+    have_orig = all(os.path.exists(os.path.join(TREE_ORIG, f"{m}.py"))
+                    for m in ("latent_model", "train_latent", "sample_latent"))
+    report(f"   block 21 parts {parts}; modules before --tree: {TREE_ORIG} ({'present' if have_orig else 'MISSING'})")
+    if "D" in parts or "G" in parts:
+        check("21 the modules from before --tree are present (TREE_ORIG)", 0.0 if have_orig else 1.0, 0.5)
+    rng = np.random.default_rng(2121)
+    n8, conn8 = 64, lm.connectivity(8, 1)
+    P8 = conn8.shape[0]
+    conn28 = lm.connectivity(28, 1)
+    P28 = conn28.shape[0]
+    geom8 = lm.PatchGeometry(8, 4, 2)
+    geom28 = lm.PatchGeometry(28, 7, 3)
+
+    def rand_tree(geom, K, S, quad_p=True, ws=0.05, js=3.0, quad_g=True):
+        n = geom.N
+        p = {"W": jnp.asarray(ws * rng.standard_normal((K, n))), "b": jnp.asarray(0.05 * rng.standard_normal(K)),
+             "Q": jnp.asarray(0.01 * rng.standard_normal((K, n))) if quad_g else None,
+             "Wp": jnp.asarray(ws * rng.standard_normal((geom.P, S, geom.d))),
+             "bp": jnp.asarray(0.03 * rng.standard_normal((geom.P, S))),
+             "Qp": jnp.asarray(0.01 * rng.standard_normal((geom.P, S, geom.d))) if quad_p else None,
+             "J": jnp.asarray(js * T * rng.standard_normal((geom.P, K, S)))}
+        return p
+
+    def targs(p):
+        return p["W"], p["Q"], p["b"], p["Wp"], p.get("Qp"), p["bp"], p["J"]
+
+    # ---- A. formulas -------------------------------------------------------------------------------------------------
+    if "A" in parts:
+        worst_g, worst_l, worst_f = 0.0, 0.0, 0.0
+        for geom, K, S, B, quad_p in ((geom8, 3, 3, 5, True), (geom8, 3, 3, 5, False), (geom28, 4, 3, 2, True)):
+            p = rand_tree(geom, K, S, quad_p, ws=0.05 if geom.G == 8 else 0.02)
+            X = jnp.asarray(0.5 * rng.standard_normal((B, geom.N)))
+            g, lap, F, pi, q = lm.tree_terms(*targs(p), X, T)
+            f1 = lambda x, p=p: lm.tree_free_energy(*targs(p), x[None], T)[0]   # noqa: E731
+            ga = jax.vmap(jax.grad(f1))(X)
+            la = jnp.stack([jnp.trace(jax.hessian(f1)(X[i])) for i in range(B)])
+            Fr = lm.tree_free_energy(*targs(p), X, T)
+            worst_g, worst_l, worst_f = max(worst_g, rel(g, ga)), max(worst_l, rel(lap, la)), max(worst_f, rel(F, Fr))
+            H = -np.sum(np.asarray(pi) * np.log(np.asarray(pi) + 1e-300), axis=1)
+            report(f"   21A {geom.s}:{geom.r} on {geom.G}x{geom.G}, K {K}, S {S}{' with Qp' if quad_p else ''}: global "
+                   f"posterior entropy {np.round(H, 3).tolist()}, patch marginals sum {float(np.sum(q[0])):.6f} (P "
+                   f"{geom.P}); lap {np.asarray(lap)[:2]} vs autodiff {np.asarray(la)[:2]}")
+        check("21A tree_terms: gradient vs autodiff of tree_free_energy (8x8 4:2 K 3 S 3 with and without Qp, 28x28 7:3 "
+              "K 4 S 3; worst relative)", worst_g, 1e-12)
+        check("21A tree_terms: Laplacian vs the autodiff trace of the Hessian (worst relative)", worst_l, 1e-10)
+        check("21A tree_terms: F vs tree_free_energy (worst relative)", worst_f, 1e-14)
+        p = rand_tree(geom8, 3, 3, True)
+        X = jnp.asarray(0.5 * rng.standard_normal((11, n8)))
+        one = lm.tree_terms(*targs(p), X, T, chunk=64)
+        chk = lm.tree_terms(*targs(p), X, T, chunk=4)                     # 3 chunks, the last padded by 1
+        chk_j = jax.jit(lambda p_, X_: lm.tree_terms(*targs(p_), X_, T, chunk=4))(p, X)
+        gr1 = jax.grad(lambda p_: jnp.sum(lm.tree_terms(*targs(p_), X, T, chunk=64)[1]))(p)
+        gr4 = jax.grad(lambda p_: jnp.sum(lm.tree_terms(*targs(p_), X, T, chunk=4)[1]))(p)
+        worst_c = max(max(rel(a, b) for a, b in zip(one, chk)), max(rel(a, b) for a, b in zip(one, chk_j)),
+                      max(rel(gr1[k_], gr4[k_]) for k_ in gr1 if gr1[k_] is not None))
+        check("21A tree_terms chunked (chunk 4 of 11 samples, padded; eager and jit) = one chunk, outputs and the "
+              "parameter gradient of sum lap (worst relative)", worst_c, 1e-13)
+        worst_0 = 0.0
+        for geom, K, S, quad_p in ((geom8, 3, 3, True), (geom8, 4, 2, False), (geom28, 3, 4, True)):
+            p = rand_tree(geom, K, S, quad_p, ws=0.05 if geom.G == 8 else 0.02)
+            p["J"] = jnp.zeros_like(p["J"])
+            X = jnp.asarray(0.5 * rng.standard_normal((3, geom.N)))
+            g, lap, F, pi, q = lm.tree_terms(*targs(p), X, T)
+            gh, lh, _, ph = lm.hidden_terms_quad(p["W"], p["Q"], p["b"], X, T, "potts")
+            gp, lp, _, pp = lm.patch_terms(p["Wp"], p.get("Qp"), p["bp"], X, T)
+            Fh = -T * jax.scipy.special.logsumexp((X @ p["W"].T + (X * X) @ p["Q"].T + p["b"]) / T, axis=1)
+            Fp = lm.patch_free_energy(p["Wp"], p.get("Qp"), p["bp"], X, T)
+            worst_0 = max(worst_0, rel(g, gh + gp), rel(lap, lh + lp), rel(F, Fh + Fp), rel(pi, ph),
+                          rel(q, jnp.transpose(pp, (1, 0, 2))))
+        check("21A J = 0: tree_terms = hidden_terms_quad(..., 'potts') + patch_terms (gradient, Laplacian, F, global "
+              "posterior, patch posteriors; 8x8 and 28x28, with and without Qp; worst relative)", worst_0, 1e-12)
+        p = rand_tree(geom8, 3, 3, True)
+        X = jnp.asarray(0.5 * rng.standard_normal((9, n8)))
+        st = lm.tree_stats(*targs(p), X, T, chunk=4)
+        p0 = dict(p, J=jnp.zeros_like(p["J"]))
+        st0 = lm.tree_stats(*targs(p0), X, T, chunk=4)
+        g, _, _, pi, q = lm.tree_terms(*targs(p), X, T, with_lap=False)
+        g_glob = pi @ p["W"] + 2.0 * X * (pi @ p["Q"])
+        Fq = jnp.transpose(q, (1, 0, 2))
+        gq = lm._pdot_t(Fq, p["Wp"]) + 2.0 * geom8.unfold(X) * lm._pdot_t(Fq, p["Qp"])
+        parts_ok = rel(-g, g_glob + geom8.fold(gq))
+        rms_ok = abs(st["force_rms_tree_glob"] - float(jnp.sqrt(jnp.mean(g_glob ** 2)))) / st["force_rms_tree_glob"]
+        report(f"   21A tree_stats random J: {st}; J = 0: mi {st0['tree_mi_mean']:.2e}")
+        ok = (abs(st0["tree_mi_mean"]) < 1e-12 and st["tree_mi_mean"] > 1e-3 and st0["tree_J_norm"] == 0.0
+              and parts_ok < 1e-13 and rms_ok < 1e-12 and st["tree_mi_max_patch"] >= st["tree_mi_mean"])
+        check("21A tree_stats: mutual information 0 at J = 0 and > 0 for random J; the force parts add up to the force "
+              "and their rms is reported", 0.0 if ok else 1.0, 0.5)
+        refused = 0
+        base = {"W": p["W"], "Q": p["Q"], "b": p["b"], "Wp": p["Wp"], "bp": p["bp"], "J": p["J"]}
+        for prm, K_, hid, kind in ((base, 3, "ising", "potts"), (base, 3, "potts", "ising"), (base, 0, "potts", "potts"),
+                                   ({k_: v for k_, v in base.items() if k_ != "Q"}, 3, "potts", "potts"),
+                                   ({k_: v for k_, v in base.items() if k_ != "Wp"}, 3, "potts", "potts"),
+                                   (dict(base, J=base["J"][:, :2]), 3, "potts", "potts")):
+            try:
+                lm.check_tree(prm, K_, hid, kind)
+            except ValueError:
+                refused += 1
+        try:
+            lm.check_tree(base, 3, "potts", "potts")
+            accepted = True
+        except ValueError:
+            accepted = False
+        check("21A check_tree refuses an Ising global unit, Ising patches, K = 0, no Q, no Wp and a wrong J shape (6), "
+              "accepts the tree", (6 - refused) + (0 if accepted else 1), 0.5)
+
+    # ---- B. the loss and the force with the tree --------------------------------------------------------------------
+    if "B" in parts:
+        vis8 = lm.DenseVisible(conn8, n8)
+        th8 = jnp.asarray(0.3 * rng.standard_normal(vis8.n_theta))
+        X4 = jnp.asarray(0.5 * rng.standard_normal((4, n8)))
+        K, Sp = 3, 3
+
+        def F_full(x, p, local):
+            f = vis8.energy(p["theta"], x[None])[0]
+            f = f + lm.tree_free_energy(p["W"], p["Q"], p["b"], p["Wp"], p.get("Qp"), p["bp"], p["J"], x[None], T)[0]
+            if local:
+                al = p["wl"] * x + p["bl"]
+                f = f - T * jnp.sum(jnp.logaddexp(al / T, -al / T))
+            if "V" in p:
+                s_ = p["V"] @ x + p["c"]
+                f = f - 0.5 * jnp.sum(s_ * s_)
+            return f
+
+        for quad_p, local, harm in ((True, True, False), (False, False, False), (True, True, True)):
+            p = {k_: v for k_, v in rand_tree(geom8, K, Sp, quad_p).items() if v is not None}
+            p["theta"] = th8
+            if local:
+                p.update(wl=jnp.asarray(0.3 * rng.standard_normal(n8)), bl=jnp.asarray(0.02 * rng.standard_normal(n8)))
+            if harm:
+                p.update(V=jnp.asarray(0.1 * rng.standard_normal((2, n8))), c=jnp.asarray(0.05 * rng.standard_normal(2)))
+            lab = (f"K={K} potts quad{' local' if local else ''}{' harmonic 2' if harm else ''} + tree 4:2:{Sp}"
+                   f"{'' if quad_p else ' (no Qp)'}")
+
+            def lref(p_, X_, local=local):
+                def one(x):
+                    g = jax.grad(F_full)(x, p_, local)
+                    return -jnp.trace(jax.hessian(F_full)(x, p_, local)) / T + jnp.sum(g * g) / (2 * T * T)
+                return jnp.mean(jax.lax.map(one, X_))
+
+            lref = jax.jit(lref)
+            lf = lm.make_loss(vis8, T, K, "potts", local)
+            a_, b_ = float(jax.jit(lf)(p, X4)), float(lref(p, X4))
+            check(f"21B loss with the tree vs full-autodiff reference, {lab} ({b_:.6g})", abs(a_ - b_) / max(abs(b_), 1.0),
+                  1e-10)
+            fo = np.asarray(jax.jit(lm.make_force(vis8, T, K, "potts", local))(p, X4))
+            fr = np.asarray(jax.vmap(jax.grad(F_full), in_axes=(0, None, None))(X4, p, local))
+            check(f"21B make_force with the tree vs autodiff grad F, {lab}", rel(fo, fr), 1e-12)
+            g = jax.jit(jax.grad(lf))(p, X4)
+            kd = jr.fold_in(jr.PRNGKey(2102), 10 * quad_p + 100 * local + harm)
+            d = {kk: jr.normal(jr.fold_in(kd, i), p[kk].shape) * (jnp.abs(p[kk]) + 1e-3) for i, kk in enumerate(p)}
+            fd = (float(lref({kk: p[kk] + 1e-5 * d[kk] for kk in p}, X4))
+                  - float(lref({kk: p[kk] - 1e-5 * d[kk] for kk in p}, X4))) / 2e-5
+            an = float(sum(jnp.sum(g[kk] * d[kk]) for kk in p))
+            dJ = {kk: (d[kk] if kk == "J" else jnp.zeros_like(p[kk])) for kk in p}
+            fdJ = (float(lref({kk: p[kk] + 1e-5 * dJ[kk] for kk in p}, X4))
+                   - float(lref({kk: p[kk] - 1e-5 * dJ[kk] for kk in p}, X4))) / 2e-5
+            anJ = float(jnp.sum(g["J"] * d["J"]))
+            check(f"21B loss gradient (every group) along a random direction vs central difference, {lab} ({an:.6g})",
+                  abs(an - fd) / max(abs(fd), 1e-8), 1e-5)
+            check(f"21B loss gradient along J alone vs central difference, {lab} ({anJ:.6g})",
+                  abs(anJ - fdJ) / max(abs(fdJ), 1e-8), 1e-5)
+            if quad_p and local and not harm:
+                p0 = dict(p, J=jnp.zeros_like(p["J"]))
+                pn = {k_: v for k_, v in p.items() if k_ != "J"}
+                l0, ln = float(jax.jit(lf)(p0, X4)), float(jax.jit(lf)(pn, X4))
+                g0, gn = jax.jit(jax.grad(lf))(p0, X4), jax.jit(jax.grad(lf))(pn, X4)
+                check(f"21B J = 0: the loss and its gradient = those without J (the global unit plus the patches; "
+                      f"{l0:.8g} vs {ln:.8g}; worst relative)",
+                      max(abs(l0 - ln) / abs(ln), max(rel(g0[k_], gn[k_]) for k_ in gn)), 1e-12)
+                lu = float(jax.jit(lf)(dict(p, J=2.0 * p["J"]), X4))
+                check(f"21B J is used: doubling J changes the loss ({a_:.6g} -> {lu:.6g})",
+                      0.0 if abs(lu - a_) > 1e-6 * abs(a_) else 1.0, 0.5)
+                refused = 0
+                for fn in (lambda: lm.make_loss(vis8, T, K, "ising", local)(p, X4),
+                           lambda: lm.make_loss(vis8, T, K, "potts", local, patch_kind="ising")(p, X4),
+                           lambda: lm.make_loss(vis8, T, K, "potts", local, samples=4)(p, X4, jr.PRNGKey(0)),
+                           lambda: lm.make_loss(vis8, T, K, "potts", local)({k_: v for k_, v in p.items() if k_ != "Q"},
+                                                                            X4),
+                           lambda: lm.make_force(vis8, T, K, "ising", local)(p, X4),
+                           lambda: lm.make_force(vis8, T, K, "potts", local, patch_kind="ising")(p, X4)):
+                    try:
+                        fn()
+                    except ValueError:
+                        refused += 1
+                check("21B the guards: make_loss refuses the tree with an Ising global unit, Ising patches, sampled "
+                      "statistics and without Q; make_force with an Ising global unit and Ising patches (6)",
+                      6 - refused, 0.5)
+
+    # ---- C. mixed precision with the tree -----------------------------------------------------------------------------
+    if "C" in parts:
+        prob4 = lm.make_problem("mnist28_d0123", 1)
+        data4 = prob4["data"]
+        clus8 = lm.patch_clusters(np.asarray(data4, dtype=np.float64), geom28, 8, lm.PATCH_SEED0)
+        report(f"   21C: k-means of the 64 patch sets (S = 8) in {clus8['seconds']:.0f} s")
+        zs = lm.dropped_pair_slices(lm.N, P28, ("lin",))
+        kept_m = np.ones(4 * lm.N + 3 * P28, bool)
+        for s_ in zs + (lm.k6_slice(lm.N),):
+            kept_m[s_] = False
+        k1, k2, k3, k4, k5, k6 = jr.split(jr.PRNGKey(2103), 6)
+        th_q = lm.quartic_initial_theta(lm.paper_theta_layout(P28)[0], lm.N, P28)
+        th_q = jnp.where(kept_m, th_q + 0.2 * jr.normal(k1, th_q.shape), 0.0)
+        pq = {"theta": th_q, "W": 0.02 * jr.normal(k2, (8, lm.N)), "b": 0.02 * jr.normal(k3, (8,)),
+              "Q": 0.005 * jr.normal(k4, (8, lm.N)), "wl": 0.3 * jr.normal(k5, (lm.N,)), "bl": 0.02 * jr.normal(k6, (lm.N,)),
+              "J": jnp.asarray(2.0 * T * rng.standard_normal((geom28.P, 8, 8)))}
+        vis_d = lm.DenseVisible(conn28)
+        vis_st = lm.make_visible(conn28, lm.N, "stencil", ("lin",), sextic=False)
+        vg_d = jax.jit(jax.value_and_grad(lm.make_loss(vis_d, T, 8, "potts", True)))
+        vg_m = jax.jit(jax.value_and_grad(lm.make_loss(vis_st, T, 8, "potts", True, compute_dtype=jnp.float32)))
+        on = lambda g, a: np.asarray(a)[kept_m] if g == "theta" else np.asarray(a).ravel()   # noqa: E731
+        rows, bad = [], []
+        for i, t in enumerate((5.0, 2.5, 1.0, 0.5, 0.0)):
+            Wr, br = lm.patch_reference(clus8, [t], T)
+            rmsw = float(np.sqrt(np.mean(Wr[0] ** 2)))
+            p = dict(pq, Wp=jnp.asarray(Wr[0]), bp=jnp.asarray(br[0]),
+                     Qp=jnp.asarray(0.05 * rmsw * rng.standard_normal(Wr[0].shape)))
+            kx1, kx2 = jr.split(jr.fold_in(jr.PRNGKey(2104), i))
+            X1 = sample_forward_process(t, 96, T, lm.SIGMA_FORWARD, data4, kx1, beta=1)
+            X2 = sample_forward_process(t, 96, T, lm.SIGMA_FORWARD, data4, kx2, beta=1)
+            (L_d, G_d), (_, G_d2), (L_m, G_m) = vg_d(p, X1), vg_d(p, X2), vg_m(p, X1)
+            err = {g: float(np.linalg.norm(on(g, G_m[g]) - on(g, G_d[g]))) for g in G_d}
+            nrm = {g: float(np.linalg.norm(on(g, G_d[g]))) for g in G_d}
+            noise = {g: float(np.linalg.norm(on(g, G_d[g]) - on(g, G_d2[g]))) / np.sqrt(2.0) for g in G_d}
+            relg = {g: err[g] / max(nrm[g], 1e-300) for g in G_d}
+            eon = {g: err[g] / max(noise[g], 1e-300) for g in G_d}
+            vd = np.concatenate([on(g, G_d[g]) for g in sorted(G_d)])
+            vm = np.concatenate([on(g, G_m[g]) for g in sorted(G_d)])
+            cos = float(vd @ vm / (np.linalg.norm(vd) * np.linalg.norm(vm)))
+            med_rel, med_eon = float(np.median(list(relg.values()))), float(np.median(list(eon.values())))
+            rows.append(f"t {t:g}: loss {float(L_d):.6g} (mixed rel {abs(float(L_m) - float(L_d)) / abs(float(L_d)):.1e}); "
+                        f"relative gradient error median {med_rel:.1e} (J {relg['J']:.1e}, Wp {relg['Wp']:.1e}, W "
+                        f"{relg['W']:.1e}, worst {max(relg.values()):.1e}); cosine {cos:.8f}; error / batch noise "
+                        f"median {med_eon:.1e} (J {eon['J']:.1e}, worst {max(eon.values()):.1e})")
+            if t > 0:
+                bad += [f"t {t:g}"] if not (med_rel <= 1e-3 and cos >= 0.9999 and med_eon <= 1e-2) else []
+            else:
+                bad += ["t 0"] if not med_eon <= 1e-2 else []
+        report("   21C mixed vs float64 with the tree (7:3:8 patches at the scale-1 reference, Potts 8 quad local, J rms "
+               "2 T, 96 samples):\n      " + "\n      ".join(rows))
+        check(f"21C mixed precision with the tree: median relative gradient error <= 1e-3, cosine >= 0.9999 and error / "
+              f"batch noise median <= 1e-2 at t = 5, 2.5, 1, 0.5; at t = 0 error / noise <= 1e-2 (failures {bad})",
+              len(bad), 0.5)
+
+    # ---- D. the default paths against the modules before --tree ------------------------------------------------------
+    if "D" in parts and have_orig:
+        lm_o = _orig21("latent_model")
+        sl_o = _orig21("sample_latent")
+        vis_d = lm.DenseVisible(conn28)
+        vis_st = lm.make_visible(conn28, lm.N, "stencil", ("lin",), sextic=False)
+        th = jnp.asarray(0.2 * rng.standard_normal(vis_d.n_theta))
+        base = {"theta": th, "W": jnp.asarray(0.02 * rng.standard_normal((8, lm.N))),
+                "b": jnp.asarray(0.02 * rng.standard_normal(8)), "Q": jnp.asarray(0.005 * rng.standard_normal((8, lm.N))),
+                "wl": jnp.asarray(0.3 * rng.standard_normal(lm.N)), "bl": jnp.asarray(0.02 * rng.standard_normal(lm.N))}
+        withp = dict(base, Wp=jnp.asarray(0.05 * rng.standard_normal((geom28.P, 4, geom28.d))),
+                     bp=jnp.asarray(0.01 * rng.standard_normal((geom28.P, 4))),
+                     Qp=jnp.asarray(0.005 * rng.standard_normal((geom28.P, 4, geom28.d))))
+        Xd = jnp.asarray(0.5 * rng.standard_normal((4, lm.N)))
+        bad = []
+        for lab, vis_, kw in (("dense f64", vis_d, {}), ("stencil mixed", vis_st, {"compute_dtype": jnp.float32})):
+            for plab, p, pk in (("no patches", base, "potts"), ("Potts patches 7:3:4", withp, "potts"),
+                                ("Ising patches 7:3:4", withp, "ising")):
+                fn_n = lm.make_loss(vis_, T, 8, "potts", True, patch_kind=pk, **kw)
+                fn_o = lm_o.make_loss(vis_, T, 8, "potts", True, patch_kind=pk, **kw)
+                (Ln, Gn), (Lo, Go) = jax.jit(jax.value_and_grad(fn_n))(p, Xd), jax.jit(jax.value_and_grad(fn_o))(p, Xd)
+                ok = (np.array_equal(np.asarray(Ln), np.asarray(Lo))
+                      and all(np.array_equal(np.asarray(Gn[g]), np.asarray(Go[g])) for g in Gn)
+                      and str(jax.make_jaxpr(jax.value_and_grad(fn_n))(p, Xd))
+                      == str(jax.make_jaxpr(jax.value_and_grad(fn_o))(p, Xd)))
+                bad += [] if ok else [f"{lab} {plab}"]
+            fps_n = lm.make_loss_per_sample(vis_, T, 8, "potts", True, **kw)
+            fps_o = lm_o.make_loss_per_sample(vis_, T, 8, "potts", True, **kw)
+            if not np.array_equal(np.asarray(jax.jit(fps_n)(withp, Xd)), np.asarray(jax.jit(fps_o)(withp, Xd))):
+                bad.append(f"{lab} make_loss_per_sample")
+        for pk in ("potts", "ising"):
+            fo_n = np.asarray(jax.jit(lm.make_force(vis_d, T, 8, "potts", True, patch_kind=pk))(withp, Xd))
+            fo_o = np.asarray(jax.jit(lm_o.make_force(vis_d, T, 8, "potts", True, patch_kind=pk))(withp, Xd))
+            bad += [] if np.array_equal(fo_n, fo_o) else [f"make_force {pk}"]
+            fo_n = np.asarray(jax.jit(lm.make_force(vis_d, T, 8, "potts", True, patch_kind=pk))(base, Xd))
+            fo_o = np.asarray(jax.jit(lm_o.make_force(vis_d, T, 8, "potts", True, patch_kind=pk))(base, Xd))
+            bad += [] if np.array_equal(fo_n, fo_o) else [f"make_force no patches {pk}"]
+        check(f"21D make_loss (value, gradient and jaxpr; dense f64 and stencil mixed; no patches, Potts and Ising "
+              f"patches), make_loss_per_sample and make_force = the modules before --tree bit for bit (failures {bad})",
+              len(bad), 0.5)
+        h = _synth_hist19(n8, conn8, 4, 0, geom8, 3, 2105)
+        kw8 = dict(problem="gauss2_8", hidden="potts", local=(h["wl"], h["bl"]), quad=h["Q"], radius=1,
+                   neighbourhood="chebyshev")
+        bad = []
+        for smp in ("sde", "ode"):
+            for ptup_o, ptups_n in (((h["Wp"], h["bp"], h["Qp"]), ((h["Wp"], h["bp"], h["Qp"]),
+                                                                 (h["Wp"], h["bp"], h["Qp"], "potts"),
+                                                                 (h["Wp"], h["bp"], h["Qp"], "potts", None))),
+                                    ((h["Wp"], h["bp"], h["Qp"], "ising"), ((h["Wp"], h["bp"], h["Qp"], "ising"),
+                                                                          (h["Wp"], h["bp"], h["Qp"], "ising", None))),
+                                    (None, (None,))):
+                d_o, _ = sl_o.make_drift(h["theta"], h["W"], h["b"], smp, patch=ptup_o, **kw8)
+                for ptup in ptups_n:
+                    d_n, _ = sl.make_drift(h["theta"], h["W"], h["b"], smp, patch=ptup, **kw8)
+                    for t_rev in (0.0, 1.234, 4.9):
+                        x = jnp.asarray(0.4 * rng.standard_normal(n8))
+                        if not np.array_equal(np.asarray(jax.jit(d_n)(t_rev, x, ())),
+                                              np.asarray(jax.jit(d_o)(t_rev, x, ()))):
+                            bad.append(f"{smp} {'none' if ptup is None else len(ptup)}-tuple t {t_rev}")
+        check(f"21D make_drift (Potts patches 3-, 4- and 5-tuple with J None; Ising 4- and 5-tuple; no patches; SDE and "
+              f"PF-ODE) = the sampler before --tree bit for bit (failures {bad})", len(bad), 0.5)
+
+    # ---- E. the sampler with the tree ---------------------------------------------------------------------------------
+    if "E" in parts:
+        efn = setup_energy_fn(jnp.asarray(conn8), lm.paper_theta_layout(P8, n8)[1])
+
+        def F_samp(x, q):
+            al = q["wl"] * x + q["bl"]
+            f = efn(x, q["theta"]) - T * jnp.sum(jnp.logaddexp(al / T, -al / T))
+            return f + lm.tree_free_energy(q["W"], q["Q"], q["b"], q["Wp"], q.get("Qp"), q["bp"], q["J"], x[None], T)[0]
+
+        worst = 0.0
+        for quad in (True, False):
+            h = _synth_hist19(n8, conn8, 4, 0, geom8, 3, 2107 + quad, quad=quad)
+            h["J"] = 3.0 * T * np.random.default_rng(2108 + quad).standard_normal((lm.N_TIME_STEPS, geom8.P, 4, 3))
+            patch_h = (h["Wp"], h["bp"], h.get("Qp"), "potts", h["J"])
+            for smp, s_ in (("sde", 2.0), ("ode", 1.0)):
+                dr, _ = sl.make_drift(h["theta"], h["W"], h["b"], smp, "gauss2_8", "potts", (h["wl"], h["bl"]), h["Q"], 1,
+                                      "chebyshev", patch=patch_h)
+                for t_rev in (0.0, 0.7777, 2.5, 4.9999):
+                    tau = lm.T_FORWARD - t_rev
+                    k = min(int(np.searchsorted(-taus, -tau, side="right")) - 1, lm.N_TIME_STEPS - 2)
+                    lw = (tau - taus[k + 1]) / (taus[k] - taus[k + 1])
+                    q = {g: jnp.asarray(h[g][k + 1] + lw * (h[g][k] - h[g][k + 1]))
+                         for g in ("theta", "W", "b", "Q", "wl", "bl", "Wp", "bp", "Qp", "J") if g in h}
+                    x = jnp.asarray(0.4 * rng.standard_normal(n8))
+                    worst = max(worst, rel(dr(t_rev, x, ()), x - s_ * jax.grad(F_samp)(x, q)))
+        check("21E make_drift with the tree 4:2:3 (Potts 4 quad local, with and without Qp; SDE and PF-ODE, 4 times "
+              "between knots) vs x - s grad F by autodiff with interpolated parameters (worst relative)", worst, 1e-10)
+        refused = 0
+        for ptup in ((h["Wp"], h["bp"], h.get("Qp"), "ising", h["J"]), (h["Wp"], h["bp"], h.get("Qp"), "potts", h["J"][:, :, :2])):
+            try:
+                sl.make_drift(h["theta"], h["W"], h["b"], "sde", "gauss2_8", "potts", (h["wl"], h["bl"]), h["Q"], 1,
+                              "chebyshev", patch=ptup)
+            except ValueError:
+                refused += 1
+        try:
+            sl.make_drift(h["theta"], h["W"], h["b"], "sde", "gauss2_8", "potts", (h["wl"], h["bl"]), None, 1,
+                          "chebyshev", patch=(h["Wp"], h["bp"], h.get("Qp"), "potts", h["J"]))
+        except ValueError:
+            refused += 1
+        check("21E make_drift refuses J with Ising patches, J of a wrong shape and J without quad (3)", 3 - refused, 0.5)
+
+    # ---- G. command lines ------------------------------------------------------------------------------------------
+    if "G" in parts:
+        py, env = sys.executable, dict(os.environ, JAX_PLATFORMS="cpu")
+        FL = ["--problem", "gauss2_8", "--K", "8", "--hidden", "potts", "--quad", "--local", "--select", "ema",
+              "--visible", "quartic", "--radius", "1", "--pair-terms", "lin", "--proto-init", "pooled",
+              "--visible-impl", "stencil", "--precision", "mixed"]
+        PT = ["--patch", "4:2:4", "--tree"]
+        mn = ["--steps-schedule", "0:0.001"]
+        runs21 = os.path.join(OUT, "b21_runs")
+        os.makedirs(runs21, exist_ok=True)
+        tl_cur, sl_cur = os.path.join(HERE, "train_latent.py"), os.path.join(HERE, "sample_latent.py")
+        tl_old = os.path.join(TREE_ORIG, "train_latent.py")
+
+        def tcmd(script, name, *extra, fl=FL):
+            return [py, "-u", script, "--name", name, "--out-root", runs21] + fl + list(extra)
+
+        def run_(cmd, tag):
+            r = subprocess.run(cmd, env=env, capture_output=True, text=True)
+            with open(os.path.join(OUT, f"b21_{tag}.log"), "w") as f:
+                f.write(shlex.join(cmd) + "\n" + r.stdout + "\n--- stderr ---\n" + r.stderr)
+            return r.returncode, r.stdout + r.stderr
+
+        bg = {}
+        jobs21 = [("tree", tcmd(tl_cur, "b21_tree", *PT, *mn)),
+                  ("on50", tcmd(tl_cur, "b21_tree_on50", *PT, "--patch-on-slice", "50", "--patch-init-scale", "0.06",
+                                *mn)),
+                  ("potts_new", tcmd(tl_cur, "b21_potts_new", "--patch", "4:2:4", "--max-slices", "3",
+                                     "--steps-schedule", "0:0.01"))]
+        if have_orig:
+            jobs21.append(("potts_old", tcmd(tl_old, "b21_potts_old", "--patch", "4:2:4", "--max-slices", "3",
+                                             "--steps-schedule", "0:0.01")))
+        for tag, cmd in jobs21:                  # in the background, in parallel (8 CPUs)
+            logp = os.path.join(OUT, f"b21_{tag}.log")
+            with open(logp, "w") as f:
+                f.write(shlex.join(cmd) + "\n")
+            bg[tag] = subprocess.Popen(cmd, env=env, stdout=open(logp, "a"), stderr=subprocess.STDOUT)
+        guards = []
+        FLi = [a if a != "potts" else "ising" for a in FL]                 # --hidden ising
+        FLnq = [a for a in FL if a != "--quad"]
+        for tag, cmd in (("g_nopatch", tcmd(tl_cur, "b21_g1", "--tree")),
+                         ("g_ising_patch", tcmd(tl_cur, "b21_g2", *PT, "--patch-kind", "ising")),
+                         ("g_ising_global", tcmd(tl_cur, "b21_g3", *PT, fl=FLi)),
+                         ("g_noquad", tcmd(tl_cur, "b21_g4", *PT, fl=FLnq)),
+                         ("g_split", tcmd(tl_cur, "b21_g5", *PT, "--split-dead", "10"))):
+            rc, out_ = run_(cmd, tag)
+            guards.append(rc != 0 and "--tree" in out_)
+            report(f"   21G guard {tag}: exit {rc}, names --tree {'--tree' in out_}")
+        check("21G --tree is refused without --patch, with Ising patches, an Ising global unit, without --quad and with "
+              "--split-dead (exit != 0, message names --tree)", len(guards) - sum(guards), 0.5)
+        rcs = {tag: p_.wait() for tag, p_ in bg.items()}
+        report(f"   21G exit codes {rcs}")
+        rd = os.path.join(runs21, "b21_tree")
+        ok, info = False, ""
+        if rcs["tree"] == 0:
+            with open(os.path.join(rd, "config.json")) as f:
+                cfg = json.load(f)
+            hh = np.load(os.path.join(rd, "hidden_history.npz"))
+            with open(os.path.join(rd, "train_log.jsonl")) as f:
+                recs = [json.loads(ln) for ln in f if ln.strip()]
+            Jh = hh["J"] if "J" in hh.files else np.zeros(0)
+            fin = all(np.all(np.isfinite(hh[g])) for g in hh.files)
+            keys_ok = all("tree_mi_mean" in r and "force_rms_tree_patch" in r for r in recs[-3:])
+            s99 = np.load(os.path.join(rd, "slices", "slice_099.npz"))
+            ok = (cfg.get("tree") is True and cfg.get("patch") == "4:2:4" and Jh.shape == (100, 9, 8, 4)
+                  and Jh.dtype == np.float32 and fin and keys_ok and len(recs) == 100 and np.any(Jh[-1])
+                  and s99["J"].dtype == np.float64 and np.array_equal(Jh[-1], s99["J"].astype(np.float32))
+                  and list(hh.files)[-1] == "J")
+            info = (f"config tree {cfg.get('tree')}, J {Jh.shape} {Jh.dtype}, members {list(hh.files)}, finite {fin}, "
+                    f"records {len(recs)} with tree keys {keys_ok}; last slice rms J/T {recs[-1].get('tree_J_over_T_rms')}, "
+                    f"I {recs[-1].get('tree_mi_mean')}, coupled force glob/patch {recs[-1].get('force_rms_tree_glob')}/"
+                    f"{recs[-1].get('force_rms_tree_patch')}")
+        report(f"   21G tree run: {info}")
+        check("21G a 100-slice --patch 4:2:4 --tree run: config tree, history J float32 (100, 9, 8, 4) last = the slice "
+              "files', finite, tree_* records, J non-zero", 0.0 if ok else 1.0, 0.5)
+        rc, out_ = run_(tcmd(tl_cur, "b21_tree", "--patch", "4:2:4", *mn), "resume_notree")
+        check("21G resuming the tree run without --tree is refused ('tree' in the message)",
+              0.0 if (rc != 0 and "tree" in out_) else 1.0, 0.5)
+        ok = False
+        if rcs["on50"] == 0:
+            hh = np.load(os.path.join(runs21, "b21_tree_on50", "hidden_history.npz"))
+            ok = (not np.any(hh["J"][:50]) and not np.any(hh["Wp"][:50])
+                  and sum(bool(np.any(hh["J"][k])) for k in range(51, 100)) >= 40)
+            report(f"   21G on50: J non-zero in {sum(bool(np.any(hh['J'][k])) for k in range(100))} slices (first "
+                   f"{next((k for k in range(100) if np.any(hh['J'][k])), None)})")
+        check("21G --tree --patch-on-slice 50: J zero in slices 0-49, switched on at 0 at slice 50 and non-zero after "
+              "training (at least 40 of slices 51-99)", 0.0 if ok else 1.0, 0.5)
+        rel_run = os.path.relpath(rd, lm.OUT_ROOT)
+        smp_ok = []
+        for tag, extra in (("sample", []), ("sample_equil", ["--init-dist", "equil:0.5"])):
+            rc, out_ = run_([py, "-u", sl_cur, "--run", rel_run, "--n", "4", "--chunk", "4"] + extra, tag)
+            stem = "sde_base_n4" + ("_init-equil0.5" if extra else "")
+            fp = os.path.join(rd, "samples", stem + ".npy")
+            good = rc == 0 and os.path.exists(fp)
+            if good:
+                xs = np.load(fp)
+                with open(os.path.join(rd, "samples", stem + ".json")) as f:
+                    man = json.load(f)
+                good = xs.shape == (4, 64) and bool(np.all(np.isfinite(xs))) and man.get("tree") is True
+            smp_ok.append(good)
+            report(f"   21G sampler {tag}: exit {rc}, ok {good}")
+        check("21G the default sampler on the tree run (normal start and equil:0.5): finite samples, manifest tree",
+              len(smp_ok) - sum(smp_ok), 0.5)
+        rc, out_ = run_([py, "-u", sl_cur, "--run", rel_run, "--n", "4", "--chunk", "4", "--fast"], "fast")
+        check("21G --fast refuses the tree run", 0.0 if (rc != 0 and "patch" in out_) else 1.0, 0.5)
+        if have_orig:
+            ok, diff = False, "runs failed"
+            if rcs.get("potts_new") == 0 and rcs.get("potts_old") == 0:
+                diff = []
+                for k in range(3):
+                    a = np.load(os.path.join(runs21, "b21_potts_new", "slices", f"slice_{k:03d}.npz"))
+                    b = np.load(os.path.join(runs21, "b21_potts_old", "slices", f"slice_{k:03d}.npz"))
+                    for g in set(a.files) | set(b.files):
+                        if g == "record":
+                            continue
+                        if g not in b.files or g not in a.files or not np.array_equal(a[g], b[g]):
+                            diff.append(f"slice {k} {g}")
+                with open(os.path.join(runs21, "b21_potts_new", "config.json")) as f:
+                    cn = json.load(f)
+                with open(os.path.join(runs21, "b21_potts_old", "config.json")) as f:
+                    co = json.load(f)
+                skip = {"name", "sha256", "started", "slurm_job", "devices", "jax", "git_commit"}
+                diff += [f"config {k}" for k in set(cn) | set(co) if k not in skip and cn.get(k) != co.get(k)]
+                ok = not diff
+            check(f"21G a 3-slice --patch 4:2:4 (Potts) run with the new and the old train_latent: slice arrays bit for "
+                  f"bit, the same config (differences {diff})", 0.0 if ok else 1.0, 0.5)
+        rc2, out2 = run_([py, "-m", "py_compile", os.path.join(HERE, "early_slices.py"),
+                          os.path.join(HERE, "make_gallery.py")], "compile")
+        check("21G early_slices.py and make_gallery.py compile", 0.0 if rc2 == 0 else 1.0, 0.5)
+    report(f"   block 21: {time.time() - t21:.0f} s")
+
+
 def main():
     os.makedirs(OUT, exist_ok=True)
     t_all = time.time()
@@ -4055,6 +4581,9 @@ def main():
         finish(t_all)
     if sys.argv[1:2] == ["20"]:         # block 20 alone (CPU-sized: 8 CPUs); '20 G' (or other letters): those parts
         block_20(sys.argv[2:] or "ABCDEFG")
+        finish(t_all)
+    if sys.argv[1:2] == ["21"]:         # block 21 alone (CPU-sized: 8 CPUs); '21 G' (or other letters): those parts
+        block_21(sys.argv[2:] or "ABCDEFG")
         finish(t_all)
     key = jr.PRNGKey(123)
     conn = lm.connectivity()
