@@ -115,7 +115,7 @@ def main():
     ref = "real_train"
     try:
         import fid_score
-        Xte, yte = fid_score.load_mnist("test", G)
+        Xte, yte = fid_score.load_mnist("test", G, lm.problem_dataset(args.problem))   # Fashion: its own test split
         sel = np.isin(yte, digits) if digits is not None else np.ones(yte.shape[0], bool)
         Xte_px = np.asarray(Xte[sel], np.float64)
         j = rng.choice(Xte_px.shape[0], 2000, replace=False)

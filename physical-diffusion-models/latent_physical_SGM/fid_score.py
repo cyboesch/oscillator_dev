@@ -56,7 +56,13 @@ def report(s=""):
 
 
 # ---------------------------------------------------------------- MNIST -------------------------------------------
-def load_mnist(split, grid):
+def load_mnist(split, grid, dataset="mnist"):
+    """The images (n, grid^2) in [0, 1] and labels of a split; dataset 'fashion' (2026-11-14): the raw Fashion-MNIST
+    files (latent_model.load_fashion_raw; 28x28 only), else MNIST from tensorflow_datasets as before."""
+    if dataset == "fashion":
+        if grid != 28:
+            raise SystemExit("Fashion-MNIST is used at 28x28 only")
+        return lm.load_fashion_raw(split)
     import tensorflow_datasets as tfds
     b = tfds.builder("mnist")
     b.download_and_prepare()
@@ -102,12 +108,17 @@ def make_net(grid):
     return jax.jit(forward)
 
 
-def train_classifier(grid, epochs=5, batch=128, lr=1e-3, seed=0):
+def classifier_path(grid, dataset="mnist"):
+    """MNIST: classifier_<grid>.npz (as before); Fashion-MNIST: classifier_fashion_<grid>.npz."""
+    return os.path.join(FID_DIR, f"classifier_{grid}.npz" if dataset == "mnist" else f"classifier_{dataset}_{grid}.npz")
+
+
+def train_classifier(grid, epochs=5, batch=128, lr=1e-3, seed=0, dataset="mnist"):
     import jax
     import jax.numpy as jnp
     t0 = time.time()
-    Xtr, ytr = load_mnist("train", grid)
-    Xte, yte = load_mnist("test", grid)
+    Xtr, ytr = load_mnist("train", grid, dataset)
+    Xte, yte = load_mnist("test", grid, dataset)
     rng = np.random.default_rng(seed)
     p = {k: jnp.asarray(v) for k, v in init_params(grid, rng).items()}
     forward = make_net(grid)
@@ -136,9 +147,10 @@ def train_classifier(grid, epochs=5, batch=128, lr=1e-3, seed=0):
             t += 1
             p, m, v = step(p, m, v, t, jnp.asarray(x), jnp.asarray(ytr[idx]))
         acc = test_accuracy(forward, p, Xte, yte)
-        print(f"classifier {grid}x{grid}: epoch {ep + 1}, test accuracy {acc:.4f} ({time.time() - t0:.0f} s)", flush=True)
+        print(f"classifier {dataset} {grid}x{grid}: epoch {ep + 1}, test accuracy {acc:.4f} ({time.time() - t0:.0f} s)",
+              flush=True)
     os.makedirs(FID_DIR, exist_ok=True)
-    path = os.path.join(FID_DIR, f"classifier_{grid}.npz")
+    path = classifier_path(grid, dataset)
     np.savez(path, test_accuracy=acc, epochs=epochs, **{k: np.asarray(val) for k, val in p.items()})
     print(f"wrote {path}", flush=True)
     return path
@@ -149,11 +161,11 @@ def test_accuracy(forward, p, X, y):
     return float(np.mean(pred == y))
 
 
-def load_classifier(grid):
+def load_classifier(grid, dataset="mnist"):
     import jax.numpy as jnp
-    path = os.path.join(FID_DIR, f"classifier_{grid}.npz")
+    path = classifier_path(grid, dataset)
     if not os.path.exists(path):
-        raise SystemExit(f"{path} missing: run fid_score.py --train-only --grid {grid} first")
+        raise SystemExit(f"{path} missing: run fid_score.py --train-only --grid {grid} --dataset {dataset} first")
     z = np.load(path)
     p = {k: jnp.asarray(z[k]) for k in ("c1", "b1", "c2", "b2", "d1", "e1", "d2", "e2")}
     forward = make_net(grid)
@@ -233,9 +245,11 @@ def main():
     ap.add_argument("--pair", action="append", default=[])
     ap.add_argument("--train-only", action="store_true")
     ap.add_argument("--grid", type=int, choices=(14, 28))
+    ap.add_argument("--dataset", choices=("mnist", "fashion"), default="mnist",
+                    help="with --train-only: the classifier's data set (scoring takes it from --problem)")
     args = ap.parse_args()
     if args.train_only:
-        train_classifier(args.grid)
+        train_classifier(args.grid, dataset=args.dataset)
         return
     if not args.problem or not args.sets:
         raise SystemExit("--problem and at least one LABEL=PATH are needed")
@@ -245,9 +259,10 @@ def main():
     prob = lm.make_problem(args.problem)
     grid, digits = prob["grid"], prob["digits"]
     mean, std = prob["mean"], prob["std"]
-    feats, acc = load_classifier(grid)
-    # reference: balanced MNIST test images of the problem's digits, with the paper's pixel noise
-    Xte, yte = load_mnist("test", grid)
+    dataset = lm.problem_dataset(args.problem)     # 'fashion' for fashion28_c...: its own classifier and test images
+    feats, acc = load_classifier(grid, dataset)
+    # reference: balanced test images of the problem's digits (classes), with the paper's pixel noise
+    Xte, yte = load_mnist("test", grid, dataset)
     rng = np.random.default_rng(0)
     nmin = min(int(np.sum(yte == d)) for d in digits)
     idx = np.sort(np.concatenate([rng.choice(np.flatnonzero(yte == d), nmin, replace=False) for d in digits]))
@@ -255,7 +270,7 @@ def main():
     Fref, _ = feats(Xref)
     sc = Scorer(Fref)
     report(f"problem {args.problem} (digits {digits}, {grid}x{grid}); classifier test accuracy (all ten digits) "
-           f"{acc:.4f}; reference: {idx.size} MNIST test images ({nmin} per digit) + N(0, {NOISE}^2) noise; "
+           f"{acc:.4f} ({dataset}); reference: {idx.size} {dataset} test images ({nmin} per class) + N(0, {NOISE}^2) noise; "
            f"KID reference {sc.Fk.shape[0]} of them")
     # real training images (the generative models' data), pixel units
     Ptr = np.asarray(prob["data"], np.float64) * std + mean

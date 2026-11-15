@@ -450,6 +450,30 @@ TOY_SEED = 11
 PROBLEM_GEOMETRY = {"mnist28": (GRID, N_NEIGHBOUR_COUPLINGS), "mnist14": (14, 7), "gauss2_8": (8, 7)}  # (grid, radius)
 DIGITS_DIR = os.path.join(OUT_ROOT, "data")      # digit subsets written by make_digit_data.py
 _DIGIT_PROBLEM = re.compile(r"mnist(28|14)_d(\d{2,})")
+# Fashion-MNIST (2026-11-14): fashion28_c<classes>, e.g. fashion28_c0123456789 = all ten classes; 28x28, radius 14, the
+# same pixel noise and normalisation as the digit subsets; data from make_fashion_data.py (fashion_<classes>_28.npz in
+# DIGITS_DIR), built from the raw Zalando files in FASHION_RAW_DIR
+_FASHION_PROBLEM = re.compile(r"fashion28_c(\d{2,})")
+FASHION_RAW_DIR = os.path.join(PKG, "data", "FashionMNIST")
+FASHION_CLASSES = ("T-shirt/top", "Trouser", "Pullover", "Dress", "Coat", "Sandal", "Shirt", "Sneaker", "Bag",
+                   "Ankle boot")
+
+
+def load_fashion_raw(split):
+    """The raw Fashion-MNIST split ('train': 60,000, 'test': 10,000) from FASHION_RAW_DIR's idx files: images (n, 784)
+    float32 in [0, 1] (/255) and labels (n,) int64 (0-9, FASHION_CLASSES)."""
+    import gzip
+    pre = "train" if split == "train" else "t10k"
+    with gzip.open(os.path.join(FASHION_RAW_DIR, f"{pre}-images-idx3-ubyte.gz"), "rb") as f:
+        X = np.frombuffer(f.read(), np.uint8, offset=16)
+    with gzip.open(os.path.join(FASHION_RAW_DIR, f"{pre}-labels-idx1-ubyte.gz"), "rb") as f:
+        y = np.frombuffer(f.read(), np.uint8, offset=8)
+    return (X.reshape(-1, 784).astype(np.float32) / 255.0), y.astype(np.int64)
+
+
+def problem_dataset(name):
+    """'fashion' for the Fashion-MNIST problems (fashion28_c...), 'mnist' for every other problem."""
+    return "fashion" if _FASHION_PROBLEM.fullmatch(name) else "mnist"
 
 
 def problem_geometry(name):
@@ -457,6 +481,8 @@ def problem_geometry(name):
     14) and mnist14_d<digits> (2x2-pooled, radius 7), e.g. mnist14_d14 = the digits 1 and 4."""
     if name in PROBLEM_GEOMETRY:
         return PROBLEM_GEOMETRY[name]
+    if _FASHION_PROBLEM.fullmatch(name):
+        return GRID, N_NEIGHBOUR_COUPLINGS
     m = _DIGIT_PROBLEM.fullmatch(name)
     if m is None:
         raise ValueError(f"unknown problem {name!r}")
@@ -465,13 +491,20 @@ def problem_geometry(name):
 
 def problem_classes(name):
     """Number of classes of a problem (2 for mnist28 / mnist14 / gauss2_8)."""
+    mf = _FASHION_PROBLEM.fullmatch(name)
+    if mf is not None:
+        return len(mf.group(1))
     m = _DIGIT_PROBLEM.fullmatch(name)
     return 2 if m is None else len(m.group(2))
 
 
 def problem_data_path(name):
     """The data file a problem is built from (recorded as data_sha256 in config.json): the digit-subset file, or the
-    paper's 0/1 file for mnist28 / mnist14 (and, as before, for the synthetic gauss2_8)."""
+    paper's 0/1 file for mnist28 / mnist14 (and, as before, for the synthetic gauss2_8); fashion_<classes>_28.npz for
+    the Fashion-MNIST problems."""
+    mf = _FASHION_PROBLEM.fullmatch(name)
+    if mf is not None:
+        return os.path.join(DIGITS_DIR, f"fashion_{mf.group(1)}_28.npz")
     m = _DIGIT_PROBLEM.fullmatch(name)
     return DATA_PATH if m is None else os.path.join(DIGITS_DIR, f"digits_{m.group(2)}_28.npz")
 
@@ -511,7 +544,16 @@ def make_problem(name, radius=None, neighbourhood="chebyshev"):
     radius = r0 if radius is None else radius
     digits = None
     m = _DIGIT_PROBLEM.fullmatch(name)
-    if m is not None:                        # digit subset: same noise and normalisation as the paper's data
+    mf = _FASHION_PROBLEM.fullmatch(name)
+    if mf is not None:                       # Fashion-MNIST classes: the digit subsets' noise and normalisation
+        z = np.load(problem_data_path(name))
+        raw, cls_labels = z["images"], z["labels"]
+        digits = sorted(int(c) for c in mf.group(1))       # the class ids (named "digits" like the digit problems)
+        if sorted(np.unique(cls_labels).tolist()) != digits:
+            raise RuntimeError(f"{name}: labels {np.unique(cls_labels)} do not match the classes {digits}")
+        labels = np.searchsorted(digits, cls_labels)
+        data, mean, std = _normalise_like_paper(raw)
+    elif m is not None:                      # digit subset: same noise and normalisation as the paper's data
         z = np.load(os.path.join(DIGITS_DIR, f"digits_{m.group(2)}_28.npz"))
         raw, digit_labels = z["images"], z["labels"]
         digits = sorted(int(d) for d in m.group(2))
