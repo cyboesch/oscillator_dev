@@ -6,7 +6,7 @@ features, cheap, sensitive to stroke shape); this script gives the number papers
 Network: the original TTUR graph (inception-2015-12-05.tgz, classify_image_graph_def.pb; sha256 below), downloaded once
 to out/latent_physical_SGM/fid/inception/. pytorch-fid and clean-fid reproduce these weights. The graph is imported
 with its input 'ExpandDims:0' remapped to a placeholder of free batch size, and features are read from 'pool_3:0'
-(2048-d). Images go in as TTUR feeds them: grey 28x28 replicated to 3 channels, values 0..255 (float), and the graph's own
+(2048-d). Images go in as TTUR feeds them: grey 28x28 (CelebA: 32x32) replicated to 3 channels, values 0..255 (float), and the graph's own
 ResizeBilinear to 299x299 and (x - 128) / 128. Generated samples are mapped to pixel units (x * std + mean of the
 problem), clipped to [0, 1] and quantised to 8 bit (as a saved PNG would be); rows that diverged (max |x| > 15 in
 normalised units or not finite, as fid_score.py) are left out and counted.
@@ -25,6 +25,7 @@ Writes out/latent_physical_SGM/fid_inception/<job>/report.txt and metrics.json.
 """
 import argparse
 import json
+import math
 import os
 import sys
 import time
@@ -80,7 +81,9 @@ def make_inception():
 
     def feats(P, batch=BATCH):
         """P (n, 784) pixel values; clipped to [0, 1], 8-bit, 3 channels, 0..255 -> (n, 2048) float64."""
-        img = np.round(np.clip(np.asarray(P, np.float64), 0.0, 1.0) * 255.0).astype(np.float32).reshape(-1, 28, 28, 1)
+        P = np.asarray(P, np.float64)
+        G = math.isqrt(P.shape[1])
+        img = np.round(np.clip(P, 0.0, 1.0) * 255.0).astype(np.float32).reshape(-1, G, G, 1)
         out = []
         for i in range(0, img.shape[0], batch):
             b = np.repeat(img[i:i + batch], 3, axis=3)
@@ -89,12 +92,12 @@ def make_inception():
     return feats, [d.name for d in gpus]
 
 
-def ref_stats(feats, dataset, split):
+def ref_stats(feats, dataset, split, grid=28):
     path = os.path.join(INC_DIR, f"stats_{dataset}_{split}.npz")
     if os.path.exists(path):
         z = np.load(path)
         return z["mu"], z["sigma"], int(z["n"])
-    X, _ = fs.load_mnist(split, 28, dataset)
+    X, _ = fs.load_mnist(split, grid, dataset)
     F = feats(X)
     mu, sigma = fs.stats(F)
     np.savez(path, mu=mu, sigma=sigma, n=F.shape[0])
@@ -165,17 +168,18 @@ def main():
     t0 = time.time()
     report(f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; inception_fid; job {os.environ.get('SLURM_JOB_ID', 'manual')}")
     prob = lm.make_problem(args.problem)
-    if prob["grid"] != 28:
-        raise SystemExit("Inception FID is set up for 28x28 problems")
+    grid = prob["grid"]
+    if grid not in (28, 32):
+        raise SystemExit("Inception FID is set up for 28x28 (MNIST, Fashion) and 32x32 (CelebA) problems")
     mean, std = prob["mean"], prob["std"]
     dataset = lm.problem_dataset(args.problem)
     feats, gpus = make_inception()
-    mu_tr, S_tr, n_tr = ref_stats(feats, dataset, "train")
-    mu_te, S_te, n_te = ref_stats(feats, dataset, "test")
+    mu_tr, S_tr, n_tr = ref_stats(feats, dataset, "train", grid)
+    mu_te, S_te, n_te = ref_stats(feats, dataset, "test", grid)
     Fte = np.load(os.path.join(INC_DIR, f"feats_{dataset}_test.npy")).astype(np.float64)
     report(f"problem {args.problem} ({dataset}); Inception-v3 pool_3 (TTUR graph, sha256 {GRAPH_SHA256[:12]}...); "
            f"TensorFlow GPUs {gpus}; reference statistics: {dataset} train ({n_tr}) and test ({n_te}), raw 8-bit images")
-    Xte, _ = fs.load_mnist("test", 28, dataset)
+    Xte, _ = fs.load_mnist("test", grid, dataset)
     metrics = {}
 
     def faint_pct(P):

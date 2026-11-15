@@ -775,11 +775,11 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         idx = jr.categorical(key, A / lm.TEMP, axis=-1, shape=(floor_samples,) + A.shape[:-1])
         return jnp.bincount(idx.ravel(), length=A.shape[-1]).astype(A.dtype) / idx.size
 
-    def one_step(carry, t_curr, lrs, dt, xs=None):
+    def one_step(carry, t_curr, lrs, dt, xs=None, data=None):
         params, adam_state, key, step, best_params, best_loss, best_epoch, ema = carry
         if xs is None:
             key, k_epoch, k_release = jr.split(key, 3)            # same split as run_optimization (third key unused there)
-            X = sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train, k_epoch, beta=1)
+            X = sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data, k_epoch, beta=1)
         else:                                                     # chunk_batches: this step's batch and third key, drawn
             X, k_release = xs                                     # before the scan (the carry's key is already advanced)
         k_floor = k_release
@@ -816,20 +816,29 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         ema = jax.tree_util.tree_map(lambda e, p: e + w_ema * (p - e), ema, new)
         return (new, adam_state, key, step + 1, best_params, best_loss, best_epoch, ema), loss
 
+    # The training data enter the jitted scan as an argument, not as a closure constant (2026-11-15): n is static and
+    # differs from slice to slice, so every slice compiles anew, and a closure constant embedded the whole data set in
+    # every executable (host memory grew by about the data size per slice: 64 GB OOM at slice 17 on CelebA's 162,770
+    # images; about 35 GB on Fashion). Same operations, same results.
+    data_dev = jnp.asarray(data_train)
+
     @partial(jax.jit, static_argnums=3)
-    def run(carry, t_curr, lrs, n, dt=0.0):
+    def _run(carry, t_curr, lrs, n, dt, data):
         if not chunk_batches:
-            return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt), carry, None, length=n)
+            return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt, data=data), carry, None, length=n)
 
         def keys(key, _):                 # one_step's per-step split of the key chain, ahead of the scan
             key, k_epoch, k_release = jr.split(key, 3)
             return key, (k_epoch, k_release)
 
         key, (k_epochs, k_releases) = jax.lax.scan(keys, carry[2], None, length=n)
-        Xs = jax.vmap(lambda k: sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data_train,
+        Xs = jax.vmap(lambda k: sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data,
                                                        k, beta=1))(k_epochs)
         return jax.lax.scan(lambda c, xs: one_step(c, t_curr, lrs, dt, xs), carry[:2] + (key,) + carry[3:],
                             (Xs, k_releases))
+
+    def run(carry, t_curr, lrs, n, dt=0.0):
+        return _run(carry, t_curr, lrs, n, dt, data_dev)
 
     return run, adam
 

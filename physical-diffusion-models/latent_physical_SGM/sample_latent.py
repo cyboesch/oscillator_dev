@@ -515,6 +515,70 @@ def equilibrate(drift_ode, diffusion, x_start, keys, S, chunk, t_rev=0.0):
     return x_eq, info
 
 
+FIXED_KEY_FOLD = 100         # --fixed-langevin: segment j's keys are fold_in(trajectory key, FIXED_KEY_FOLD + j)
+
+
+def parse_fixed_langevin(spec):
+    """--fixed-langevin 't:S1,S2,...' -> (t, [S1, S2, ...]): forward time 0 <= t <= T_FORWARD of the frozen parameters
+    and strictly increasing cumulative durations S > 0. ValueError otherwise."""
+    t_s, sep, s_s = spec.partition(":")
+    try:
+        t = float(t_s)
+        S = [float(s) for s in s_s.split(",") if s.strip()]
+    except ValueError:
+        raise ValueError(f"--fixed-langevin {spec!r}: expected 't:S1,S2,...', e.g. '0:1,5,25'") from None
+    if not sep or not S or not 0.0 <= t <= lm.T_FORWARD or S[0] <= 0 or any(b <= a for a, b in zip(S, S[1:])):
+        raise ValueError(f"--fixed-langevin {spec!r}: needs 0 <= t <= {lm.T_FORWARD:g} and increasing durations S > 0")
+    return t, S
+
+
+def fixed_langevin(args, hist, problem, prov, taus, diffusion, harmonic, patch, stem, t_start):
+    """--fixed-langevin (a control): is the time evolution needed at all? Overdamped Langevin dynamics under the
+    model's free energy with the parameters frozen at forward time t (equilibrate at reverse time T_FORWARD - t),
+        dx = -grad F(x; t) ds + sqrt(2T) dW,
+    whose stationary distribution is the model's p_t (for t = 0: the model's data distribution), from the trajectory
+    set's N(0, T I) states, i.e. the reverse process's own start. Saved after each cumulative duration S; segment j
+    continues from the states of segment j - 1 with Brownian keys fold_in(key, FIXED_KEY_FOLD + j) (equilibrate folds
+    them again by EQUIL_KEY_FOLD). If the dynamics mixed, the S samples would match the normal ones at large S."""
+    t_fwd, S_list = parse_fixed_langevin(args.fixed_langevin)
+    theta_hist, W_hist, b_hist, local_p, quad_p = hist
+    drift_ode, _ = make_drift(theta_hist, W_hist, b_hist, "ode", problem, prov.get("hidden", "ising"), local_p, quad_p,
+                              prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus, harmonic=harmonic,
+                              patch=patch)
+    grid, _ = lm.problem_geometry(problem)
+    x, keys = lm.trajectory_set(args.set, args.n, problem, grid * grid)
+    if x.shape[0] < args.n:
+        raise SystemExit(f"set {args.set} has only {x.shape[0]} trajectories for {problem}; --n {args.n} is too large")
+    x, keys = np.asarray(x[: args.n], dtype=np.float64), np.asarray(keys[: args.n])
+    k_slice = int(np.argmin(np.abs(np.asarray(taus) - t_fwd)))
+    print(f"--fixed-langevin: parameters frozen at forward time t = {t_fwd:g} (nearest slice {k_slice}, t = "
+          f"{float(taus[k_slice]):.4f}; interpolated as in sampling); start: the set's N(0, T I) states; cumulative "
+          f"durations {S_list}", flush=True)
+    s_prev = 0.0
+    for seg, S in enumerate(S_list):
+        name = f"{stem}_langevin-t{t_fwd:g}_S{S:g}"
+        if os.path.exists(name + ".npy"):
+            x, s_prev = np.load(name + ".npy"), S
+            print(f"  S = {S:g}: {name}.npy exists, continuing from it", flush=True)
+            continue
+        seg_keys = np.asarray(vmap(lambda k: jr.fold_in(k, FIXED_KEY_FOLD + seg))(jnp.asarray(keys)))
+        x, info = equilibrate(drift_ode, diffusion, x, seg_keys, S - s_prev, args.chunk, t_rev=lm.T_FORWARD - t_fwd)
+        np.save(name + ".npy", x)
+        rec = {"run": args.run, "problem": problem, "job": os.environ.get("SLURM_JOB_ID", "manual"),
+               "control": "fixed-slice Langevin dynamics, no time evolution", "t_forward": t_fwd,
+               "nearest_slice": k_slice, "S_total": S, "segment": seg, "segment_duration": S - s_prev,
+               "start": f"trajectory set '{args.set}', first {args.n} N(0, T I) states",
+               "segment_keys": f"fold_in(trajectory key, {FIXED_KEY_FOLD + seg}), then equilibrate's fold "
+                               f"{EQUIL_KEY_FOLD}", **info, "elapsed_total_s": time.time() - t_start}
+        with open(name + ".json", "w") as f:
+            json.dump(rec, f, indent=1)
+        print(f"  S = {S:g} (segment {S - s_prev:g}): {sum(info['chunk_seconds']):.0f} s, accepted steps per trajectory "
+              f"mean {info['steps_accepted_mean']:.0f}; median displacement {info['median_displacement']:.3f}; "
+              f"non-finite {info['n_nonfinite']}; wrote {name}.npy", flush=True)
+        s_prev = S
+    print(f"total {time.time() - t_start:.0f} s", flush=True)
+
+
 def init_start(args, kind, S, problem, run_dir, prov, hist, taus, diffusion, harmonic=None, patch=None):
     """--init-dist gauss / equil:S (main): the start states at reverse time 0 of the trajectory set's first args.n
     trajectories, whose Brownian keys stay theirs (so the samples are paired with the normal ones), and the manifest
@@ -647,6 +711,13 @@ def main():
                          "time units of Langevin dynamics dx = -grad F(x; slice 0) dt + sqrt(2T) dW under the model's own "
                          "free energy at t = 5 (equilibrate; no data). Writes <stem>_init-gauss[_r<r>].npy / "
                          "<stem>_init-equil<S>.npy (never the normal samples; refuses to overwrite)")
+    ap.add_argument("--fixed-langevin", default="",
+                    help="control (2026-11-15; default sampler only): no time evolution. 't:S1,S2,...' runs overdamped "
+                         "Langevin dynamics dx = -grad F(x; params frozen at forward time t) ds + sqrt(2T) dW from the "
+                         "trajectory set's N(0, T I) states (the diffusion's own start) and saves the states after the "
+                         "cumulative durations S1 < S2 < ... (e.g. '0:1,5,25'; t = 0 is the last slice, whose "
+                         "stationary distribution is the model's data distribution). Each segment has its own Brownian "
+                         "keys. Writes <stem>_langevin-t<t>_S<S>.npy / .json; skips existing ones (continues from them)")
     ap.add_argument("--init-rank", type=int, default=None,
                     help="(--init-dist gauss) only the top r principal axes of the data get their extra variance, the "
                          "others keep T: 0 = the mean shift alone; default: the full covariance")
@@ -665,6 +736,15 @@ def main():
     if init_kind != "set" and (args.fast or args.thin_knots or args.oracle_start is not None):
         ap.error("--init-dist gauss / equil:S works on the default sampler only, and not together with --thin-knots "
                  "or --oracle-start")
+    if args.fixed_langevin:
+        try:
+            parse_fixed_langevin(args.fixed_langevin)
+        except ValueError as err:
+            ap.error(str(err))
+        if (args.fast or args.thin_knots or args.oracle_start is not None or init_kind != "set" or quench
+                or args.sampler != "sde"):
+            ap.error("--fixed-langevin works alone (default SDE sampler; no --fast, --thin-knots, --oracle-start, "
+                     "--init-dist or --quench)")
     if args.fast:
         return main_fast(args, quench)
     if (args.brownian_tol is not None or args.precision != "f64" or args.visible_impl != "auto"
@@ -730,14 +810,19 @@ def main():
         if args.init_rank is not None and args.init_rank > n_dim:
             raise SystemExit(f"--init-rank {args.init_rank}: at most the dimension {n_dim} of {problem}")
         stem += init_suffix(init_kind, init_s, args.init_rank)
-        if os.path.exists(stem + ".npy"):
-            raise SystemExit(f"{stem}.npy exists; --init-dist does not overwrite samples")
+        if os.path.exists(stem + ".npy") and not quench:      # with --quench: quench the saved samples (2026-11-15)
+            raise SystemExit(f"{stem}.npy exists; --init-dist does not overwrite samples (with --quench it quenches them)")
         print(f"--init-dist {args.init_dist}" + ("" if args.init_rank is None else f" --init-rank {args.init_rank}")
               + f": writes {stem}.npy", flush=True)
     drift, diffusion = make_drift(theta_hist, W_hist, b_hist, args.sampler, problem, prov.get("hidden", "ising"),
                                   local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
                                   harmonic=harm_p, patch=patch_p)
-    if init_kind != "set":
+    if args.fixed_langevin:                   # control: one frozen slice, no time evolution; then stop
+        del drift
+        fixed_langevin(args, (theta_hist, W_hist, b_hist, local_p, quad_p), problem, prov, taus, diffusion, harm_p,
+                       patch_p, stem, t_start)
+        return
+    if init_kind != "set" and not (quench and os.path.exists(stem + ".npy")):   # quench-only: no new start
         x_init, prov["init_dist"] = init_start(args, init_kind, init_s, problem, run_dir, prov,
                                                (theta_hist, W_hist, b_hist, local_p, quad_p), taus, diffusion,
                                                harmonic=harm_p, patch=patch_p)

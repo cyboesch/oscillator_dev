@@ -59,6 +59,10 @@ def report(s=""):
 def load_mnist(split, grid, dataset="mnist"):
     """The images (n, grid^2) in [0, 1] and labels of a split; dataset 'fashion' (2026-11-14): the raw Fashion-MNIST
     files (latent_model.load_fashion_raw; 28x28 only), else MNIST from tensorflow_datasets as before."""
+    if dataset == "celeba":                # CelebA 32x32 grey (2026-11-15); its 'test' split is the official test partition
+        if grid != lm.CELEBA_GRID:
+            raise SystemExit("CelebA is used at 32x32 only")
+        return lm.load_celeba_raw(split)
     if dataset == "fashion":
         if grid != 28:
             raise SystemExit("Fashion-MNIST is used at 28x28 only")

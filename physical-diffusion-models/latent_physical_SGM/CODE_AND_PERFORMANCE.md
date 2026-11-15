@@ -3314,3 +3314,292 @@ structure.
 - **Data source:** the plot reads `report.txt`, not `metrics.json`. In the `metrics.json` of 4253087 / 4253088 /
   4254741, every 'faint zeroed' row had the same key, so only the last one survived. Fixed in `inception_fid.py`: the
   key is now `<label> [faint zeroed]`.
+
+### CelebA 32x32 grey: set-up (2026-11-15 11:50; the user: "lets try CelebA 32x32, gray")
+
+- **Why CelebA first** (not CIFAR-10): faces are aligned, which suits the global template mixture, and they bring
+  natural-image texture for the patches. CIFAR-10 (objects at any position and scale) is parked until hidden units
+  with memory exist.
+- **Data** (`make_celeba_data.py`, CPU job 4254815):
+  - Source: Hugging Face parquet export `flwrlabs/celeba`, config `img_align+identity+attr` (the official aligned
+    178x218 JPEGs and the official train / valid / test partition, 162,770 / 19,867 / 19,962).
+  - Shards in `physical-diffusion-models/data/CelebA/parquet/`.
+  - Preprocessing: centre crop 140x140 (box 19, 39, 159, 179), PIL `convert('L')` (luma), antialiased bicubic resize
+    to 32x32, 8 bit.
+  - Output: `data/CelebA/celeba_gray32_<split>.npz` (uint8, n x 1024), preview `data/CelebA/preview_gray32.png`.
+- **Problem `celeba32g`** (`latent_model.py`):
+  - 32x32 = 1024 visible units, default radius 16 (runs use radius 1 as before).
+  - Full train split; one class, so labels are all 0 (the pooled prototype initialisation uses no labels).
+  - Same sigma = 0.01 pixel noise and global normalisation as MNIST / Fashion, for consistency (the noise inflates the
+    Inception FID; see the diagnostics above).
+  - Backup before the edit: `../latent_physical_SGM_pre_ising_patch/latent_model_pre_celeba.py`.
+- **Evaluation:**
+  - The classifier FID, multiclass and grain measures are digit / class specific and are not used.
+  - `fid_score.load_mnist` loads CelebA (`dataset='celeba'`) for `inception_fid.py`, now grid-generic (28 or 32).
+    Reference: the train split (162,770); floor: the official test split.
+  - The pipeline skips the class-based evaluation for `celeba*`.
+- **Patches:** 8:2:32 gives 13 x 13 = 169 patches of 8x8 on the 32 grid (121 on 28x28).
+- **12:16: data done** (job 4254921; the first job 4254815 was cancelled at 4 min per shard, so the conversion now runs
+  in parallel over shards on 8 CPUs).
+  - Splits: train 162,770 / valid 19,867 / test 19,962 (as the official partition). Pixel mean 0.441 / 0.444 / 0.435.
+  - The parquet shards take 12 GB in `data/CelebA/parquet/`. They are a download cache only and can be deleted (ask
+    the user first).
+  - Preview (`data/CelebA/preview_gray32.png`): centred grey faces, as intended. Rows of the parquet are grouped by
+    identity, so never use "the first N images" as a subset.
+- **12:20: smoke pipeline submitted** (4254924): K64 + patch8:2:32 from slice 55, `--steps-scale 0.01`, 100 samples.
+
+### Control: Langevin dynamics at one frozen slice, no time evolution (2026-11-15 12:00; the user's idea)
+
+- **Question:** the t = 0 slice's free energy, run as Langevin dynamics at T, has the model's data distribution as its
+  stationary distribution. If that mixed in practice, the time evolution would be unnecessary.
+- **Expectation:** it does not mix. At t = 0 the basins of different templates and digits are separated by barriers
+  far above T = 0.02, and far from the data (where the noise start is) the t = 0 force was never trained. This is the
+  standard motivation for annealing (Song & Ermon 2019). Either outcome is useful for the paper: failure argues for
+  time-dependent parameters (cf. Wang & Achour, 1 -> 4 weight sets: MNIST FID 62.7 -> 27.6); success would mean a
+  fixed-parameter equilibrium sampler suffices (much simpler hardware).
+- **Code:** `sample_latent.py --fixed-langevin t:S1,S2,...` reuses `equilibrate()` with the parameters frozen at
+  forward time t. It starts from the trajectory set's N(0, T I) states (the diffusion's own start), saves after the
+  cumulative durations S, and each segment has its own Brownian keys (fold FIXED_KEY_FOLD = 100 + j). Output:
+  `<stem>_langevin-t<t>_S<S>.npy / .json`.
+- **New:** `chain_switch.py` classifies the same chains at each checkpoint and reports class shares, confident share,
+  nearest-training-image distance, and the share of chains that change class between checkpoints.
+- **Run** (GPU 4254826): MNIST ten digits, K784 + patch7x7 seed 1, n = 500, t = 0, S = 1 / 5 / 25.
+  - 1617 / 3818 / 14432 accepted steps per segment (111 / 209 / 820 s).
+  - No non-finite chains.
+  - Median displacement per segment 13.4 / 47.9 / 40.9: the chains keep moving.
+- **Queued after it:**
+  - gallery 4254856 (`galleries/2026-11-15_mnist-ten-digits_K784+patch7x7_fixed-slice-langevin-at-t0_S1-S5-S25_vs_annealed/`);
+  - chain_switch 4254857;
+  - classifier FID 4254858;
+  - Inception FID 4254859.
+- **Results (12:18; chain_switch 4254857, FID 4254858, Inception 4254859, gallery 4254856): the frozen t = 0 dynamics
+  fail completely.**
+
+  | Samples | n | classifier FID | Inception FID (train) | prec / rec (features) | class shares |
+  |---|---|---|---|---|---|
+  | annealed diffusion, equil start | 2000 | 8.94 | 66.2 | 0.84 / 0.73 | 8-12% each |
+  | annealed diffusion, noise start | 2000 | 10.22 | 66.1 | 0.84 / 0.75 | 8-13% each |
+  | fixed t = 0 Langevin, S = 1 | 500 | 567 | 266 | 0.40 / 0.00 | none confident |
+  | fixed t = 0 Langevin, S = 5 | 500 | 456 | 282 | 0.05 / 0.00 | '2' 45%, '3' 31%, '8' 21% |
+  | fixed t = 0 Langevin, S = 25 | 500 | 791 | 325 | 0.00 / 0.00 | '2' 85% |
+
+  - **Gallery:** every chain collapses onto an almost blank (black) image, often with a small blob in the top-left
+    corner (a corner patch unit). No chain forms a digit at any S. The "class shares" are the classifier's verdict on
+    blank images, not digits.
+  - The chains keep moving (median displacement 41-48 per segment) but within this blank basin: faint pixels drop from
+    45% (S = 1) to 6% (S = 25). They relax into the blank, deeper over time.
+  - **Interpretation:** from the diffusion's noise start, the t = 0 force pushes every pixel towards the background
+    (most pixels in the data are background). The global Potts unit never selects a template, because the overlap of
+    noise with any template is tiny. The model was never trained there, so its t = 0 energy has a spurious "blank"
+    basin that captures every chain, and no digit basin is reached in 25 time units (5x the diffusion's duration).
+  - **Conclusion for the paper:** the time evolution is essential. Equilibrium sampling at the final parameters does not
+    work from noise; the annealed schedule is what carries the state from noise into the digit basins.
+- **Possible follow-ups (not run):**
+  - t = 0 dynamics started from real training images: are they stationary, and do chains change digit (barrier test)?
+  - Frozen parameters at intermediate t (1, 2) followed by a short anneal or quench: how much of the schedule is
+    needed?
+
+### Temperature on the sampling side: zero-temperature quench and probability-flow ODE (submitted 2026-11-15 12:50; the user: "start 1 and 2 alongside CelebA")
+
+- **Why:** temperature was never varied.
+  - The training temperature T mostly reparametrises time (a uniform shift of the log-SNR), and the time-grid direction
+    is closed (11-11), so we do not retrain at another T.
+  - Sampling-side tests cost little:
+    1. **Zero-temperature quench after sampling** (`--quench`, built earlier, never evaluated). It should remove the
+       sigma = 0.01 pixel noise that costs about 30 Inception FID on MNIST. Caveat from the fixed-slice control: the
+       t = 0 energy has a spurious blank basin, so long quenches may wash digits out, hence three durations.
+    2. **Probability-flow ODE sampler** (`--sampler ode`, deterministic). In theory the same marginals as the SDE;
+       with an imperfect model it may differ either way.
+  - Only if these show sensitivity: a sampling-temperature knob (force scaled 0.8-1.25).
+- **Models** (cheap; best K784 settings):
+  - MNIST: K784 + patch7x7 from t2.2, seed 1.
+  - Fashion: K784 + patch8x8 every 2 px from t2.2, seed 1.
+  - All from the noise start, so the ODE pairs with the existing SDE samples (same start states). The equilibrated
+    start cannot be quenched by `sample_latent` (`--init-dist` refuses an existing stem).
+- **Jobs:**
+
+  | | quench 0.05 / 0.25 / 1 | ODE | classifier FID | Inception FID | gallery |
+  |---|---|---|---|---|---|
+  | MNIST | 4254960 | 4254962 | 4254964 | 4254965 | 4254966 |
+  | Fashion | 4254961 | 4254963 | 4254967 | 4254968 | 4254969 |
+
+  - Galleries: `galleries/2026-11-15_<mnist|fashion>_<model>_SDE-vs-ODE-sampler_and_zero-temperature-quench-0.05-0.25-1/`.
+- **Results (13:05; FID 4254964 / 4254967, Inception 4254965 / 4254968, galleries 4254966 / 4254969).**
+  All from the noise start, n = 2000.
+
+  **MNIST, K784 + patch7x7:**
+
+  | Sampler | classifier FID | Inception FID (train) | Inception FID_inf | faint % | prec / rec (features) |
+  |---|---|---|---|---|---|
+  | SDE (normal) | 10.22 | 66.1 | 63.5 | 36 | 0.84 / 0.75 |
+  | SDE + quench 0.05 | 9.79 | 48.9 | 46.6 | 32 | 0.84 / 0.75 |
+  | SDE + quench 0.25 | 9.11 | 35.2 | 32.7 | 14 | 0.83 / 0.76 |
+  | SDE + quench 1 | **7.66** | **27.9** | **25.4** | 12 | 0.81 / 0.80 |
+  | ODE (deterministic) | 22.12 | 76.4 | 73.8 | 37 | 0.85 / 0.56 |
+
+  **Fashion, K784 + patch8x8 every 2 px:**
+
+  | Sampler | classifier FID | Inception FID (train) | Inception FID_inf | faint % | prec / rec (features) |
+  |---|---|---|---|---|---|
+  | SDE (normal) | 4.09 | 57.6 | 52.7 | 28 | 0.93 / 0.65 |
+  | SDE + quench 0.05 | 4.05 | 51.8 | 47.2 | 27 | 0.92 / 0.66 |
+  | SDE + quench 0.25 | 3.81 | 37.8 | 33.5 | 24 | 0.92 / 0.67 |
+  | SDE + quench 1 | **3.17** | **26.4** | **21.5** | 21 | 0.82 / 0.73 |
+  | ODE (deterministic) | 6.73 | 78.3 | 73.3 | 28 | 0.92 / 0.60 |
+
+  - **Quench: a large gain on every metric, growing with the duration up to 1 (the longest tried).**
+    - Paired, quench 0.25 vs SDE: MNIST -1.11 [-1.17, -1.04], Fashion -0.28 [-0.34, -0.20] classifier FID.
+    - Inception FID roughly halves: MNIST 66 -> 28, Fashion 58 -> 26.
+    - With quench 1 we are below Wang & Achour on both data sets as legitimate model numbers, not the
+      thresholding diagnostic: MNIST FID_inf 25.4 vs 27.6, Fashion 21.5 vs 80.8.
+    - Quench 1 beats even "faint pixels zeroed" (MNIST 26.1 zeroed vs 27.9 as is; Fashion 27.3 vs 26.4), so it
+      improves more than the background.
+    - The classifier FID improves too (Fashion 3.17: the best Fashion value so far, below K1536 equil 3.22), and recall
+      rises (MNIST 0.75 -> 0.80) while feature precision falls slightly.
+  - **Gallery:** shapes are unchanged by the quench. Stroke speckle and background dots disappear; Fashion fills
+    become smooth. No sign of the blank-basin collapse at these short durations.
+  - **ODE sampler: clearly worse** (paired vs SDE: MNIST +11.9 [+9.9, +14.0], Fashion +2.64 [+2.03, +3.43]). Gallery:
+    noisy, broken shapes; other items than the SDE for the same start. The stochastic sampler corrects the model's
+    errors, and the ODE has no such correction. Do not use the ODE.
+  - **Interpretation:** the end of the SDE leaves every sample with the bath's thermal fluctuation (T = 0.02) around
+    its local minimum. Inception reads this as noise, and partly the classifier does too. Cooling the bath at the end
+    removes it. Physically this is free: switch off the noise source (the bath) for a moment at the end of the protocol.
+- **13:10: longer quench and the equilibrated start** (quench-only on `--init-dist equil:3` samples now works:
+  `sample_latent` quenches the existing file instead of refusing).
+
+  | | quench, noise start (2, 5, 10) | quench, equil start (0.25, 1, 2, 5, 10) | classifier FID | Inception FID | gallery |
+  |---|---|---|---|---|---|
+  | MNIST | 4255002 | 4255003 | 4255004 | 4255005 | 4255006 |
+  | Fashion | 4255007 | 4255008 | 4255009 | 4255010 | 4255011 |
+
+  - Galleries: `galleries/2026-11-15_<mnist|fashion>_<model>_zero-temperature-quench-durations-up-to-10_noise-and-equil-start/`.
+
+### Bug fix: host-memory leak in training, found with CelebA (2026-11-15 13:20)
+
+- **Symptom:** the CelebA smoke (4254973) was OOM-killed at slice 17 with 64 GB host memory (MaxRSS 67 GB). Fashion
+  K1536 runs peaked at 35 GB, so the leak was there before, unnoticed.
+  - The first smoke (4254924) was cancelled for a different reason: the patch k-means on the CPU (169 patches x
+    162,770 images) took over 30 min. `--ref-kmeans gpu` takes 82 s.
+- **Cause:** `train_latent.build_runner`'s jitted `run` has the step count n as a static argument, and n differs from
+  slice to slice, so every slice compiles anew. The training data were a closure constant, so XLA embedded the whole
+  data set in every executable. Host memory grew by about the data size per slice.
+- **Fix:** the data enter `_run` as an argument (`data_dev = jnp.asarray(data_train)`, passed by a thin wrapper `run`);
+  `one_step` takes `data=`. Backup of the old version: `../latent_physical_SGM_pre_ising_patch/train_latent_pre_dataarg.py`.
+- **Check (job 4255015, then the corrected comparison):** old vs new training, mnist28_d0123, K64, patch 7:3:32 from
+  slice 2, 4 slices at 2% steps. All 54 numeric arrays of the 4 slice files are bitwise identical (W, b, theta, Wp,
+  bp, Qp, EMA, losses, keys, validation). Only the `record` metadata strings (timings, names) differ. Temporary
+  scripts and check runs deleted.
+- **13:25: CelebA smoke resubmitted (4255023)** with the fix and `--ref-kmeans gpu`.
+
+### Memorisation check by nearest neighbours: quench does not memorise (2026-11-15 13:35; jobs 4255018 / 4255019; the user: "check whether it's not just memorizing")
+
+- **New script:** `nn_check.py`.
+  - For each sample: the Euclidean pixel distance to its nearest training image (raw images the model saw) and to its
+    nearest test image.
+  - Baseline: 2000 real test images and their nearest training image, i.e. how close a genuinely new real image comes.
+  - Figures: per set, triplets (sample | nearest train | nearest test), 12 random samples plus the 6 closest to the
+    training set; and a histogram against the baseline.
+  - Folders: `galleries/2026-11-15_<mnist|fashion>_<model>_nearest-neighbours-train-and-test_SDE-vs-zero-temperature-quench/`.
+- **MNIST** (K784 + patch7x7; baseline real test -> train: median 4.30, 5th percentile 1.69, 1st 1.26):
+
+  | Set | d_train median | d_test median | closer than baseline p5 | d_train < 1 |
+  |---|---|---|---|---|
+  | SDE, noise start | 4.65 | 5.06 | 0.8% | 0% |
+  | + quench 1 | 4.59 | 5.03 | 1.1% | 0% |
+  | + quench 10 | 4.69 | 5.09 | 1.1% | 0% |
+  | equil start + quench 1 | 4.59 | 5.02 | 1.1% | 0% |
+
+- **Fashion** (K784 + patch8x8 every 2 px; baseline: median 3.48, p5 1.95, p1 1.55):
+
+  | Set | d_train median | d_test median | closer than baseline p5 | d_train < 1 |
+  |---|---|---|---|---|
+  | SDE, noise start | 3.54 | 3.82 | 1.1% | 0% |
+  | + quench 1 | 3.39 | 3.66 | 3.2% | 0% |
+  | + quench 10 | 3.46 | 3.76 | 3.3% | 0% |
+  | equil start + quench 1 | 3.35 | 3.67 | 2.6% | 0% |
+
+- **Reading: no memorisation, with or without the quench, even at quench 10.**
+  - Samples sit about as far from the training set as real unseen images do (median 4.6 vs 4.3; Fashion 3.4 vs 3.5).
+  - Fewer samples than real test images are unusually close: 1-3% below the baseline's 5th percentile, where real
+    images by definition have 5%.
+  - No near-copy (d < 1) at all.
+  - The gap d_test > d_train holds for real images too: the training set is 5-6x larger, so its nearest neighbour is
+    closer.
+  - The quench moves samples slightly towards the data (Fashion median 3.54 -> 3.39) but not onto training images.
+- **Pictures:**
+  - The random samples differ visibly from their nearest training image (other slant, thickness, proportions).
+  - The "closest" samples are simple shapes, upright 1s and trousers, where real test images also have training
+    neighbours at 1.5-2.0. Simple classes are dense in the data, so this is not copying.
+- **Results, longer quench (13:40; FID 4255004 / 4255009, Inception 4255005 / 4255010, galleries 4255006 / 4255011).**
+  Classifier FID raw / clipped; Inception FID against train at n = 2000 (FID_inf in brackets).
+
+  **MNIST, K784 + patch7x7, equilibrated start:**
+
+  | Quench | raw | clip | Inception | rec F |
+  |---|---|---|---|---|
+  | 0 | 8.94 | 9.62 | 66.2 (63.4) | 0.73 |
+  | 0.25 | 7.88 | 8.40 | 34.8 (31.9) | 0.76 |
+  | 1 | 6.58 | 7.52 | 27.7 (24.9) | 0.79 |
+  | **2** | **5.81** | **7.46** | 24.0 (21.3) | 0.83 |
+  | 5 | 18.35 | 9.14 | **21.1 (18.8)** | 0.85 |
+  | 10 | 45.72 | 14.00 | 22.5 (20.1) | 0.86 |
+
+  **Fashion, K784 + patch8x8 every 2 px, equilibrated start:**
+
+  | Quench | raw | clip | Inception | rec F |
+  |---|---|---|---|---|
+  | 0 | 3.62 | 5.48 | 56.7 (52.1) | 0.64 |
+  | 0.25 | 3.39 | 4.01 | 37.5 (32.4) | 0.66 |
+  | **1** | **3.00** | 3.54 | **26.9 (22.4)** | 0.71 |
+  | 2 | 6.06 | **3.45** | 27.5 (23.0) | 0.73 |
+  | 5 | 35.92 | 3.46 | 32.0 (27.8) | 0.75 |
+  | 10 | 114.55 | 3.80 | 37.2 (31.8) | 0.75 |
+
+  (The noise start gives the same pattern, about 0.5-1 worse on the classifier FID.)
+  - **Paired:**
+    - MNIST equil: quench 1 vs none -2.36 [-2.49, -2.12]; quench 5 vs quench 1 +11.8.
+    - Fashion equil: quench 1 vs none -0.62 [-0.78, -0.44]; quench 5 vs quench 1 +32.9.
+  - **Why the raw classifier FID explodes at long quenches:** pixel values overshoot [0, 1]. Clipped, Fashion stays at
+    3.5-3.8 up to quench 10, and Inception (which clips) sees no blow-up. Zero-temperature relaxation under the t = 0
+    energy drives pixels past the data range: the quartic wells sit outside [0, 1] in pixel units, and the thermal
+    noise normally keeps samples inside. On MNIST there is also a mild real decline at quench 10 (clip 14.0, confident
+    88% -> 82%).
+  - **Gallery (MNIST):** long quenches remove all stray dots and thicken strokes slightly. A few thin parts erode.
+    Shapes stay recognisable; no collapse to blank at durations up to 10 (unlike the noise-start fixed-slice control,
+    because here the start is already a digit).
+  - **Recall rises monotonically with the quench** (MNIST 0.73 -> 0.86, real 0.88), precision falls slightly. The
+    quench makes the samples' feature distribution broader and more data-like.
+  - **Best recipe:** quench 1-2 after the SDE.
+    - MNIST equil + quench 2: classifier FID 5.81 (the best K784 MNIST so far; K6144 + patches without quench was
+      5.35) and Inception 24.0.
+    - Fashion equil + quench 1: classifier FID 3.00 (best Fashion so far) and Inception 26.9 (FID_inf 22.4, vs Wang &
+      Achour 80.8).
+    - For the paper, report quench 1 (or 2) on all models; check that the choice does not depend on K (K6144 / K1536
+      next).
+- **13:34: CelebA smoke passed** (4255023, 27 min, MaxRSS 13 GB instead of 67 GB).
+  - Training at 1% steps: about 3-6 s per slice (about 34 s before the fix; the per-slice recompile with the embedded
+    data was most of it).
+  - Patch units active from slice 55; 100 samples written; summary ran; pipeline exit code 0.
+  - Sampling 100 trajectories (padded to a chunk of 250) took 952 s on the barely trained smoke model.
+- **13:40: real CelebA runs submitted** (Fashion recipe; seed 1; 2000 samples from the noise start each):
+
+  | Pipeline | Model |
+  |---|---|
+  | 4255078 | K784, no patches |
+  | 4255079 | K784 + patch8x8 every 2 px from t2.2 |
+  | 4255080 | K1536 + patch8x8 every 2 px from t2.2 |
+
+  - Afterwards: equilibrated start, quench 1-2, Inception FID (vs CelebA train 162,770; floor = test), gallery,
+    nearest-neighbour check.
+
+### Quench 1 on the largest models: MNIST K6144, Fashion K1536 (submitted 2026-11-15 13:50; the user: "also run quench 1 on K6144 MNIST and K1536 Fashion")
+
+- **MNIST K6144 + patch7x7, seed 1** (platform allocator, chunk 25, 160 GB as for its sampling):
+  - quench 1 on the noise start 4255371 and the equil start 4255372;
+  - classifier FID 4255377, Inception FID 4255378, gallery 4255379
+    (`galleries/2026-11-15_mnist_K6144+patch7x7-from-t2.2_zero-temperature-quench1_noise-and-equil-start/`).
+- **Fashion K1536 + patch8x8 every 2 px:**
+  - quench 1 on the noise start, seed 1: 4255373;
+  - quench 1 on the equil start, seeds 1-3: 4255374 / 4255375 / 4255376;
+  - classifier FID 4255380 (paired quench vs none per seed), Inception 4255381, gallery 4255382
+    (`galleries/2026-11-15_fashion_K1536+patch8x8-every2px-from-t2.2_zero-temperature-quench1_seeds1-3/`).
