@@ -2824,3 +2824,175 @@ without losing FID; or plain-from-t3.4-level recall with t2.2-level precision.
   21:00). FID 4243062, grain 4243063 and gallery 4243064 depend on them. Then a blind count against K784 / K3072.
 - The Ising patch results are above.
 - The current best recipe is unchanged.
+
+### Deep tree: built in a candidate folder, tests running (2026-11-14 18:50)
+**Built from the handoff spec** in `../latent_physical_SGM_tree_candidate/`; the live modules are frozen in
+`../latent_physical_SGM_pre_tree/` for the bit-for-bit tests (block 21 D, G).
+- `latent_model.py`:
+  - `tree_terms` (grad, Laplacian, F, pi, q), `tree_free_energy`, `tree_stats`, `check_tree`.
+  - The Laplacian's between-g part is computed centred, as Var_g = sum_g pi_g |m_g - E f|^2.
+  - **Memory fix:** the spec's estimate left out gbar_p(g), (B, K, P, d), about 5 GB at batch 512 in float32. So
+    tree_terms runs over chunks of TREE_CHUNK = 64 samples (lax.map, each chunk rematerialised in the backward pass by
+    jax.checkpoint). Memory is then that of one chunk.
+  - `make_loss` / `make_loss_per_sample` / `make_force`: with 'J' in params the tree replaces the global unit's and the
+    patches' terms. Without 'J' nothing changes.
+- `train_latent.py`:
+  - `--tree`: needs --hidden potts, --quad, K > 0 and Potts --patch; refused with --split-dead.
+  - J starts at zero at the patch switch-on. Learning rate per patch = the patch biases' rate.
+  - config 'tree': true only when set. Resume and --init-from refuse a mismatch.
+  - Slice files hold J in float64 (zeros before the switch-on). hidden_history.npz holds J in float32, as the last
+    member (0.64 GB at K784).
+  - Diagnostics tree_*: |J|, rms J/T, I(g; s_p), effective global states, the two parts of the coupled force.
+- `sample_latent.py`: the patch tuple becomes a 5-tuple (Wp, bp, Qp, 'potts', J). make_drift uses tree_terms in place of
+  the global and patch forces. The manifest records `tree`. `--fast` still refuses patch runs. Also fixed: --thin-knots
+  crashed on the patch kind string.
+- `early_slices.py` reports rms J/T and I(g; s_p); `make_gallery.py` lists `tree` in the README.
+
+**Tests** (block 21 of the candidate's test_latent.py, CPU):
+- 4245123: parts A-E (formulas against autodiff, chunking, J = 0 = today's terms, loss / force / gradient along J,
+  mixed precision, default paths bit for bit, sampler drift).
+- 4245124: part G (command lines).
+
+**GPU benchmark** 4245127 (`tree_bench.py`): step time and memory at K784, 7:3:32, batch 512, chunks 32/64/128;
+mixed against float64 on the real slice-31/55/80 parameters; the drift at --chunk 250; the validation loss; the
+estimated training time.
+
+### Deep tree: tests passed, installed, overnight runs submitted (2026-11-14 19:20)
+**Tests: all 37 checks pass** (block 21 A-E 4245123: 28/28; block 21 G 4245128: 9/9; the first G job 4245124 failed on
+a log line that used K before it was defined; fixed).
+- **Formulas.** tree_terms gradient and Laplacian against autodiff of tree_free_energy: 9.6e-15 / 1.5e-14. Chunked =
+  one chunk 3.9e-15. J = 0 = the global unit plus the patches 2.8e-14. Loss against a full-autodiff reference:
+  <= 2.6e-16, three configurations (with/without Qp, local, harmonic modes). Gradient along J against central
+  differences: 3e-9 to 2e-8.
+- **Mixed precision** (7:3:8 patches at the scale-1 reference, J rms 2 T, 96 samples, so the chunked path): gradient
+  error 1e-6 to 8e-5 relative, cosine 1.00000000 at t = 5 ... 0.
+- **Bit for bit unchanged:** make_loss (value, gradient, jaxpr; no patches, Potts and Ising patches; float64 and
+  mixed), make_force, make_drift (3/4/5-tuples), and a 3-slice Potts patch training run old against new code.
+- **Command lines.** Guards, 100-slice toy run (J float32 (100, 9, 8, 4), last slice = the slice file), resume without
+  --tree refused, --patch-on-slice 50 (J zero in 0-49), the sampler with the normal and equil start (manifest tree),
+  --fast refused.
+- **Note on the diagnostic** I(g; s_p | x): on the toy run it is about 1e-15 although rms J/T = 0.34, because the
+  global unit is decided there (pi a delta given x, so no mutual information given x). On the real runs it is non-zero
+  only where the global state is uncertain. The coupled force parts (force_rms_tree_glob / _patch) show what J does.
+
+**Installed 19:10:** latent_model, train_latent, sample_latent, early_slices, make_gallery, test_latent, tree_bench (new).
+The live files were checked unchanged against `../latent_physical_SGM_pre_tree/` before the swap. That folder keeps
+the pre-tree modules (block 21 D, G). The candidate folder is kept until the runs are through.
+
+**Runs** (four digits, K784, Potts patches 7:3:32, start scale 0.06, J = 0 at the switch-on, seed 1, n = 500; the base
+flags of the recipe plus `--tree`; pipelines with a 24 h limit because the step cost was not measured yet):
+
+| patches from | pipeline | equil:3 | run |
+|---|---|---|---|
+| slice 31 (t 3.4), the decisive one | 4245704 | 4245705 | `..._mixst_treepatch7s3S32on31_seed1` |
+| slice 55 (t 2.2), the control | 4245706 | 4245707 | `..._mixst_treepatch7s3S32on55_seed1` |
+
+- Follow-ups after all four: FID 4245708 (pairs: tree against plain patches at the same switch-on and start; tree
+  t3.4 against plain t2.2, equil), grain 4245709, gallery 4245710
+  (`galleries/2026-11-14_four-digits_K784+treepatch7x7_vs_pottspatch7x7_from-t3.4-and-t2.2_seed1/`).
+- Then the blind count. **Success:** fewer malformed digits than plain patches from t 2.2 (4.8%) without losing FID
+  (7.68 noise / 6.42 equil).
+- GPU benchmark 4245127 still queued: step time, memory, chunk size, drift cost at --chunk 250.
+
+### Deep tree: far too slow to train; overnight runs cancelled (2026-11-14 19:50)
+**GPU benchmark 4245127** (`tree_bench.py`, L40, K784, 7:3:32, batch 512, mixed, parameters of the plain t3.4 run):
+- One training step: **621 ms with the tree, 1.2 ms with plain patches (540 x)**. The temporary memory is only 1.1 GB,
+  so memory is not the limit. The chunk size (32/64/128) made no difference (the benchmark may have reused one
+  compiled trace; 64 is what training uses).
+- Estimated training time: **about 340 h from slice 31, 240 h from slice 55** (the plain run takes 0.74 h).
+- Sampler drift at --chunk 250: 50.8 ms against 2.2 ms per call (23 x).
+- Validation loss on 4096 samples in float64: 11.3 s (15.5 GB).
+- Precision is fine: mixed against float64, J/W/Wp gradient error 5e-6 to 2e-4 at t 3.4 ... 1. (The theta numbers in the
+  report compare the stencil with the dense visible energy without masking the dropped pair terms: not a defect.)
+- What J does at the real parameters (random J): with rms J = 1 T, I(g; s_p) = 0.18 nats at t 3.4 and the effective
+  global states drop from 5.8 to 3.5. So J at this size would change the model at the times that matter.
+- **Why:** per sample the tree touches K P S = 1.6 M posteriors and K P d = 2.5 M gbar entries, against K N = 0.6 M for
+  the global unit. At batch 512 these are tensors of about 1e9 elements, read and written many times (forward,
+  backward, recomputation). The spec's estimate of 3-5 x was off by two orders of magnitude.
+
+**Cancelled** before they started: pipelines 4245704 / 4245706, equil 4245705 / 4245707, FID / grain / gallery
+4245708-10. The code stays installed (unused without --tree; default paths bit for bit unchanged).
+
+**Options** (decision for the user):
+1. **Tied J:** the 784 global states share J rows within C groups (for example the prototypes' k-means, C = 32-64), so
+   J_p[g, s] = J_p[c(g), s]. Exact. The patch part costs C instead of K, about 12-25 x less: perhaps 25-50 ms per
+   step, so still about 10-20 h from slice 31. Needs a benchmark.
+2. **Top-k truncation:** use only each sample's k most probable global states (k about 8-16; the benchmark shows 1-6
+   effective states at t <= 3.4). Exact up to the dropped posterior mass, which can be measured. Choosing the top k
+   still needs Z_p(g) for every g.
+3. **A small separate root:** a new unit with C = 16-32 states coupled to the patches; the K784 global unit stays
+   independent. Exact and the cheapest, but the coupled unit is not the one that decides the shapes now.
+
+**Parked (2026-11-14 23:00; the user: a different research question; first see what the RBM structure gives; maybe
+the paper's outlook).** The tree code lives on branch `deep_tree` (commit ddc9df6 on top of 2bc2691, with these
+sections and test block 21; not pushed yet: this shell has no GitHub credentials). latent_physical_SGM no longer
+carries it: the five tree-only files are back at 2bc2691, and latent_model.py keeps only the Fashion-MNIST additions.
+
+### Results: ten digits, K6144 + patches (2026-11-14 21:30; sampling 4243157 / 4243472, FID 4243062, grain 4243063, gallery 4243064)
+n = 2000, floor 1.69. Gallery: `galleries/2026-11-13_ten-digits_patch7x7-from-t2.2_on-K784-K3072-K6144_seed1/`.
+
+| ten digits, patches 7x7 from t2.2, seed 1 | FID noise | FID equil | prec F (eq) | rec F (eq) | confident (eq) | ncomp (eq) | speckle (eq) |
+|---|---|---|---|---|---|---|---|
+| K784 + patches | 10.22 | 8.94 | 0.844 | 0.733 | 88.6% | +1.24 | +0.71 |
+| K3072 + patches | 7.03 | 6.37 | 0.879 | 0.758 | 92.6% | +0.99 | +0.62 |
+| **K6144 + patches** | **6.53** | **5.35** | 0.887 | 0.780 | 92.5% | +0.86 | +0.56 |
+| K6144 global only (sweep 2026-11-10) | 19.75 | - | 0.930 (noise) | 0.445 (noise) | 92.3% (noise) | +3.02 (noise) | +1.86 (noise) |
+
+**Paired bootstrap:**
+- K6144 + patches against K3072 + patches: -0.50 [-1.06, +0.06] (p = 0.08) from noise and -1.03 [-1.59, -0.49] from
+  equilibrated.
+- Against K784 + patches: -3.59 (equilibrated).
+- Against the K6144 global-only: -13.2 (noise).
+
+**Findings.**
+1. **Best ten-digit number so far: 5.35** (equilibrated start). The patches keep K6144's shapes: in the
+   side-by-side, the K6144 + patches rows show the same digits and shapes as K6144 global-only, with clean strokes.
+2. **Returns from K are shrinking.**
+   - 784 -> 3072 gave -2.6 FID; 3072 -> 6144 only -1.0.
+   - The confident share is flat (92.6% -> 92.5%), as are precision (0.879 -> 0.887) and components (+0.99 -> +0.86).
+   - On this evidence the shape gain from K is mostly used up by K3072 on ten digits. The blind count would confirm
+     it (not yet run).
+3. **Copying check.**
+   - The nearest training images of 12 samples are at distances 1.7-5.1 (median about 4). The 1s are closest (1.7-2.2;
+     simple shapes).
+   - A few samples look like close variants of a training image (the 5 at 3.7, the 7 at 3.1), but none is a copy.
+   - For comparison, the median nearest-image distance of real probes was about 4.4 on four digits.
+   - A proper copy rate needs evaluate_multiclass on these samples.
+
+### Fashion-MNIST, all ten classes: set-up and first runs (2026-11-14 21:50; the user: "go straight to all 10 classes")
+**Data.**
+- The official raw Zalando files are in `physical-diffusion-models/data/FashionMNIST/` (md5 match the repository's).
+- `make_fashion_data.py` (new) writes `out/latent_physical_SGM/data/fashion_0123456789_28.npz`: the train split,
+  /255, 6,000 per class (balanced), shuffled with default_rng(42), as make_digit_data. Job **4246689**.
+
+**Code** (additive; MNIST paths unchanged):
+- `latent_model.py`: the problem family `fashion28_c<classes>` (28x28, radius 14, the digit subsets' pixel noise and
+  normalisation), plus `load_fashion_raw`, `problem_dataset`, `FASHION_CLASSES`.
+- `fid_score.py`: `--dataset fashion` trains and caches `fid/classifier_fashion_28.npz` (the same small CNN, on the
+  Fashion train split). Scoring a `fashion28_*` problem uses that classifier and the Fashion **test** images as the
+  reference. Job **4246690**.
+- `grain_stats.py`: the Fashion test images as its real reference.
+- `jobs/run_pipeline_neuronic.sh`: Fashion problems use evaluate_multiclass.
+- Backups of the old fid_score / grain_stats are in `../latent_physical_SGM_pre_ising_patch/*_pre_fashion.py`.
+
+**Runs** (problem `fashion28_c0123456789`, the MNIST recipe untuned, seed 1, n = 2000, both starts):
+
+| run | pipeline | equil:3 |
+|---|---|---|
+| K784, global only | 4246691 | 4246694 |
+| K784 + patch7x7 from t2.2 (slice 55, init 0.06) | 4246692 | 4246695 |
+| K3072 + patch7x7 from t2.2 | 4246693 | 4246696 |
+
+- Then FID 4246697 (paired: patches against none, K3072 against K784), grain 4246698, gallery 4246699
+  (`galleries/2026-11-14_fashion-mnist-10-classes_K784-K3072_patch7x7-from-t2.2_vs_global-only_seed1/`).
+- Expected: K784 runs about 1.5 h plus 40 min of equilibrated sampling. K3072 about 5 h plus 3 h. So the K784
+  comparison around 01:00 and K3072 in the morning; the FID job waits for all.
+- **Caveat.** FID here is in the features of a Fashion classifier, so the numbers are not comparable with the MNIST
+  FIDs; compare within Fashion only. The floor is computed in the same way (real training images against the test
+  reference).
+- **22:50: set-up checks passed.**
+  - Data 4246689: 60,000 images, 6,000 per class.
+  - Classifier 4246690: Fashion test accuracy 0.9075 after 5 epochs (MNIST's was 0.98-0.99; about 0.91 is usual for
+    this small CNN on Fashion), cached as `fid/classifier_fashion_28.npz`.
+  - The K784 global-only pipeline 4246691 trains normally (slices 0-1 fine). The other two pipelines start as GPUs
+    free up.
