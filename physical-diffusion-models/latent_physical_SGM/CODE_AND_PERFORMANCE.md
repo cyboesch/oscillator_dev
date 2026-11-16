@@ -4030,3 +4030,26 @@ structure.
       measurement) before 64x64 runs are worth it.
     - `LATENT_PATCH_IMPL=slices` reproduces the old path exactly, for runs that must continue bit for bit.
   - The temporary test runs and scripts are deleted.
+
+### Three patch scales on CelebA-32 (2026-11-16 16:30; the user: "yes go ahead with the three-scale run")
+
+- **Code: `--patch3 SIDE:STRIDE:STATES`** (keys Wp3, bp3, Qp3; `latent_model.PATCH3_KEYS`, `PATCH_SETS` now has three
+  entries).
+  - In `train_latent.py` the second-set code is now one loop over the extra sets (`xsets`: `--patch2`, `--patch3`),
+    instead of a copy per set: reference, learning rates, start, resume, switch-on, diagnostics `patch<n>_*` and
+    `force_rms_patch<n>`, slice files, and history (`write_history(extra_keys=...)`).
+  - Set 2 keeps its seeds (+100000), file names and keys. Set 3: k-means seeds +200000, `patch3_reference.json`.
+  - `sample_latent.load_params` loops over sets 2 and 3; `make_gallery` lists `patch3`.
+  - Backups `*_pre_patch3.py`.
+- **Test 4262952:**
+  1. A `--patch` + `--patch2` run, old vs new code (4 slices). Must be bit-identical, since the arithmetic is
+     unchanged.
+  2. CelebA-32 K64 + 8x8 + 4x4 + 16x16 over all 100 slices, then sampling and quench 1. All nine arrays must be zero
+     before slice 55 and trained after it.
+- **The run, only if the test passes (afterok):** pipeline **4262953**, K784 + `--patch 8:2:32 --patch2 4:2:32
+  --patch3 16:4:32` from slice 55, seed 1, 2000 samples from the noise start.
+  - The 8x8 set starts as in every K784 run, and the 4x4 set as in the K784 + 8x8 + 4x4 run (same seeds); the 16x16
+    set uses the new seed range.
+  - quench 1: 4262954; Inception FID **4262955** against K784 + 8x8, + 4x4, + 16x16 and K1536 + 8x8 + 16x16;
+    gallery **4262956** (`galleries/2026-11-16_celeba32-grey_one-two-three-patch-scales_K784-8x8-4x4-16x16_noise-start_with-and-without-quench1/`).
+  - Couplings per slice: global 1.61M + patches 0.69M + 0.23M + 0.41M = 2.94M (about K1536 + 8x8: 3.84M).

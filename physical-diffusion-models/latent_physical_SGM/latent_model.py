@@ -1043,7 +1043,9 @@ def harmonic_free_energy(V, c, X):
 # ---------------------------------------------------------------------------------------------------------------
 PATCH_KEYS = ("Wp", "bp", "Qp")  # parameters of the per-patch Potts units (train_latent.py --patch)
 PATCH2_KEYS = ("Wp2", "bp2", "Qp2")   # a second patch scale (train_latent.py --patch2, 2026-11-15 evening)
-PATCH_SETS = (PATCH_KEYS, PATCH2_KEYS)   # summed in this order, after every other term; geometry from the shapes
+PATCH3_KEYS = ("Wp3", "bp3", "Qp3")   # a third patch scale (train_latent.py --patch3, 2026-11-16)
+PATCH_SETS = (PATCH_KEYS, PATCH2_KEYS, PATCH3_KEYS)   # summed in this order, after every other term; geometry from the
+#                                                       shapes
 
 
 def patch_sets_in(params):

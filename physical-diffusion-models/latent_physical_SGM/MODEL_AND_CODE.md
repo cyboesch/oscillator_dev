@@ -131,6 +131,7 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 | 11-15 | second patch scale `--patch2` (`latent_model.PATCH_SETS`) | `latent_model`, `train_latent`, `sample_latent` | job 4256601: `--patch` alone bit-identical to the old code; two-scale run trains, samples, quenches |
 | 11-16 | `split_set_spec` for '+' in run names; `patch2` in gallery READMEs | `latent_model`, `evaluate_samples`, `make_gallery`, `fid_score`, `inception_fid` | rerun of the two-scale evaluation (4261206) |
 | 11-16 | block unfold / fold for patch layouts with side and grid multiples of the stride (`PatchGeometry.impl = 'blocks'`); `LATENT_PATCH_IMPL=slices` forces the old path | `latent_model` | job 4262849: patch term and its gradients bitwise for every layout; training agrees to rounding (1e-10 to 2e-6 relative after 4 slices, not bitwise: the fused graph rounds differently); CelebA-32 8x8 + 16x16 training 3x faster |
+| 11-16 | third patch scale `--patch3` (`PATCH3_KEYS`); the extra sets handled in one loop in `train_latent` | `latent_model`, `train_latent`, `sample_latent`, `make_gallery` | job 4262952: two-scale run bit-identical to the pre-change code; three-scale run trains, samples, quenches |
 
 ## 4. Known pitfalls
 
@@ -161,6 +162,6 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 
 - 64x64 patch speed: the block unfold does not help there (see 4); try a convolution-based unfold, or choose the
   implementation per layout by measurement.
-- Three patch scales (4x4 + 8x8 + 16x16) on CelebA-32: needs a third patch set.
+- Three patch scales (8x8 + 4x4 + 16x16) on CelebA-32: running (pipeline 4262953, 2026-11-16).
 - Seeds 2 and 3 of the best CelebA-32 model.
 - CelebA 64x64 once the patch code is fast enough.

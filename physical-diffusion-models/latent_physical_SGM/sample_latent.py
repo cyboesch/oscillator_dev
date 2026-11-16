@@ -161,20 +161,25 @@ def load_params(run, with_harmonic=False, with_patch=False):
         prov["patch_units"] = lm.patch_spec_str((side, stride, S))
         if kind != "potts":                       # manifests of Potts patch runs unchanged
             prov["patch_kind"] = kind
-        if "Wp2" in hid.files:                    # train_latent --patch2: a second (Potts) scale; prov['patch'] becomes
-            spec2 = cfg.get("patch2", "")         # a list of the two sets (make_drift sums them in this order)
-            side2, stride2, S2 = lm.parse_patch_spec(spec2, lm.problem_geometry(problem)[0]) or (0, 0, 0)
-            if not S2:
-                raise RuntimeError(f"{run_dir}: hidden_history.npz has Wp2 but config.json records no --patch2 spec")
-            geom2 = lm.PatchGeometry(lm.problem_geometry(problem)[0], side2, stride2)
-            Wp2, bp2 = hid["Wp2"], hid["bp2"]
-            Qp2 = hid["Qp2"] if "Qp2" in hid.files else None
-            if (Wp2.shape != (n_sl, geom2.P, S2, geom2.d) or bp2.shape != (n_sl, geom2.P, S2)
-                    or (Qp2 is not None and Qp2.shape != Wp2.shape)):
-                raise RuntimeError(f"{run_dir}: second-scale patch units of shapes {Wp2.shape}, {bp2.shape} do not "
-                                   f"match --patch2 {spec2}")
-            prov["patch"] = [prov["patch"], (Wp2, bp2, Qp2, "potts")]
-            prov["patch_units"] += "+" + lm.patch_spec_str((side2, stride2, S2))
+        for nx in (2, 3):                         # train_latent --patch2 / --patch3: further (Potts) scales;
+            kw, kb, kq = lm.PATCH_SETS[nx - 1]    # prov['patch'] becomes a list of the sets (make_drift sums them
+            if kw not in hid.files:               # in this order)
+                continue
+            spec_x = cfg.get(f"patch{nx}", "")
+            side_x, stride_x, S_x = lm.parse_patch_spec(spec_x, lm.problem_geometry(problem)[0]) or (0, 0, 0)
+            if not S_x:
+                raise RuntimeError(f"{run_dir}: hidden_history.npz has {kw} but config.json records no --patch{nx} "
+                                   f"spec")
+            geom_x = lm.PatchGeometry(lm.problem_geometry(problem)[0], side_x, stride_x)
+            W_x, b_x = hid[kw], hid[kb]
+            Q_x = hid[kq] if kq in hid.files else None
+            if (W_x.shape != (n_sl, geom_x.P, S_x, geom_x.d) or b_x.shape != (n_sl, geom_x.P, S_x)
+                    or (Q_x is not None and Q_x.shape != W_x.shape)):
+                raise RuntimeError(f"{run_dir}: --patch{nx} units of shapes {W_x.shape}, {b_x.shape} do not match "
+                                   f"--patch{nx} {spec_x}")
+            prov["patch"] = (prov["patch"] if isinstance(prov["patch"], list) else [prov["patch"]]) + \
+                [(W_x, b_x, Q_x, "potts")]
+            prov["patch_units"] += "+" + lm.patch_spec_str((side_x, stride_x, S_x))
     return th, hid["W"], hid["b"], run_dir, prov, problem
 
 

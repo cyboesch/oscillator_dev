@@ -127,6 +127,9 @@ patch2_reference.json) and learning-rate scales; the same --patch-init-scale, --
 hidden_history.npz; config.json records 'patch2' (absent without it), and resume / --init-from need the same value.
 Run names with two scales contain a '+' (..._patch8s2S32+patch16s4S32on55_seed1); the evaluation scripts split
 'PATH+PATH' sample specs with latent_model.split_set_spec, which keeps such names intact.
+--patch3 SIDE:STRIDE:STATES (2026-11-16): a third scale, the same rules as --patch2 with keys Wp3, bp3, Qp3, k-means
+seeds PATCH_SEED0 + 200000 + 1000 (seed - 1) + p, patch3_reference.json, diagnostics patch3_*; needs --patch2. The
+extra sets are handled in one loop (xsets); a --patch2-only run is unchanged.
 Every slice file also stores the per-sample losses on the fixed validation batch (and the paper checkpoint's, for
 mnist28), for paired comparisons between runs (the validation batch of slice k is drawn with the key of k at the
 slice's t, so runs on different grids share it only where their slice times agree: slices 0 and 99 for power:P
@@ -396,6 +399,10 @@ def parse():
                          "reference (seeds PATCH_SEED0 + 100000 + 1000 (seed - 1) + patch; patch2_reference.json) and "
                          "learning-rate scales; the same --patch-init-scale, --patch-on-slice and --patch-lr-scale as "
                          "--patch. Needs --patch (Potts). Recorded in config.json as 'patch2' (absent without it)")
+    ap.add_argument("--patch3", default="",
+                    help="a third patch scale SIDE:STRIDE:STATES (2026-11-16), as --patch2 with keys Wp3, bp3, Qp3, "
+                         "k-means seeds PATCH_SEED0 + 200000 + 1000 (seed - 1) + patch, patch3_reference.json; needs "
+                         "--patch2. Recorded in config.json as 'patch3' (absent without it)")
     ap.add_argument("--seed", type=int, default=lm.KEY_SEED,
                     help="training seed (>= 1 for Potts units and for Ising units other than the K = 1 Fisher unit): "
                          "the optimisation key chain jr.PRNGKey(seed) and, for Potts units, the k-means seeds "
@@ -546,10 +553,11 @@ def split_dead_states(params, X, spread, temp=lm.TEMP, dead_below=1e-6, n_power=
 
 
 def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, harmonic=False, patch=False,
-                  patch_quad=False, patch2=False):
+                  patch_quad=False, extra_keys=()):
     """The sampler's input: params_history.npy (theta per slice) and hidden_history.npz (W, b, t, then wl, bl with
     --local, then Q with --quad and K > 0, then V, c with --harmonic, then Wp, bp with --patch and Qp with --patch and
-    --quad, then Wp2, bp2 (and Qp2 with --quad) with --patch2), stacked in slice order. Slices in `held`
+    --quad, then the extra patch sets' keys extra_keys in order (Wp2, bp2[, Qp2] with --patch2, then Wp3 ... with
+    --patch3)), stacked in slice order. Slices in `held`
     (slice -> the arrays as saved in its slice file; --assemble memory) are taken from memory, all others are read
     from their slice files (every slice with --assemble files, and slices made by an earlier job: resume,
     --init-from). The same arrays in the same order either way, so the files hold the same bytes (the zip entries of
@@ -557,7 +565,7 @@ def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, ha
     held = held or {}
     thetas, Ws, bs, wls, bls, Qs, Vs, cs = [], [], [], [], [], [], [], []
     Wps, bps, Qps = [], [], []
-    p2 = {}                                      # --patch2: Wp2, bp2 (Qp2) per slice
+    p2 = {}                                      # --patch2 / --patch3: their keys per slice, in extra_keys order
     for k in range(n_slices):
         s = held[k] if k in held else np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
         thetas.append(s["theta"])
@@ -576,7 +584,7 @@ def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, ha
             bps.append(s["bp"])
             if patch_quad:
                 Qps.append(s["Qp"])
-        for g in (("Wp2", "bp2") + (("Qp2",) if patch_quad else ())) if patch2 else ():
+        for g in extra_keys:
             p2.setdefault(g, []).append(s[g])
     tmp = os.path.join(out_dir, "params_history.tmp.npy")
     theta_hist = np.stack(thetas)
@@ -592,7 +600,7 @@ def write_history(out_dir, slice_dir, n_slices, taus, local, quad, held=None, ha
         loc.update(Wp=np.stack(Wps), bp=np.stack(bps))
         if patch_quad:
             loc["Qp"] = np.stack(Qps)
-    loc.update({g: np.stack(v) for g, v in p2.items()})   # --patch2: last
+    loc.update({g: np.stack(v) for g, v in p2.items()})   # --patch2 / --patch3: last
     np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
     os.replace(tmp, os.path.join(out_dir, "hidden_history.npz"))
     return theta_hist.shape
@@ -998,9 +1006,20 @@ def main():
                           or args.patch_kind != "potts"):
         raise ValueError("--patch-init-scale, --patch-lr-scale, --patch-on-slice and --patch-kind need --patch "
                          "SIDE:STRIDE:STATES")
-    patch2 = lm.parse_patch_spec(args.patch2, lm.problem_geometry(args.problem)[0])   # None, or (side, stride, S)
-    if patch2 is not None and (patch is None or args.patch_kind != "potts"):
-        raise ValueError("--patch2 needs --patch with Potts patch units (--patch-kind potts)")
+    # extra Potts patch sets (--patch2, --patch3): one dict each, in PATCH_SETS order; filled further below
+    xsets = []
+    for nx, spec_x in ((2, args.patch2), (3, args.patch3)):
+        px = lm.parse_patch_spec(spec_x, lm.problem_geometry(args.problem)[0])     # None, or (side, stride, S)
+        if px is None:
+            continue
+        if patch is None or args.patch_kind != "potts":
+            raise ValueError(f"--patch{nx} needs --patch with Potts patch units (--patch-kind potts)")
+        if nx == 3 and not xsets:
+            raise ValueError("--patch3 needs --patch2")
+        kw, kb, kq = lm.PATCH_SETS[nx - 1]
+        xsets.append({"n": nx, "spec": px, "kw": kw, "kb": kb, "kq": kq, "name": f"patch{nx}",
+                      "geom": lm.PatchGeometry(lm.problem_geometry(args.problem)[0], px[0], px[1])})
+    xkeys = tuple(g for x in xsets for g in (x["kw"], x["kb"]) + ((x["kq"],) if args.quad else ()))
     if patch is not None:
         if (args.hidden_samples > 0 or args.hidden_rule != "exact" or args.hidden_norm != "element" or args.hidden_fixed
                 or args.cls != "none"):
@@ -1021,11 +1040,9 @@ def main():
                              f"measured safe value at slice 31, where 0.25 costs +27 loss units (job 4231616)")
     lam_p = 0.25 if args.patch_init_scale is None else float(args.patch_init_scale)   # resolved (0.25 when inactive)
     K_on = int(args.patch_on_slice)              # --patch-on-slice (0: from slice 0)
-    geom = geom2 = None
+    geom = None
     if patch is not None:
         geom = lm.PatchGeometry(lm.problem_geometry(args.problem)[0], patch[0], patch[1])
-    if patch2 is not None:
-        geom2 = lm.PatchGeometry(lm.problem_geometry(args.problem)[0], patch2[0], patch2[1])
     out_dir = os.path.join(args.out_root, args.name)
     slice_dir = os.path.join(out_dir, "slices")
     os.makedirs(slice_dir, exist_ok=True)
@@ -1068,8 +1085,9 @@ def main():
     }
     if args.patch_kind != "potts":               # --patch-kind ising only: Potts and patch-free configs as before
         config["patch_kind"] = args.patch_kind
-    if patch2 is not None:                       # --patch2 only: other configs as before
-        config["patch2"] = lm.patch_spec_str(patch2)
+    for x in xsets:                              # --patch2 / --patch3 only: other configs as before
+        config[x["name"]] = lm.patch_spec_str(x["spec"])
+    xspec = {f"patch{nx}": next((lm.patch_spec_str(x["spec"]) for x in xsets if x["n"] == nx), "") for nx in (2, 3)}
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
                       cd1_hidden_samples=args.cd1_hidden_samples)
@@ -1102,8 +1120,9 @@ def main():
                 if k != "assemble" and old.get(k, defaults.get(k)) != v}   # --assemble: the same bytes either way
         if old.get("patch_kind", "potts") != args.patch_kind:   # recorded for ising only: check both directions
             diff["patch_kind"] = (old.get("patch_kind", "potts"), args.patch_kind)
-        if old.get("patch2", "") != lm.patch_spec_str(patch2):   # recorded with --patch2 only: both directions
-            diff["patch2"] = (old.get("patch2", ""), lm.patch_spec_str(patch2))
+        for kx, vx in xspec.items():             # recorded with --patch2 / --patch3 only: both directions
+            if old.get(kx, "") != vx:
+                diff[kx] = (old.get(kx, ""), vx)
         if diff:
             raise RuntimeError(f"existing run {out_dir} has a different config: {diff}")
         if old.get("sha256") != code_sha:
@@ -1472,46 +1491,48 @@ def main():
                       f"{args.patch_lr_scale:g}); start {lam_p:g} x the reference at slice {K_on} (t = {taus[K_on]:.4f}), "
                       f"|Wp| {np.linalg.norm(Wp0):.4g}" + (f"; no patch units in slices 0-{K_on - 1}" if K_on else ""))
 
-        if patch2 is not None:                   # --patch2: a second Potts patch scale, the same rules with keys Wp2 ...
-            S_p2 = patch2[2]
-            seed0_p2 = lm.PATCH_SEED0 + 100000 + 1000 * (args.seed - lm.KEY_SEED)
+        for x in xsets:                          # --patch2 / --patch3: further Potts patch scales, the same rules
+            nx, px, gx = x["n"], x["spec"], x["geom"]
+            S_x = px[2]
+            seed_lr_x = lm.PATCH_SEED0 + 100000 * (nx - 1)
+            seed0_x = seed_lr_x + 1000 * (args.seed - lm.KEY_SEED)
             data64 = np.asarray(data, dtype=np.float64)
-            clus2 = lm.patch_clusters(data64, geom2, S_p2, seed0_p2, km_fn_p)
-            seed_lr2 = lm.PATCH_SEED0 + 100000
-            clus2_lr = clus2 if seed0_p2 == seed_lr2 else lm.patch_clusters(data64, geom2, S_p2, seed_lr2, km_fn_p)
+            clus_x = lm.patch_clusters(data64, gx, S_x, seed0_x, km_fn_p)
+            clus_x_lr = clus_x if seed0_x == seed_lr_x else lm.patch_clusters(data64, gx, S_x, seed_lr_x, km_fn_p)
             del data64
-            sWp2, sbp2 = lm.patch_lr_scales(clus2_lr, taus, lm.TEMP)
-            if not (np.all(np.isfinite(sWp2)) and np.all(sWp2 > 0) and np.all(np.isfinite(sbp2)) and np.all(sbp2 > 0)):
-                raise RuntimeError(f"--patch2 {lm.patch_spec_str(patch2)}: the per-patch learning-rate scales are not "
+            sW_x, sb_x = lm.patch_lr_scales(clus_x_lr, taus, lm.TEMP)
+            if not (np.all(np.isfinite(sW_x)) and np.all(sW_x > 0) and np.all(np.isfinite(sb_x)) and np.all(sb_x > 0)):
+                raise RuntimeError(f"--patch{nx} {lm.patch_spec_str(px)}: the per-patch learning-rate scales are not "
                                    f"all finite and positive")
-            Wp20, bp20 = (a[0] for a in lm.patch_reference(clus2, taus[K_on:K_on + 1], lm.TEMP, scale=lam_p))
-            if not (np.all(np.isfinite(Wp20)) and np.all(np.isfinite(bp20))):
-                raise RuntimeError(f"--patch2 {lm.patch_spec_str(patch2)}: the start templates are not finite")
-            ev2, cnt2 = clus2["explained_variance"], clus2["counts"]
-            pref2 = {"spec": lm.patch_spec_str(patch2), "P": geom2.P, "d": geom2.d, "S": S_p2,
-                     "coverage_min_max_mean": [int(geom2.coverage.min()), int(geom2.coverage.max()),
-                                               float(geom2.coverage.mean())],
-                     "kmeans": "numpy" if km_fn_p is None else "gpu",
-                     "kmeans_seeds": [int(clus2["seeds"][0]), int(clus2["seeds"][-1])],
-                     "kmeans_seconds": float(clus2["seconds"]),
-                     "explained_variance_median_min": [float(np.median(ev2)), float(np.min(ev2))],
-                     "empty_clusters": int(np.sum(cnt2 == 0)), "clusters_below_20_images": int(np.sum(cnt2 < 20)),
-                     "lr_scale_W_min_median_max": [mmm(v) for v in sWp2],
-                     "lr_scale_b_min_median_max": [mmm(v) for v in sbp2],
-                     "init_scale": lam_p, "on_slice": K_on, "start_t": float(taus[K_on]),
-                     "start_sha256": _sha(Wp20, bp20), "lr_scales_sha256": _sha(sWp2, sbp2),
-                     "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"), "created": time.strftime("%Y-%m-%d %H:%M:%S")}
-            pref2_path = os.path.join(out_dir, "patch2_reference.json")
-            if not os.path.exists(pref2_path):
-                with open(pref2_path + ".tmp", "w") as f:
-                    json.dump(pref2, f, indent=2)
-                os.replace(pref2_path + ".tmp", pref2_path)
-            log(logf, f"patch units 2 {pref2['spec']}: P {geom2.P}, d {geom2.d}, S {S_p2}; k-means ({pref2['kmeans']}) "
-                      f"seeds {pref2['kmeans_seeds'][0]}-{pref2['kmeans_seeds'][1]} in {clus2['seconds']:.0f} s; "
-                      f"explained variance median {np.median(ev2):.3f} (min {np.min(ev2):.3f}); empty clusters "
-                      f"{pref2['empty_clusters']}, < 20 images {pref2['clusters_below_20_images']}; lr scales W median "
-                      f"{np.median(sWp2[0]):.3g} -> {np.median(sWp2[-1]):.3g}; start {lam_p:g} x the reference at "
-                      f"slice {K_on}, |Wp2| {np.linalg.norm(Wp20):.4g}")
+            W0_x, b0_x = (a[0] for a in lm.patch_reference(clus_x, taus[K_on:K_on + 1], lm.TEMP, scale=lam_p))
+            if not (np.all(np.isfinite(W0_x)) and np.all(np.isfinite(b0_x))):
+                raise RuntimeError(f"--patch{nx} {lm.patch_spec_str(px)}: the start templates are not finite")
+            x.update(clus=clus_x, sW=sW_x, sb=sb_x, W0=W0_x, b0=b0_x)
+            ev_x, cnt_x = clus_x["explained_variance"], clus_x["counts"]
+            pref_x = {"spec": lm.patch_spec_str(px), "P": gx.P, "d": gx.d, "S": S_x,
+                      "coverage_min_max_mean": [int(gx.coverage.min()), int(gx.coverage.max()),
+                                                float(gx.coverage.mean())],
+                      "kmeans": "numpy" if km_fn_p is None else "gpu",
+                      "kmeans_seeds": [int(clus_x["seeds"][0]), int(clus_x["seeds"][-1])],
+                      "kmeans_seconds": float(clus_x["seconds"]),
+                      "explained_variance_median_min": [float(np.median(ev_x)), float(np.min(ev_x))],
+                      "empty_clusters": int(np.sum(cnt_x == 0)), "clusters_below_20_images": int(np.sum(cnt_x < 20)),
+                      "lr_scale_W_min_median_max": [mmm(v) for v in sW_x],
+                      "lr_scale_b_min_median_max": [mmm(v) for v in sb_x],
+                      "init_scale": lam_p, "on_slice": K_on, "start_t": float(taus[K_on]),
+                      "start_sha256": _sha(W0_x, b0_x), "lr_scales_sha256": _sha(sW_x, sb_x),
+                      "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"), "created": time.strftime("%Y-%m-%d %H:%M:%S")}
+            pref_x_path = os.path.join(out_dir, f"patch{nx}_reference.json")
+            if not os.path.exists(pref_x_path):
+                with open(pref_x_path + ".tmp", "w") as f:
+                    json.dump(pref_x, f, indent=2)
+                os.replace(pref_x_path + ".tmp", pref_x_path)
+            log(logf, f"patch units {nx} {pref_x['spec']}: P {gx.P}, d {gx.d}, S {S_x}; k-means ({pref_x['kmeans']}) "
+                      f"seeds {pref_x['kmeans_seeds'][0]}-{pref_x['kmeans_seeds'][1]} in {clus_x['seconds']:.0f} s; "
+                      f"explained variance median {np.median(ev_x):.3f} (min {np.min(ev_x):.3f}); empty clusters "
+                      f"{pref_x['empty_clusters']}, < 20 images {pref_x['clusters_below_20_images']}; lr scales W median "
+                      f"{np.median(sW_x[0]):.3g} -> {np.median(sW_x[-1]):.3g}; start {lam_p:g} x the reference at "
+                      f"slice {K_on}, |{x['kw']}| {np.linalg.norm(W0_x):.4g}")
 
         @jax.jit
         def force_rms(params, X):
@@ -1532,9 +1553,10 @@ def main():
                 out["force_rms_harm"] = rms(lm.harmonic_terms(params["V"], params["c"], X)[0])
             out["force_rms_patch"] = rms(lm.patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, lm.TEMP,
                                                         with_lap=False, kind=args.patch_kind)[0])
-            if "Wp2" in params:                  # --patch2
-                out["force_rms_patch2"] = rms(lm.patch_terms(params["Wp2"], params.get("Qp2"), params["bp2"], X,
-                                                             lm.TEMP, with_lap=False)[0])
+            for x in xsets:                      # --patch2 / --patch3
+                if x["kw"] in params:
+                    out[f"force_rms_{x['name']}"] = rms(lm.patch_terms(params[x["kw"]], params.get(x["kq"]),
+                                                                       params[x["kb"]], X, lm.TEMP, with_lap=False)[0])
             return out
 
     # Paper checkpoint, for a per-slice comparison of the validation loss (paper problem, joint data only)
@@ -1572,8 +1594,9 @@ def main():
                     if scfg.get(k) != config[k]})
         if scfg.get("patch_kind", "potts") != args.patch_kind:   # Ising patch units need an Ising-patch source
             bad["patch_kind"] = (scfg.get("patch_kind", "potts"), args.patch_kind)
-        if scfg.get("patch2", "") != lm.patch_spec_str(patch2):   # the second patch scale must match too
-            bad["patch2"] = (scfg.get("patch2", ""), lm.patch_spec_str(patch2))
+        for kx, vx in xspec.items():             # the extra patch scales must match too
+            if scfg.get(kx, "") != vx:
+                bad[kx] = (scfg.get(kx, ""), vx)
         if bad:
             raise RuntimeError(f"--init-from {src}: different model config {bad}")
         if scfg.get("init_from"):
@@ -1631,10 +1654,10 @@ def main():
             params.update(Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
             if args.quad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
-            if patch2 is not None:               # --patch2: after the first set (PATCH_SETS order)
-                params.update(Wp2=jnp.asarray(Wp20), bp2=jnp.asarray(bp20))
+            for x in xsets:                      # --patch2 / --patch3: after the first set (PATCH_SETS order)
+                params.update({x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
                 if args.quad:
-                    params["Qp2"] = jnp.zeros_like(params["Wp2"])
+                    params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
     else:
         prev = np.load(os.path.join(slice_dir, f"slice_{done - 1:03d}.npz"))
         params = {"theta": jnp.asarray(prev["theta"]), "W": jnp.asarray(prev["W"]), "b": jnp.asarray(prev["b"])}
@@ -1653,14 +1676,14 @@ def main():
                 raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {lm.patch_spec_str(patch)} patch units to "
                                    f"continue from")
             params.update({g: jnp.asarray(prev[g]) for g in need})
-            if patch2 is not None:               # --patch2
-                need2 = ("Wp2", "bp2") + (("Qp2",) if args.quad else ())
-                shp2 = {"Wp2": (geom2.P, patch2[2], geom2.d), "bp2": (geom2.P, patch2[2]),
-                        "Qp2": (geom2.P, patch2[2], geom2.d)}
-                if any(g not in prev.files or prev[g].shape != shp2[g] for g in need2):
-                    raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {lm.patch_spec_str(patch2)} second-scale "
-                                       f"patch units to continue from")
-                params.update({g: jnp.asarray(prev[g]) for g in need2})
+            for x in xsets:                      # --patch2 / --patch3
+                gx, Sx = x["geom"], x["spec"][2]
+                need_x = (x["kw"], x["kb"]) + ((x["kq"],) if args.quad else ())
+                shp_x = {x["kw"]: (gx.P, Sx, gx.d), x["kb"]: (gx.P, Sx), x["kq"]: (gx.P, Sx, gx.d)}
+                if any(g not in prev.files or prev[g].shape != shp_x[g] for g in need_x):
+                    raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {lm.patch_spec_str(x['spec'])} "
+                                       f"--patch{x['n']} units to continue from")
+                params.update({g: jnp.asarray(prev[g]) for g in need_x})
         optimization_key = jnp.asarray(prev["key"])
         where = f"t = {taus[done]:.4f}" if done < n_slices else "all slices present; assembling"
         log(logf, f"resuming at slice {done} ({where}) from {slice_dir}")
@@ -1691,10 +1714,10 @@ def main():
             params = dict(params, Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
             if args.quad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
-            if patch2 is not None:               # --patch2: switched on together with the first set
-                params.update(Wp2=jnp.asarray(Wp20), bp2=jnp.asarray(bp20))
+            for x in xsets:                      # --patch2 / --patch3: switched on together with the first set
+                params.update({x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
                 if args.quad:
-                    params["Qp2"] = jnp.zeros_like(params["Wp2"])
+                    params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
             log(logf, f"slice {k}: patch units {lm.patch_spec_str(patch)} switched on at {lam_p:g} x the reference at "
                       f"t = {t_curr:.4f}")
         split_info = None
@@ -1728,13 +1751,15 @@ def main():
             lrs["bp"] = jnp.asarray(f_p * sbp[k][:, None] if on else np.zeros((geom.P, 1)))
             if "Qp" in params:
                 lrs["Qp"] = lrs["Wp"]
-        if "Wp2" in params:                      # --patch2: the same rule with its own scales
+        for x in xsets:                          # --patch2 / --patch3: the same rule with their own scales
+            if x["kw"] not in params:
+                continue
             on = k >= max(K_on, args.freeze_hidden_slices)
             f_p = args.hidden_lr_scale * args.patch_lr_scale
-            lrs["Wp2"] = jnp.asarray(f_p * sWp2[k][:, None, None] if on else np.zeros((geom2.P, 1, 1)))
-            lrs["bp2"] = jnp.asarray(f_p * sbp2[k][:, None] if on else np.zeros((geom2.P, 1)))
-            if "Qp2" in params:
-                lrs["Qp2"] = lrs["Wp2"]
+            lrs[x["kw"]] = jnp.asarray(f_p * x["sW"][k][:, None, None] if on else np.zeros((x["geom"].P, 1, 1)))
+            lrs[x["kb"]] = jnp.asarray(f_p * x["sb"][k][:, None] if on else np.zeros((x["geom"].P, 1)))
+            if x["kq"] in params:
+                lrs[x["kq"]] = lrs[x["kw"]]
         lrs = {g: v * args.lr_scale for g, v in lrs.items()}
         lr_log = {"W": lrs["W"], "b": lrs["b"]}       # scalars for the log (--ising-weak-boost makes lrs per unit)
         n_boost = None
@@ -1927,19 +1952,20 @@ def main():
         elif patch is not None:                  # --patch-on-slice, before the switch-on: zero arrays, no record keys
             extra.update(Wp=np.zeros((geom.P, patch[2], geom.d)), bp=np.zeros((geom.P, patch[2])),
                          **({"Qp": np.zeros((geom.P, patch[2], geom.d))} if args.quad else {}))
-        if "Wp2" in params:                      # --patch2: the same diagnostics, record keys patch2_*
-            Wpn2, bpn2 = np.asarray(params["Wp2"]), np.asarray(params["bp2"])
-            Qpn2 = np.asarray(params["Qp2"]) if "Qp2" in params else None
-            W_ref_p2 = lm.patch_reference(clus2, [t_curr], lm.TEMP)[0][0]
-            st_p2, arr_p2 = lm.patch_unit_stats(Wpn2, bpn2, Qpn2, np.asarray(Xv), lm.TEMP, W_ref_p2, geom2)
-            rec.update({"patch2_" + q[len("patch_"):] if q.startswith("patch_") else "patch2_" + q: v
-                        for q, v in st_p2.items()})
-            extra.update(Wp2=Wpn2, bp2=bpn2, **({"Qp2": Qpn2} if Qpn2 is not None else {}),
-                         **{"patch2_" + q[len("patch_"):] if q.startswith("patch_") else "patch2_" + q: v
-                            for q, v in arr_p2.items()})
-        elif patch2 is not None:                 # before the switch-on: zero arrays
-            extra.update(Wp2=np.zeros((geom2.P, patch2[2], geom2.d)), bp2=np.zeros((geom2.P, patch2[2])),
-                         **({"Qp2": np.zeros((geom2.P, patch2[2], geom2.d))} if args.quad else {}))
+        for x in xsets:                          # --patch2 / --patch3: the same diagnostics, record keys patch<n>_*
+            gx, Sx, pre = x["geom"], x["spec"][2], x["name"] + "_"
+            ren = lambda q: pre + q[len("patch_"):] if q.startswith("patch_") else pre + q     # noqa: E731
+            if x["kw"] in params:
+                Wn_x, bn_x = np.asarray(params[x["kw"]]), np.asarray(params[x["kb"]])
+                Qn_x = np.asarray(params[x["kq"]]) if x["kq"] in params else None
+                W_ref_x = lm.patch_reference(x["clus"], [t_curr], lm.TEMP)[0][0]
+                st_x, arr_x = lm.patch_unit_stats(Wn_x, bn_x, Qn_x, np.asarray(Xv), lm.TEMP, W_ref_x, gx)
+                rec.update({ren(q): v for q, v in st_x.items()})
+                extra.update({x["kw"]: Wn_x, x["kb"]: bn_x}, **({x["kq"]: Qn_x} if Qn_x is not None else {}),
+                             **{ren(q): v for q, v in arr_x.items()})
+            else:                                # before the switch-on: zero arrays
+                extra.update({x["kw"]: np.zeros((gx.P, Sx, gx.d)), x["kb"]: np.zeros((gx.P, Sx))},
+                             **({x["kq"]: np.zeros((gx.P, Sx, gx.d))} if args.quad else {}))
         save_atomic(os.path.join(slice_dir, f"slice_{k:03d}.npz"),
                     theta=np.asarray(params["theta"]), W=np.asarray(params["W"]), b=np.asarray(params["b"]),
                     key=np.asarray(optimization_key), loss_trace=losses[::10].astype(np.float32),
@@ -1948,7 +1974,7 @@ def main():
         if held is not None:                     # --assemble memory: the arrays just saved, for write_history
             held[k] = {"theta": np.asarray(params["theta"]), "W": np.asarray(params["W"]),
                        "b": np.asarray(params["b"]),
-                       **{g: extra[g] for g in ("Q", "wl", "bl", "V", "c", "Wp", "bp", "Qp", "Wp2", "bp2", "Qp2") if g in extra}}
+                       **{g: extra[g] for g in ("Q", "wl", "bl", "V", "c", "Wp", "bp", "Qp") + xkeys if g in extra}}
         with open(os.path.join(out_dir, "train_log.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
         msg = (f"slice {k:3d} t {t_curr:.4f}: {n_steps} steps in {t_train:.0f} s ({rec['steps_per_s']:.0f}/s); "
@@ -1999,11 +2025,13 @@ def main():
                     f"{rec['patch_eff_states_min']:.2f} (median/min), dead {rec['patch_states_below_1e-6']}, <max p> "
                     f"{rec['patch_mean_max_p']:.3f}; force patch/glob/loc {fr('force_rms_patch')}/{fr('force_rms_glob')}/"
                     f"{fr('force_rms_loc')}")
-            if "patch2_W_norm" in rec:           # --patch2
-                msg += (f"; patches 2 |Wp2| {rec['patch2_W_norm']:.4g} (ref {rec['patch2_Wref_norm']:.4g}), cos "
-                        f"{rec['patch2_cos_W_Wref']:.3f}, eff states {rec['patch2_eff_states_median']:.2f}/"
-                        f"{rec['patch2_eff_states_min']:.2f}, dead {rec['patch2_states_below_1e-6']}, <max p> "
-                        f"{rec['patch2_mean_max_p']:.3f}, force {fr('force_rms_patch2')}")
+            for x in xsets:                      # --patch2 / --patch3
+                q = x["name"]
+                if f"{q}_W_norm" in rec:
+                    msg += (f"; patches {x['n']} |{x['kw']}| {rec[f'{q}_W_norm']:.4g} (ref {rec[f'{q}_Wref_norm']:.4g}), "
+                            f"cos {rec[f'{q}_cos_W_Wref']:.3f}, eff states {rec[f'{q}_eff_states_median']:.2f}/"
+                            f"{rec[f'{q}_eff_states_min']:.2f}, dead {rec[f'{q}_states_below_1e-6']}, <max p> "
+                            f"{rec[f'{q}_mean_max_p']:.3f}, force {fr(f'force_rms_{q}')}")
         log(logf, msg)
 
     # ---- assemble ---------------------------------------------------------------------------------------------
@@ -2011,7 +2039,7 @@ def main():
         t_asm = time.time()
         shape = write_history(out_dir, slice_dir, n_slices, taus, args.local, args.quad and K > 0, held,
                               harmonic=bool(R_h), patch=patch is not None, patch_quad=patch is not None and args.quad,
-                              patch2=patch2 is not None)
+                              extra_keys=xkeys)
         with open(os.path.join(out_dir, "DONE"), "w") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
         log(logf, f"assembled params_history.npy {shape} and hidden_history.npz in {time.time() - t_asm:.1f} s "
@@ -2019,10 +2047,10 @@ def main():
     elif n_slices == lm.N_TIME_STEPS:
         thetas, Ws, bs, wls, bls, Qs, Vs, cs = [], [], [], [], [], [], [], []
         Wps, bps, Qps = [], [], []
-        p2 = {}                                  # --patch2: Wp2, bp2 (Qp2) per slice
+        p2 = {}                                  # --patch2 / --patch3: their keys per slice, in xkeys order
         for k in range(n_slices):
             s = np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
-            for g in (("Wp2", "bp2") + (("Qp2",) if args.quad else ())) if patch2 is not None else ():
+            for g in xkeys:
                 p2.setdefault(g, []).append(s[g])
             thetas.append(s["theta"])
             Ws.append(s["W"])
@@ -2053,7 +2081,7 @@ def main():
             loc.update(Wp=np.stack(Wps), bp=np.stack(bps))
             if args.quad:
                 loc["Qp"] = np.stack(Qps)
-        loc.update({g: np.stack(v) for g, v in p2.items()})   # --patch2: last (write_history)
+        loc.update({g: np.stack(v) for g, v in p2.items()})   # --patch2 / --patch3: last (write_history)
         np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
         os.replace(tmp, os.path.join(out_dir, "hidden_history.npz"))
         with open(os.path.join(out_dir, "DONE"), "w") as f:
