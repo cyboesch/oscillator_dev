@@ -224,7 +224,7 @@ def main():
         row(f"diag: real test + N(0, {sig}^2) noise", feats(P), P, full=False)
     for spec in args.sets:
         label, path = spec.split("=", 1)
-        missing = [p for p in path.split("+") if not os.path.exists(p if os.path.isabs(p) else os.path.join(lm.OUT_ROOT, p))]
+        missing = [p for p in lm.split_set_spec(path) if not os.path.exists(p if os.path.isabs(p) else os.path.join(lm.OUT_ROOT, p))]
         if missing:
             report(f"{label}: skipped, no samples ({', '.join(missing)})")
             continue

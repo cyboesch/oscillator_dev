@@ -346,6 +346,21 @@ def load_data():
     return data, labels, float(mean), float(std)
 
 
+def split_set_spec(spec):
+    """'PATH[+PATH...]' (the evaluation scripts' concatenation of sample files) -> the list of paths. Every path ends
+    in '.npy'; a '+' inside a path (run names with two patch scales, e.g. ..._patch8s2S32+patch16s4S32on55_seed1,
+    2026-11-16) is kept, because the pieces are joined until they end in '.npy'."""
+    out, cur = [], ""
+    for piece in spec.split("+"):
+        cur = piece if not cur else cur + "+" + piece
+        if cur.endswith(".npy"):
+            out.append(cur)
+            cur = ""
+    if cur:
+        out.append(cur)
+    return out
+
+
 def sha256_file(path):
     digest = hashlib.sha256()
     with open(path, "rb") as f:
@@ -1077,7 +1092,13 @@ class PatchGeometry:
     each patch), coverage (N,) (the number of patches containing each pixel), central (P,) bool (the patch centre in
     rows and columns 6-21 of 28, scaled for other grids).
     unfold / fold use strided slices and pads only (no gather, no scatter-add): deterministic on the GPU in the forward
-    and the reverse pass (the transpose of a slice is a pad, and of a pad a slice)."""
+    and the reverse pass (the transpose of a slice is a pad, and of a pad a slice).
+    impl (2026-11-16): 'blocks' when side and grid are multiples of the stride (8:2, 16:4, 4:2; not 7:3 on 28): the
+    image is cut into stride x stride blocks and each patch is an m x m group of them (m = side / stride), so unfold /
+    fold take m^2 contiguous slices / pads of the block array (16 for 16:4 instead of 256 strided ones). The same
+    numbers: unfold only copies, and fold adds each pixel's patch contributions in the same order (by patch offset u,
+    then v) as the slice version. Otherwise 'slices' (the original). Environment LATENT_PATCH_IMPL=slices forces the
+    original everywhere (for comparisons)."""
 
     def __init__(self, grid, side, stride):
         G, s, r = int(grid), int(side), int(stride)
@@ -1094,8 +1115,44 @@ class PatchGeometry:
         ci, cj = pi * r + (s - 1) / 2.0, pj * r + (s - 1) / 2.0
         lo, hi = 6.0 * G / 28.0, 21.0 * G / 28.0
         self.central = (ci >= lo) & (ci <= hi) & (cj >= lo) & (cj <= hi)
+        blocks_ok = s % r == 0 and G % r == 0
+        self.impl = "blocks" if blocks_ok and os.environ.get("LATENT_PATCH_IMPL", "auto") != "slices" else "slices"
 
     def unfold(self, X):
+        """X (B, N) -> the patch vectors (P, B, d), patch-major (entry j = u s + v of patch p)."""
+        return self._unfold_blocks(X) if self.impl == "blocks" else self._unfold_slices(X)
+
+    def fold(self, Gp):
+        """Gp (P, B, d) -> (B, N): the adjoint of unfold (the sum over the patches that contain a pixel)."""
+        return self._fold_blocks(Gp) if self.impl == "blocks" else self._fold_slices(Gp)
+
+    def _unfold_blocks(self, X):
+        """unfold with stride x stride blocks: patch (pi, pj) = blocks [pi, pi + m) x [pj, pj + m); one contiguous
+        slice of the block array per block offset (a, b), m^2 in all; entry u = a r + u', v = b r + v'."""
+        B, G, s, r, n_p = X.shape[0], self.G, self.s, self.r, self.n_p
+        nb, m = G // r, s // r
+        Xb = jnp.transpose(X.reshape(B, nb, r, nb, r), (0, 1, 3, 2, 4))          # (B, nb, nb, r, r)
+        cols = [lax.slice(Xb, (0, a, b, 0, 0), (B, a + n_p, b + n_p, r, r)) for a in range(m) for b in range(m)]
+        st = jnp.stack(cols, axis=3).reshape(B, n_p, n_p, m, m, r, r)          # (B, pi, pj, a, b, u', v')
+        st = jnp.transpose(st, (1, 2, 0, 3, 5, 4, 6))                          # (pi, pj, B, a, u', b, v')
+        return st.reshape(self.P, B, self.d)
+
+    def _fold_blocks(self, Gp):
+        """fold with blocks: the adjoint of _unfold_blocks, one pad of the block array per block offset (a, b),
+        summed in (a, b) order (per pixel the same order of patch offsets (u, v) as _fold_slices)."""
+        B, G, s, r, n_p = Gp.shape[1], self.G, self.s, self.r, self.n_p
+        nb, m = G // r, s // r
+        Gq = jnp.transpose(Gp.reshape(n_p, n_p, B, m, r, m, r), (2, 0, 1, 3, 5, 4, 6))  # (B, pi, pj, a, b, u', v')
+        zero = jnp.zeros((), Gp.dtype)
+        acc = None
+        for a in range(m):
+            for b in range(m):
+                t = lax.pad(Gq[:, :, :, a, b], zero, ((0, 0, 0), (a, nb - a - n_p, 0), (b, nb - b - n_p, 0),
+                                                      (0, 0, 0), (0, 0, 0)))      # (B, nb, nb, r, r)
+                acc = t if acc is None else acc + t
+        return jnp.transpose(acc, (0, 1, 3, 2, 4)).reshape(B, G * G)
+
+    def _unfold_slices(self, X):
         """X (B, N) -> the patch vectors (P, B, d), patch-major: one strided slice per entry (u, v) of the patch."""
         B, G, s, r, n_p = X.shape[0], self.G, self.s, self.r, self.n_p
         Xg = X.reshape(B, G, G)
@@ -1104,7 +1161,7 @@ class PatchGeometry:
         st = jnp.stack(cols, axis=-1)                                     # (B, n_p, n_p, d)
         return jnp.transpose(st, (1, 2, 0, 3)).reshape(self.P, B, self.d)
 
-    def fold(self, Gp):
+    def _fold_slices(self, Gp):
         """Gp (P, B, d) -> (B, N): the adjoint of unfold (the sum over the patches that contain a pixel), one pad per
         entry (u, v) of the patch."""
         B, G, s, r, n_p = Gp.shape[1], self.G, self.s, self.r, self.n_p

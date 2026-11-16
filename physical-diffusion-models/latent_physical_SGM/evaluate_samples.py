@@ -166,7 +166,7 @@ def classify(ref, x=None):
 def load_set(spec, with_parts=False):
     """Concatenate the files of 'PATH[+PATH...]'; with_parts=True also returns the length of each part."""
     parts = []
-    for p in spec.split("+"):
+    for p in lm.split_set_spec(spec):
         path = p if os.path.isabs(p) else os.path.join(lm.OUT_ROOT, p)
         parts.append(np.load(path))
     x = np.concatenate(parts)

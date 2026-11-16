@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Figure: standard Inception FID across models, MNIST (ten digits) and Fashion-MNIST (ten classes) (2026-11-15).
+"""Figure: standard Inception FID across models, MNIST (ten digits), Fashion-MNIST (ten classes) and, since 2026-11-16, CelebA 32x32 grey (2026-11-15).
 
 Reads the report.txt of inception_fid.py runs (out/latent_physical_SGM/fid_inception/<job>/; report.txt, not
 metrics.json: some early metrics.json files lost rows to a key clash, fixed in inception_fid.py since).
@@ -63,6 +63,24 @@ PANELS = [
          ("4255381", [f"K1536+patch8x8-every2px-from-t2.2_start-equil_seed{s}" for s in SEEDS]),
          ("4255381", [f"K1536+patch8x8-every2px-from-t2.2_start-equil_quench1_seed{s}" for s in SEEDS])),
     ]),
+    # CelebA 32x32 grey (added 2026-11-16): noise start (the equilibrated start changes the quenched FID by 0-1,
+    # 4256040); Wang & Achour report no CelebA result (None: no line)
+    ("CelebA 32x32 grey (noise start)", "4256037", None, [
+        ("K784", ("4256037", "K784_start-noise"), ("4256037", "K784_start-noise_quench1")),
+        ("K3072", ("4256861", "K3072_start-noise"), ("4256861", "K3072_start-noise_quench1")),
+        ("K784 + 8x8 patches every 2 px", ("4256037", "K784+patch8x8-every2px-from-t2.2_start-noise"),
+         ("4256037", "K784+patch8x8-every2px-from-t2.2_start-noise_quench1")),
+        ("K1536 + 8x8 patches every 2 px", ("4256037", "K1536+patch8x8-every2px-from-t2.2_start-noise"),
+         ("4256037", "K1536+patch8x8-every2px-from-t2.2_start-noise_quench1")),
+        ("K3072 + 8x8 patches every 2 px", ("4256861", "K3072+patch8x8-every2px_start-noise"),
+         ("4256861", "K3072+patch8x8-every2px_start-noise_quench1")),
+        ("K784 + 8x8 + 4x4 patches", ("4261206", "K784+patch8x8-every2px+patch4x4-every2px_start-noise"),
+         ("4261206", "K784+patch8x8-every2px+patch4x4-every2px_start-noise_quench1")),
+        ("K784 + 8x8 + 16x16 patches", ("4261206", "K784+patch8x8-every2px+patch16x16-every4px_start-noise"),
+         ("4261206", "K784+patch8x8-every2px+patch16x16-every4px_start-noise_quench1")),
+        ("K1536 + 8x8 + 16x16 patches", ("4261206", "K1536+patch8x8-every2px+patch16x16-every4px_start-noise"),
+         ("4261206", "K1536+patch8x8-every2px+patch16x16-every4px_start-noise_quench1")),
+    ]),
 ]
 _cache = {}
 
@@ -102,12 +120,12 @@ def main():
     os.makedirs(OUTDIR, exist_ok=True)
     plt.rcParams.update({"font.size": 9, "axes.edgecolor": INK2, "axes.labelcolor": INK, "xtick.color": INK2,
                          "ytick.color": INK, "text.color": INK})
-    fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.8), facecolor=SURFACE)
+    fig, axes = plt.subplots(1, len(PANELS), figsize=(6.4 * len(PANELS), 5.0), facecolor=SURFACE)
     table = []
     for ax, (title, floor_job, wa, models) in zip(axes, PANELS, strict=True):
         _, floor = load(floor_job)
         rows = [(label, *value(bar), *value(q)) for label, bar, q in models]
-        rows.sort(key=lambda r: -r[1])                       # worst (as sampled) at the top, best at the bottom
+        rows.sort(key=lambda r: -r[3])                       # worst (quenched) at the top, best at the bottom
         y = np.arange(len(rows))[::-1].astype(float)
         fid = np.array([r[1] for r in rows])
         sd = np.array([r[2] for r in rows])
@@ -124,12 +142,13 @@ def main():
         ax.axvline(floor, color=INK2, ls="--", lw=1, zorder=1)
         ax.text(floor + 1.2, top, f"real test images {floor:.1f}", fontsize=7.5, color=INK2, va="bottom", zorder=5,
                 bbox=dict(facecolor=SURFACE, edgecolor="none", pad=1.0))  # row 1
-        ax.axvline(wa, color=INK, ls=":", lw=1.5, zorder=1)
-        ax.text(wa + 1.2, top + 0.42, f"Wang & Achour {wa}", fontsize=7.5, color=INK, va="bottom", zorder=5,
-                bbox=dict(facecolor=SURFACE, edgecolor="none", pad=1.0))  # row 2
+        if wa is not None:                                   # no published number for CelebA
+            ax.axvline(wa, color=INK, ls=":", lw=1.5, zorder=1)
+            ax.text(wa + 1.2, top + 0.42, f"Wang & Achour {wa}", fontsize=7.5, color=INK, va="bottom", zorder=5,
+                    bbox=dict(facecolor=SURFACE, edgecolor="none", pad=1.0))  # row 2
         ax.set_yticks(y)
         ax.set_yticklabels([r[0] for r in rows])
-        ax.set_xlim(0, max(fid.max() + sd.max(), wa) * 1.22)
+        ax.set_xlim(0, max(fid.max() + sd.max(), wa or 0.0) * 1.32)
         ax.set_ylim(-0.6, len(rows) + 0.35)
         ax.set_title(title, loc="left", fontsize=10.5, fontweight="bold", pad=14)
         ax.set_xlabel("Inception FID vs train set, n = 2000 samples (lower is better)")
@@ -140,18 +159,21 @@ def main():
         table += [(title, r[0], r[1], r[2], r[3], r[4]) for r in rows]
     h, lab = axes[0].get_legend_handles_labels()
     fig.legend(h[::-1], lab[::-1], loc="upper center", ncol=2, frameon=False, bbox_to_anchor=(0.5, 1.0))
-    fig.text(0.01, 0.01, "Equilibrated start and seed 1 unless noted; patches switch on at t = 2.2. Error bars: bootstrap "
-             "sd over samples (sd over seeds for the 3-seed row). Quench: the same samples relaxed for 1 time unit at "
-             "zero temperature under the t = 0 energy.\nWang & Achour (arXiv 2606.27294): best KuraSHIL oscillator "
-             "model; their sample count and FID code are not stated.", fontsize=7, color=INK2)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.93))
+    fig.text(0.01, 0.01, "Rows sorted by the quenched FID (best at the bottom). Seed 1 unless noted; equilibrated start for "
+             "MNIST and Fashion-MNIST, noise start for CelebA; patches switch on at t = 2.2. Error bars: bootstrap sd "
+             "over samples (sd over seeds for the 3-seed row).\n"
+             "Quench: the same samples relaxed for 1 time unit at zero temperature under the t = 0 energy. CelebA: "
+             "aligned faces, centre crop, grey, 32x32; second patch scales 4x4 every 2 px or 16x16 every 4 px.\n"
+             "Wang & Achour (arXiv 2606.27294): best KuraSHIL oscillator model; their sample count and FID code are "
+             "not stated; they report no CelebA result.", fontsize=7, color=INK2)
+    fig.tight_layout(rect=(0, 0.08, 1, 0.93))
     for ext in ("png", "pdf"):
         p = os.path.join(OUTDIR, f"inception_fid_mnist_fashion.{ext}")
         fig.savefig(p, dpi=200, facecolor=SURFACE)
         print("wrote", p)
-    print(f"{'panel':<28}{'model':<44}{'FID':>8}{'sd':>6}{'quench1':>9}{'sd':>6}")
+    print(f"{'panel':<34}{'model':<44}{'FID':>8}{'sd':>6}{'quench1':>9}{'sd':>6}")
     for t in table:
-        print(f"{t[0]:<28}{t[1]:<44}{t[2]:>8.2f}{t[3]:>6.2f}{t[4]:>9.2f}{t[5]:>6.2f}")
+        print(f"{t[0]:<34}{t[1]:<44}{t[2]:>8.2f}{t[3]:>6.2f}{t[4]:>9.2f}{t[5]:>6.2f}")
 
 
 if __name__ == "__main__":

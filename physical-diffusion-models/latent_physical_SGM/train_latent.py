@@ -119,6 +119,14 @@ x that reference (W and b scaled: the field a = lam a*), learning-rate scales fr
 diagnostics patchi_* (decided share |m| > 0.9, weak units, <|m|>, rms a / T; patch_ising_unit_stats), patch_dec in
 the slice files. config.json records 'patch_kind': 'ising' (Potts and patch-free configs unchanged); resume and
 --init-from refuse another kind.
+--patch2 SIDE:STRIDE:STATES (2026-11-15): a second scale of Potts patch units next to --patch (e.g. --patch 8:2:32
+--patch2 16:4:32), keys Wp2, bp2, Qp2 (latent_model.PATCH_SETS: the loss and the force sum the sets in order, the
+first exactly as before). Its own k-means reference (seeds PATCH_SEED0 + 100000 + 1000 (seed - 1) + p;
+patch2_reference.json) and learning-rate scales; the same --patch-init-scale, --patch-on-slice and --patch-lr-scale as
+--patch; Potts only. Diagnostics patch2_* and force_rms_patch2; Wp2, bp2, Qp2 in every slice file and last in
+hidden_history.npz; config.json records 'patch2' (absent without it), and resume / --init-from need the same value.
+Run names with two scales contain a '+' (..._patch8s2S32+patch16s4S32on55_seed1); the evaluation scripts split
+'PATH+PATH' sample specs with latent_model.split_set_spec, which keeps such names intact.
 Every slice file also stores the per-sample losses on the fixed validation batch (and the paper checkpoint's, for
 mnist28), for paired comparisons between runs (the validation batch of slice k is drawn with the key of k at the
 slice's t, so runs on different grids share it only where their slice times agree: slices 0 and 99 for power:P

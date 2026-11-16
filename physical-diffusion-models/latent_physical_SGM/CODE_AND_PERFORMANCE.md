@@ -192,6 +192,10 @@ optimising.
 
 ## 8. Usual flags of the current model (for reproducing timings)
 
+**Superseded (2026-11-16):** the current recipe (patches, equilibrated start, quench, two patch scales), the command
+lines and the list of code changes are in `MODEL_AND_CODE.md`. The flags below are those of the 2026-11-11 timing
+runs.
+
 ```
 --problem mnist28_d0123 --K 784 --select ema --hidden potts --quad --local --visible quartic --radius 1 \
   --pair-terms lin --proto-init pooled            # Potts; Ising: --hidden ising, no --proto-init
@@ -3897,3 +3901,100 @@ structure.
     the quench already removes the fine speckle.
   - quench 1: 4257325; Inception FID against the one-scale K1536 + 8x8, with and without the quench: 4257326.
   - Disk: 478 of 500 GB (23 GB free). This run adds about 5 GB, and the jobs queued before it about 7 GB.
+
+### 2026-11-16 morning: overnight results
+
+- **Disk:** the share is now 1 TB (the user asked for more space): 490 GB used, 535 GB free, 48%.
+- **CelebA-32: more Potts states** (sampling 4256809 / 4256810, quench 4256859 / 4256860, Inception **4256861**,
+  gallery 4256862). Inception FID against train, n = 2000, noise start; floor 6.43:
+
+  | Model | as sampled | quench 1 (FID_inf) |
+  |---|---|---|
+  | K784 | 238.0 | 104.4 (100.6) |
+  | K3072 | 231.3 | 98.5 (94.1) |
+  | K784 + patch8x8 | 98.4 | 24.7 (21.3) |
+  | K1536 + patch8x8 | 98.2 | 23.9 (20.5) |
+  | K3072 + patch8x8 | 97.7 | **23.8 (20.1)** |
+
+  - With patches, K784 -> K1536 -> K3072 gains 0.8, then 0.1 more: K is saturated on CelebA-32. Without patches
+    K3072 gains 6, but stays about 75 above the patch models.
+  - The gallery (`galleries/2026-11-16_celeba32-grey_K784-vs-K3072_with-and-without-patch8x8_noise-start_quench1/`)
+    agrees.
+    - K3072 + patches after the quench has a little more contrast and definition in some faces (sunglasses, hair
+      edges), but the same failure modes as K784 + patches: an eye smudge, blur.
+    - Without patches even K3072 stays mottled after the quench.
+  - Sampling time: K3072 at chunk 25 with the platform allocator took 3.5 h (no patches) and 3.8 h (patches).
+- **Two-scale runs: all trained and sampled, but their evaluation failed** (Inception 4256798 / 4257326 skipped
+  the sets; gallery 4256799 failed).
+  - Training: K784 + 8x8 + 4x4 in 2.4 h (4256794); K784 + 8x8 + 16x16 in 5.3 h (4256795); K1536 + 8x8 + 16x16 in
+    6.2 h (4257324). Quench 1 done for all three.
+  - **Cause:** the `+` in the run names (`patch8s2S32+patch16s4S32`) clashed with the `PATH+PATH` concatenation
+    syntax of `evaluate_samples.load_set`, `make_gallery`, `fid_score` and `inception_fid`, which split the path
+    at the `+`.
+  - **Fix:** `latent_model.split_set_spec`, which joins the pieces until each ends in `.npy`, is now used in all
+    four; `make_gallery` also lists `patch2` in its README. Backups `*_pre_plusname.py`.
+  - **Rerun:** Inception FID **4261206** for all five models (K784 + 8x8, + 4x4, + 16x16; K1536 + 8x8,
+    + 16x16), with and without the quench; gallery **4261207**
+    (`galleries/2026-11-16_celeba32-grey_K784-and-K1536_patch8x8-alone-vs-two-scale-patches_noise-start_with-and-without-quench1/`).
+- **Two-scale results (Inception 4261206, gallery 4261207).** Inception FID against train, n = 2000, noise start
+  (bootstrap sd about 0.3-0.4); floor 6.43:
+
+  | Model | as sampled | quench 1 (FID_inf) | KID x1e3 (q1) |
+  |---|---|---|---|
+  | K784 + 8x8 | 98.4 | 24.7 (20.9) | 17.5 |
+  | K784 + 8x8 + 4x4 every 2 px | **78.3** | 23.3 (19.7) | 15.9 |
+  | K784 + 8x8 + 16x16 every 4 px | 93.6 | 22.9 (19.2) | 15.4 |
+  | K1536 + 8x8 | 98.2 | 23.9 (20.4) | 16.6 |
+  | K1536 + 8x8 + 16x16 every 4 px | 92.6 | **22.4 (18.6)** | **14.6** |
+
+  - **A second scale helps, modestly:** -1.4 (4x4) and -1.8 (16x16) at K784, and -1.6 (16x16) at K1536, after the
+    quench. That is 4-6 bootstrap sd, from the same start and noise in every run.
+  - **The two scales act differently.** The fine 4x4 scale removes much of the speckle during sampling (98 -> 78 as
+    sampled), but the quench does most of that anyway. The coarse 16x16 scale changes less before the quench and
+    gains more after it, so it adds structure that the quench cannot make.
+  - **New best on CelebA-32:** K1536 + 8x8 + 16x16, quench 1: 22.4 (FID_inf 18.6).
+  - **Gallery:** the differences are small, as the numbers say.
+    - With 16x16, some faces are more coherent: column 1's dark eye smudge is lighter and more face-like, and
+      column 3's hat and face are better separated.
+    - With 4x4, the as-sampled faces are visibly cleaner, while the quenched ones look like the baseline.
+    - The main defects (blur, the occasional smudge) remain in every variant.
+  - Cost: the 16x16 set doubles to quadruples training time (K784: 1.3 h -> 5.3 h; the slow unfold / fold, see the
+    64x64 smoke). The 4x4 set costs little (2.4 h).
+- **Figure update (2026-11-16 14:30; the user: "update the inception_fid_mnist_fashion.png figure and include the
+  celebA runs").**
+  - `plot_inception_fid.py` has a third panel, CelebA 32x32 grey, noise start: K784, K3072, K784 / K1536 / K3072
+    + 8x8, and the three two-scale runs. Sources: 4256037, 4256861, 4261206.
+  - The CelebA panel has no Wang & Achour line (they report no CelebA result).
+  - Rows are now sorted by the quenched FID (the dots), best at the bottom.
+  - The footnote takes three lines and the x range is wider, so the value labels fit.
+  - Jobs 4262571 and 4262581; same file name, `figures/inception_fid_mnist_fashion.{png,pdf}`.
+
+### Faster patch unfold / fold with blocks (2026-11-16 15:00; the user: "lets do it")
+
+- **Problem:** `PatchGeometry.unfold` / `fold` use one strided slice / pad per patch entry: 256 for 16x16 patches.
+  - Training differentiates through them twice, so each step becomes thousands of small GPU operations.
+  - The 16x16 set's arithmetic is small (64x64: about 1.4M multiply-adds per image vs 6.3M for K1536), yet it
+    slowed training 9x on 64x64, and from 1.3 h to 5.3 h for K784 on CelebA-32. So the overhead, not the
+    arithmetic, is the suspect.
+- **Change (`latent_model.PatchGeometry`, `impl = 'blocks'`):** when the side and the grid are multiples of the
+  stride (8:2, 16:4, 4:2; not MNIST's 7:3):
+  - the image is cut into stride x stride blocks, and each patch is an m x m group of blocks (m = side / stride);
+  - unfold / fold take m² contiguous slices / pads of the block array: 16 for 16:4 instead of 256, 16 for 8:2
+    instead of 64, 4 for 4:2 instead of 16;
+  - still slices and pads only, so still deterministic.
+  - **The same numbers:** unfold only copies, and fold adds each pixel's patch contributions in the same order (by
+    patch offset u, then v) as the slice version; the slice version's extra terms are exact zeros.
+  - Other layouts keep the slice version. `LATENT_PATCH_IMPL=slices` forces it everywhere.
+  - Backup: `*_pre_blockunfold.py`.
+- **Test job 4262849:**
+  - `check_blockunfold_tmp.py`: unfold / fold, the adjoint identity, and the loss and its gradients with respect to
+    Wp, Qp, bp and X, blocks vs slices, for 8:2, 4:2, 16:4 on 32x32, 16:4 and 8:2 on 64x64, and 7:3 on 28x28
+    (slices both), in float32 and float64; plus the time per loss-and-gradient call.
+  - Then CelebA-32 K784 + 8:2:32 + 16:4:32, 5 slices at 2% of the steps (patches from slice 1), trained once with
+    each implementation: slice files compared, steps/s from the logs.
+- **`MODEL_AND_CODE.md` written** (2026-11-16 15:45; the user: "do we actually have some kind of write up where
+  those code changes and choices are listed?").
+  - The model, parameter counts, the current recipe with the reason for each choice and links to the dated entries,
+    the best models with their command lines, the evaluation scripts, the code changes since the paper code with
+    their verification, known pitfalls, and data on disk.
+  - Section 8 above now points to it, and the `train_latent.py` header now documents `--patch2`.
