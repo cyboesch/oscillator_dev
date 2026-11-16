@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 """Figure: standard Inception FID across models, MNIST (ten digits) and Fashion-MNIST (ten classes) (2026-11-15).
 
-Reads the report.txt of inception_fid.py runs (out/latent_physical_SGM/fid_inception/<job>/): MNIST 4253087, Fashion
-4253088 and 4254741 (K1536 + patch8x8, seeds 1-3; shown as mean +- sd over seeds). report.txt, not metrics.json: the
-metrics.json of these runs kept only the last 'faint zeroed' row (same key; fixed in inception_fid.py since).
-Bars: FID against the 60k train statistics at n = 2000 samples, as sampled (error bar: bootstrap sd, or seed sd).
-Dots: the same samples with faint pixels (< 0.1) set to 0 (a diagnostic for the sigma = 0.01 pixel noise, not the
-model's number). Dashed line: real held-out test images at the same n (the floor). Dotted line: Wang & Achour, arXiv
-2606.27294 (their best KuraSHIL model; their n and FID code are not stated).
+Reads the report.txt of inception_fid.py runs (out/latent_physical_SGM/fid_inception/<job>/; report.txt, not
+metrics.json: some early metrics.json files lost rows to a key clash, fixed in inception_fid.py since).
+Bars: FID against the train statistics at n = 2000 samples, as sampled by the reverse SDE (error bar: bootstrap sd,
+or the sd over seeds). Dots (updated 2026-11-15 evening, the user: "replace the red circles with the quenched results"):
+the same samples after a zero-temperature quench of 1 time unit at t = 0 (sample_latent --quench 1), the sampler of
+our best results. Value labels: as sampled -> quenched. Dashed line: real held-out test images at the same n (the
+floor). Dotted line: Wang & Achour, arXiv 2606.27294 (their best KuraSHIL model; their n and FID code are not stated).
 
 Usage (CPU Slurm job): python plot_inception_fid.py
 Writes out/latent_physical_SGM/figures/inception_fid_mnist_fashion.png and .pdf.
@@ -32,31 +32,46 @@ OUTDIR = os.path.join(lm.OUT_ROOT, "figures")
 BLUE, ORANGE = "#2a78d6", "#eb6834"
 INK, INK2, GRID, SURFACE = "#0b0b0b", "#52514e", "#e4e3df", "#fcfcfb"
 
+SEEDS = (1, 2, 3)
+# (panel title, job with the real-image floor, Wang & Achour, [(label, bar source, quench source)]);
+# a source is (inception_fid job, report label) or (job, [labels]) for the mean +- sd over seeds
 PANELS = [
     ("MNIST, ten digits", "4253087", 27.6, [
-        ("K784", "K784_start-equil_seed1"),
-        ("K6144 (noise start)", "K6144-sweep2026-11-10_start-noise_seed1"),
-        ("K784 + 7x7 patches", "K784+patch7x7-from-t2.2_start-equil_seed1"),
-        ("K3072 + 7x7 patches", "K3072+patch7x7-from-t2.2_start-equil_seed1"),
-        ("K6144 + 7x7 patches", "K6144+patch7x7-from-t2.2_start-equil_seed1"),
+        ("K784", ("4253087", "K784_start-equil_seed1"), ("4256059", "K784_start-equil_quench1")),
+        ("K6144 (noise start)", ("4253087", "K6144-sweep2026-11-10_start-noise_seed1"),
+         ("4256048", "K6144-no-patches_start-noise_quench1")),
+        ("K784 + 7x7 patches", ("4253087", "K784+patch7x7-from-t2.2_start-equil_seed1"),
+         ("4255005", "K784+patch7x7-from-t2.2_start-equil_quench1")),
+        ("K3072 + 7x7 patches", ("4253087", "K3072+patch7x7-from-t2.2_start-equil_seed1"),
+         ("4256059", "K3072+patch7x7-from-t2.2_start-equil_quench1")),
+        ("K6144 + 7x7 patches", ("4253087", "K6144+patch7x7-from-t2.2_start-equil_seed1"),
+         ("4255378", "K6144+patch7x7-from-t2.2_start-equil_quench1")),
     ]),
     ("Fashion-MNIST, ten classes", "4253088", 80.8, [
-        ("K784", "K784_start-equil_seed1"),
-        ("K784 + 14x14 patches (64 states)", "K784+patch14x14-64states-from-t2.2_start-equil_seed1"),
-        ("K784 + 7x7 patches", "K784+patch7x7-from-t2.2_start-equil_seed1"),
-        ("K1536 + 7x7 patches", "K1536+patch7x7-from-t2.2_start-equil_seed1"),
-        ("K3072 + 7x7 patches", "K3072+patch7x7-from-t2.2_start-equil_seed1"),
-        ("K784 + 8x8 patches every 2 px", "K784+patch8x8-every2px-from-t2.2_start-equil_seed1"),
-        ("K1536 + 8x8 patches every 2 px (3 seeds)", ("4254741", [
-            f"K1536+patch8x8-every2px-from-t2.2_start-equil_seed{s}" for s in (1, 2, 3)])),
+        ("K784", ("4253088", "K784_start-equil_seed1"), ("4256060", "K784_start-equil_quench1")),
+        ("K784 + 14x14 patches (64 states)", ("4253088", "K784+patch14x14-64states-from-t2.2_start-equil_seed1"),
+         ("4256060", "K784+patch14x14-64states-from-t2.2_start-equil_quench1")),
+        ("K784 + 7x7 patches", ("4253088", "K784+patch7x7-from-t2.2_start-equil_seed1"),
+         ("4256060", "K784+patch7x7-from-t2.2_start-equil_quench1")),
+        ("K1536 + 7x7 patches", ("4253088", "K1536+patch7x7-from-t2.2_start-equil_seed1"),
+         ("4256060", "K1536+patch7x7-from-t2.2_start-equil_quench1")),
+        ("K3072 + 7x7 patches", ("4253088", "K3072+patch7x7-from-t2.2_start-equil_seed1"),
+         ("4256060", "K3072+patch7x7-from-t2.2_start-equil_quench1")),
+        ("K784 + 8x8 patches every 2 px", ("4253088", "K784+patch8x8-every2px-from-t2.2_start-equil_seed1"),
+         ("4255010", "K784+patch8x8-every2px-from-t2.2_start-equil_quench1")),
+        ("K1536 + 8x8 patches every 2 px (3 seeds)",
+         ("4255381", [f"K1536+patch8x8-every2px-from-t2.2_start-equil_seed{s}" for s in SEEDS]),
+         ("4255381", [f"K1536+patch8x8-every2px-from-t2.2_start-equil_quench1_seed{s}" for s in SEEDS])),
     ]),
 ]
+_cache = {}
 
 
 def load(job):
-    """Rows of report.txt in order -> ({label: [fid_train, boot_sd, fid_faint_zeroed]}, floor fid); the 'faint
-    zeroed' diag row directly follows its set."""
-    out, last, floor = {}, None, None
+    """Rows of report.txt -> ({label: (fid_train, boot_sd)}, floor fid); diag rows are skipped."""
+    if job in _cache:
+        return _cache[job]
+    out, floor = {}, None
     num = r"(-?[\d.]+|nan)"
     pat = re.compile(rf"^(.*?)\s+(\d+)\s+(\d+)\s+{num}\s+{num}\s+{num}\s+{num}\s+{num}\s+{num}$")
     with open(os.path.join(FIDDIR, job, "report.txt")) as f:
@@ -67,45 +82,43 @@ def load(job):
                 floor = float(mf.group(2))
                 continue
             mm = pat.match(line)
-            if not mm:
-                continue
-            label = mm.group(1).strip()
-            if label.startswith("diag: same"):
-                out[last][2] = float(mm.group(4))
-            elif not label.startswith("diag:"):
-                out[label], last = [float(mm.group(4)), float(mm.group(5)), np.nan], label
+            if mm and not mm.group(1).strip().startswith("diag"):
+                out[mm.group(1).strip()] = (float(mm.group(4)), float(mm.group(5)))
+    _cache[job] = (out, floor)
     return out, floor
+
+
+def value(src):
+    """(FID, sd): one set (bootstrap sd) or the mean over seeds (sd over seeds)."""
+    job, key = src
+    rep, _ = load(job)
+    if isinstance(key, list):
+        v = np.array([rep[k][0] for k in key])
+        return float(v.mean()), float(v.std())
+    return rep[key]
 
 
 def main():
     os.makedirs(OUTDIR, exist_ok=True)
     plt.rcParams.update({"font.size": 9, "axes.edgecolor": INK2, "axes.labelcolor": INK, "xtick.color": INK2,
                          "ytick.color": INK, "text.color": INK})
-    fig, axes = plt.subplots(1, 2, figsize=(12, 4.6), facecolor=SURFACE)
+    fig, axes = plt.subplots(1, 2, figsize=(12.5, 4.8), facecolor=SURFACE)
     table = []
-    for ax, (title, job, wa, models) in zip(axes, PANELS, strict=True):
-        rep, floor = load(job)
-        rows = []
-        for label, key in models:
-            if isinstance(key, tuple):                       # seeds from another job: mean +- sd over seeds
-                other, _ = load(key[0])
-                v = np.array([other[k][0] for k in key[1]])
-                z = np.array([other[k][2] for k in key[1]])
-                rows.append((label, v.mean(), v.std(), z.mean()))
-            else:
-                rows.append((label, *rep[key]))
-        rows.sort(key=lambda r: -r[1])                       # worst at the top, best at the bottom
+    for ax, (title, floor_job, wa, models) in zip(axes, PANELS, strict=True):
+        _, floor = load(floor_job)
+        rows = [(label, *value(bar), *value(q)) for label, bar, q in models]
+        rows.sort(key=lambda r: -r[1])                       # worst (as sampled) at the top, best at the bottom
         y = np.arange(len(rows))[::-1].astype(float)
         fid = np.array([r[1] for r in rows])
         sd = np.array([r[2] for r in rows])
-        zero = np.array([r[3] for r in rows])
+        qf = np.array([r[3] for r in rows])
         ax.set_facecolor(SURFACE)
-        ax.barh(y, fid, height=0.55, color=BLUE, zorder=2, label="as sampled")
+        ax.barh(y, fid, height=0.55, color=BLUE, zorder=2, label="as sampled (reverse SDE)")
         ax.errorbar(fid, y, xerr=sd, fmt="none", ecolor=INK2, elinewidth=1, capsize=2, zorder=3)
-        ax.scatter(zero, y, s=44, color=ORANGE, edgecolor=SURFACE, linewidth=1.5, zorder=4,
-                   label="same samples, faint pixels (< 0.1) set to 0 (diagnostic)")
-        for yi, f in zip(y, fid):
-            ax.text(f + 2.5, yi, f"{f:.1f}", va="center", ha="left", fontsize=8, color=INK2, zorder=5,
+        ax.scatter(qf, y, s=46, color=ORANGE, edgecolor=SURFACE, linewidth=1.5, zorder=4,
+                   label="after a zero-temperature quench of 1 at t = 0")
+        for yi, f, q in zip(y, fid, qf):
+            ax.text(f + 2.5, yi, f"{f:.1f} → {q:.1f}", va="center", ha="left", fontsize=8, color=INK2, zorder=5,
                     bbox=dict(facecolor=SURFACE, edgecolor="none", pad=1.0))
         top = len(rows) - 0.55
         ax.axvline(floor, color=INK2, ls="--", lw=1, zorder=1)
@@ -116,7 +129,7 @@ def main():
                 bbox=dict(facecolor=SURFACE, edgecolor="none", pad=1.0))  # row 2
         ax.set_yticks(y)
         ax.set_yticklabels([r[0] for r in rows])
-        ax.set_xlim(0, max(fid.max() + sd.max(), wa) * 1.15)
+        ax.set_xlim(0, max(fid.max() + sd.max(), wa) * 1.22)
         ax.set_ylim(-0.6, len(rows) + 0.35)
         ax.set_title(title, loc="left", fontsize=10.5, fontweight="bold", pad=14)
         ax.set_xlabel("Inception FID vs train set, n = 2000 samples (lower is better)")
@@ -124,20 +137,21 @@ def main():
         ax.tick_params(axis="y", length=0)
         for s in ("top", "right", "left"):
             ax.spines[s].set_visible(False)
-        table += [(title, r[0], r[1], r[2], r[3]) for r in rows]
+        table += [(title, r[0], r[1], r[2], r[3], r[4]) for r in rows]
     h, lab = axes[0].get_legend_handles_labels()
     fig.legend(h[::-1], lab[::-1], loc="upper center", ncol=2, frameon=False, bbox_to_anchor=(0.5, 1.0))
     fig.text(0.01, 0.01, "Equilibrated start and seed 1 unless noted; patches switch on at t = 2.2. Error bars: bootstrap "
-             "sd over samples (sd over seeds for the 3-seed row).\nWang & Achour (arXiv 2606.27294): best KuraSHIL "
-             "oscillator model; their sample count and FID code are not stated.", fontsize=7, color=INK2)
+             "sd over samples (sd over seeds for the 3-seed row). Quench: the same samples relaxed for 1 time unit at "
+             "zero temperature under the t = 0 energy.\nWang & Achour (arXiv 2606.27294): best KuraSHIL oscillator "
+             "model; their sample count and FID code are not stated.", fontsize=7, color=INK2)
     fig.tight_layout(rect=(0, 0.06, 1, 0.93))
     for ext in ("png", "pdf"):
         p = os.path.join(OUTDIR, f"inception_fid_mnist_fashion.{ext}")
         fig.savefig(p, dpi=200, facecolor=SURFACE)
         print("wrote", p)
-    print(f"{'panel':<28}{'model':<44}{'FID':>8}{'sd':>6}{'zeroed':>8}")
+    print(f"{'panel':<28}{'model':<44}{'FID':>8}{'sd':>6}{'quench1':>9}{'sd':>6}")
     for t in table:
-        print(f"{t[0]:<28}{t[1]:<44}{t[2]:>8.2f}{t[3]:>6.2f}{t[4]:>8.2f}")
+        print(f"{t[0]:<28}{t[1]:<44}{t[2]:>8.2f}{t[3]:>6.2f}{t[4]:>9.2f}{t[5]:>6.2f}")
 
 
 if __name__ == "__main__":

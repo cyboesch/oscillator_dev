@@ -169,8 +169,8 @@ def main():
     report(f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; inception_fid; job {os.environ.get('SLURM_JOB_ID', 'manual')}")
     prob = lm.make_problem(args.problem)
     grid = prob["grid"]
-    if grid not in (28, 32):
-        raise SystemExit("Inception FID is set up for 28x28 (MNIST, Fashion) and 32x32 (CelebA) problems")
+    if grid not in (28, 32, 64):
+        raise SystemExit("Inception FID is set up for 28x28 (MNIST, Fashion) and 32x32 / 64x64 (CelebA) problems")
     mean, std = prob["mean"], prob["std"]
     dataset = lm.problem_dataset(args.problem)
     feats, gpus = make_inception()

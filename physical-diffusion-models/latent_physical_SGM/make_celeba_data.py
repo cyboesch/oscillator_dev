@@ -13,7 +13,7 @@ Writes data/CelebA/celeba_gray32_<split>.npz: images (n, 1024) uint8 (row-major 
 of the parquet shards), and a preview data/CelebA/preview_gray32.png (the first 100 train images) plus
 data/CelebA/celeba_gray32_<job>.json (counts, sha256 of every shard and output).
 
-Usage (CPU Slurm job): python make_celeba_data.py
+Usage (CPU Slurm job): python make_celeba_data.py; CELEBA_SIZE=64 for 64x64 (celeba_gray64_*, 2026-11-15 evening)
 """
 import io
 import json
@@ -32,7 +32,7 @@ URL = "https://huggingface.co/api/datasets/flwrlabs/celeba/parquet/img_align+ide
 SHARDS = {"train": 19, "valid": 3, "test": 3}
 EXPECTED = {"train": 162770, "valid": 19867, "test": 19962}
 CROP = (19, 39, 159, 179)          # (left, upper, right, lower): the centre 140x140 of 178x218
-SIZE = 32
+SIZE = int(os.environ.get("CELEBA_SIZE", "32"))   # 32 (default) or 64: CELEBA_SIZE=64 python make_celeba_data.py
 
 
 def download(pq_dir):
@@ -67,7 +67,7 @@ def image_column(table):
 
 
 def convert_shard(p):
-    """One parquet shard -> (n, 1024) uint8 (in row order)."""
+    """One parquet shard -> (n, SIZE^2) uint8 (in row order)."""
     import pyarrow.parquet as pq
     from PIL import Image
     t = pq.read_table(p)
@@ -111,13 +111,13 @@ def main():
         X = convert(ps)
         if X.shape[0] != EXPECTED[split]:
             print(f"WARNING: {split} has {X.shape[0]} images, expected {EXPECTED[split]}", flush=True)
-        path = os.path.join(raw, f"celeba_gray32_{split}.npz")
+        path = os.path.join(raw, f"celeba_gray{SIZE}_{split}.npz")
         np.savez(path, images=X, index=np.arange(X.shape[0], dtype=np.int64))
         summary["files"][path] = {"n": int(X.shape[0]), "mean": float(X.mean() / 255.0), "sha256": lm.sha256_file(path)}
         print(f"wrote {path}: {X.shape}, mean {X.mean() / 255:.4f}", flush=True)
         if split == "train":
-            preview(X, os.path.join(raw, "preview_gray32.png"))
-    with open(os.path.join(raw, f"celeba_gray32_{summary['slurm_job']}.json"), "w") as f:
+            preview(X, os.path.join(raw, f"preview_gray{SIZE}.png"))
+    with open(os.path.join(raw, f"celeba_gray{SIZE}_{summary['slurm_job']}.json"), "w") as f:
         json.dump(summary, f, indent=1)
     print(json.dumps(summary["files"], indent=1), flush=True)
 

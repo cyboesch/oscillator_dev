@@ -161,6 +161,20 @@ def load_params(run, with_harmonic=False, with_patch=False):
         prov["patch_units"] = lm.patch_spec_str((side, stride, S))
         if kind != "potts":                       # manifests of Potts patch runs unchanged
             prov["patch_kind"] = kind
+        if "Wp2" in hid.files:                    # train_latent --patch2: a second (Potts) scale; prov['patch'] becomes
+            spec2 = cfg.get("patch2", "")         # a list of the two sets (make_drift sums them in this order)
+            side2, stride2, S2 = lm.parse_patch_spec(spec2, lm.problem_geometry(problem)[0]) or (0, 0, 0)
+            if not S2:
+                raise RuntimeError(f"{run_dir}: hidden_history.npz has Wp2 but config.json records no --patch2 spec")
+            geom2 = lm.PatchGeometry(lm.problem_geometry(problem)[0], side2, stride2)
+            Wp2, bp2 = hid["Wp2"], hid["bp2"]
+            Qp2 = hid["Qp2"] if "Qp2" in hid.files else None
+            if (Wp2.shape != (n_sl, geom2.P, S2, geom2.d) or bp2.shape != (n_sl, geom2.P, S2)
+                    or (Qp2 is not None and Qp2.shape != Wp2.shape)):
+                raise RuntimeError(f"{run_dir}: second-scale patch units of shapes {Wp2.shape}, {bp2.shape} do not "
+                                   f"match --patch2 {spec2}")
+            prov["patch"] = [prov["patch"], (Wp2, bp2, Qp2, "potts")]
+            prov["patch_units"] += "+" + lm.patch_spec_str((side2, stride2, S2))
     return th, hid["W"], hid["b"], run_dir, prov, problem
 
 
@@ -226,10 +240,9 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
             raise ValueError(f"harmonic modes of shapes {V_h.shape}, {c_h.shape} for a history of "
                              f"{theta_hist.shape[0]} slices in dimension {n}")
         parts += [V_h.reshape(V_h.shape[0], -1), c_h]
-    Pp = Sp = dp = 0
-    with_qp = False
-    patch_kind = "potts"
-    if patch is not None:                                # after the modes: the offsets above are unchanged
+    psets = [] if patch is None else ([patch] if isinstance(patch, tuple) else list(patch))   # --patch2: a list
+    pspecs = []                                          # per set: (offset, P, S, d, with_qp, kind), in order
+    for patch in psets:                                  # after the modes: the offsets above are unchanged
         Wp_h, bp_h = np.asarray(patch[0]), np.asarray(patch[1])
         Qp_h = None if patch[2] is None else np.asarray(patch[2])
         patch_kind = patch[3] if len(patch) > 3 else "potts"   # load_params' 4-tuple; a 3-tuple: Potts units
@@ -243,6 +256,7 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
             raise ValueError(f"patch units of shapes {Wp_h.shape}, {bp_h.shape}"
                              + ("" if Qp_h is None else f", {Qp_h.shape}") + " do not fit together")
         with_qp = Qp_h is not None
+        pspecs.append((sum(a.shape[1] for a in parts), Pp, Sp, dp, with_qp, patch_kind))
         parts += [Wp_h.reshape(Wp_h.shape[0], -1), bp_h.reshape(bp_h.shape[0], -1)]
         if with_qp:
             parts += [Qp_h.reshape(Qp_h.shape[0], -1)]
@@ -284,10 +298,8 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
             o = n_theta + K * n + K + (K * n if quad is not None else 0) + (2 * n if local is not None else 0)
             Vt, ct = p[o:o + R * n].reshape(R, n), p[o + R * n:o + R * n + R]
             d = d + scale * ((Vt @ x + ct) @ Vt)
-        if Pp:                                         # patch units: -grad F_patch = fold(sum_s pi_ps G_ps)
-            o = (n_theta + K * n + K + (K * n if quad is not None else 0) + (2 * n if local is not None else 0)
-                 + R * n + R)                          # (Ising patch units: fold(sum_s m_ps G_ps))
-            m = Pp * Sp * dp
+        for o, Pp, Sp, dp, with_qp, patch_kind in pspecs:   # patch units: -grad F_patch = fold(sum_s pi_ps G_ps)
+            m = Pp * Sp * dp                           # (Ising patch units: fold(sum_s m_ps G_ps)); --patch2: 2 sets
             Wt, bt = p[o:o + m].reshape(Pp, Sp, dp), p[o + m:o + m + Pp * Sp].reshape(Pp, Sp)
             Qt = p[o + m + Pp * Sp:o + 2 * m + Pp * Sp].reshape(Pp, Sp, dp) if with_qp else None
             d = d - scale * lm.patch_terms(Wt, Qt, bt, x[None], lm.TEMP, with_lap=False, kind=patch_kind)[0][0]
@@ -779,7 +791,9 @@ def main():
         local_p = None if local_p is None else (local_p[0][keep], local_p[1][keep])
         quad_p = None if quad_p is None else quad_p[keep]
         harm_p = None if harm_p is None else (harm_p[0][keep], harm_p[1][keep])
-        patch_p = None if patch_p is None else tuple(None if a is None else a[keep] for a in patch_p)
+        cut = lambda ps: tuple(a if (a is None or isinstance(a, str)) else a[keep] for a in ps)   # noqa: E731
+        patch_p = (None if patch_p is None else cut(patch_p) if isinstance(patch_p, tuple)
+                   else [cut(ps) for ps in patch_p])
         prov["thin_knots"] = {"spec": args.thin_knots, "dropped_slices": dropped}
         print(f"--thin-knots {args.thin_knots}: {len(dropped)} slices dropped ({dropped}); {len(keep)} knots; "
               f"writes {stem}.npy", flush=True)

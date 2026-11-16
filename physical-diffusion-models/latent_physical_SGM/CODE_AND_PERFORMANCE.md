@@ -3603,3 +3603,297 @@ structure.
   - quench 1 on the equil start, seeds 1-3: 4255374 / 4255375 / 4255376;
   - classifier FID 4255380 (paired quench vs none per seed), Inception 4255381, gallery 4255382
     (`galleries/2026-11-15_fashion_K1536+patch8x8-every2px-from-t2.2_zero-temperature-quench1_seeds1-3/`).
+- **Results (16:45; FID 4255377 / 4255380, Inception 4255378 / 4255381, galleries 4255379 / 4255382): quench 1 helps
+  the largest models as much as K784. New bests on both data sets.**
+
+  | Model | classifier FID raw (clip) | Inception FID train (FID_inf) |
+  |---|---|---|
+  | MNIST K6144 + patch7x7, equil | 5.35 (5.86) | 55.9 (53.4) |
+  | MNIST K6144 + patch7x7, equil + quench 1 | **3.87 (4.42)** | **18.8 (15.9)** |
+  | MNIST K6144 + patch7x7, noise | 6.53 (7.12) | 55.3 (53.2) |
+  | MNIST K6144 + patch7x7, noise + quench 1 | 4.95 (5.64) | 18.0 (15.3) |
+  | Fashion K1536 + patch8x8, equil, seeds 1-3 | 3.39 +- 0.06 | 55.9 +- 0.3 (51.2) |
+  | Fashion K1536 + patch8x8, equil + quench 1, seeds 1-3 | **2.71 +- 0.07** (2.75 / 2.78 / 2.61) | **25.9 +- 0.04 (21.3)** |
+
+  - **Paired, quench 1 vs none:** MNIST K6144 equil -1.48 [-1.62, -1.29], noise -1.59. Fashion K1536 per seed -0.68 /
+    -0.66 / -0.69, all p = 0.005. The gain is very reproducible across seeds.
+  - **Inception FID vs Wang & Achour:** MNIST 15.9 vs 27.6, Fashion 21.3 vs 80.8 (FID_inf; theirs: n and code not
+    stated).
+  - Recall rises as with K784 (MNIST 0.78 -> 0.82, Fashion 0.66 -> 0.73).
+  - **Best results so far:**
+    - MNIST: K6144 + patch7x7 from t2.2, equil start + quench 1 (classifier FID 3.87).
+    - Fashion: K1536 + patch8x8 every 2 px from t2.2, equil + quench 1 (2.71 +- 0.07).
+
+### CelebA 32x32 grey: first full runs (2026-11-15; pipelines 4255078 / 4255079 / 4255080, all exit code 0)
+
+- **Timing:**
+
+  | Model | training | sampling 2000 (noise start) | MaxRSS |
+  |---|---|---|---|
+  | K784 | 0.62 h | 2745 s | 20 GB |
+  | K784 + patch8x8 | 1.29 h | 2240 s | 28 GB |
+  | K1536 + patch8x8 | 1.72 h | 7154 s | 45 GB |
+
+  The memory fix keeps host memory bounded.
+- **17:55: submitted the evaluation.**
+  - quench 1 on the noise samples: 4256031 / 4256033 / 4256035;
+  - equilibrated start + quench 1: 4256032 / 4256034 / 4256036;
+  - Inception FID of the noise sets (with / without quench): 4256037;
+  - gallery: 4256038;
+  - nearest-neighbour check: 4256039;
+  - after the equil runs: Inception FID of all sets 4256040, equil gallery 4256041;
+  - galleries: `galleries/2026-11-15_celeba32-grey_*`.
+- **19:05: first look (gallery 4256038, nearest neighbours 4256039; Inception FID 4256037 still running).**
+  - The samples are recognisable faces: hair, eyes, mouth, pose and lighting all vary. As sampled they carry the
+    familiar speckle, and the quench removes it, as on MNIST and Fashion.
+  - The 8x8 patches give smoother, more coherent faces than K784 alone. K1536 + patches looks only slightly better
+    than K784 + patches.
+  - Weak spots: some faces are smeared or asymmetric, a few have a washed-out background, and fine detail (teeth,
+    eyes) is blurred.
+  - **No memorisation.**
+    - Real test faces lie a median 4.39 from their nearest training face (5th percentile 3.14). Samples lie
+      4.0-4.3 away, and none is closer than 1.
+    - After the quench, 6-7% of samples are closer than the 5th percentile of the real faces, against 2-3% before it.
+    - The closest samples are dark, low-contrast faces. Every dark face is near every other dark face, so these are
+      not copies (`nn_05_*.png`).
+- **19:15: Inception FID, noise start** (job 4256037; against CelebA train 162,770; n = 2000; floor = real test faces):
+
+  | Model | as sampled: FID (FID_inf) | quench 1: FID (FID_inf) | quench 1: KID x1e3 |
+  |---|---|---|---|
+  | real test faces (floor) | 6.43 | | 2.2 |
+  | K784 | 238.0 (232.9) | 104.4 (99.6) | 120 |
+  | K784 + patch8x8 | 98.4 (93.3) | 24.7 (21.3) | 17.1 |
+  | K1536 + patch8x8 | 98.2 (94.1) | **23.9 (20.3)** | **16.7** |
+
+  - Inception sees the speckle most clearly on faces: the quench cuts the FID by a factor of 4. Zeroing faint pixels
+    helps only by 1-10, so the speckle is not just faint pixels.
+  - The patches are essential on CelebA: they cut the quenched FID from 104 to 24. Doubling K adds only about 0.8.
+  - Sensitivity check: N(0, 0.01²) pixel noise on real test faces gives 10.8, and N(0, 0.02²) gives 28.1.
+  - (The report's footer still says "60k train statistics"; that is a stale string. The statistics are those of the
+    CelebA train set.)
+- **19:30: more Potts states, and a large K without patches** (the user: "run with more potts and also one without
+  patches").
+  - Two pipelines, same recipe as before:
+
+    | Pipeline | Model |
+    |---|---|
+    | **4256247** | K3072 + patch8x8 every 2 px from t2.2 |
+    | **4256248** | K3072, no patches |
+
+  - Each: seed 1, 2000 samples from the noise start, `--chunk 100`, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`,
+    128 GB, 20 h limit.
+  - Expected time: K1536 + p8 took 3.8 h (45 GB MaxRSS), so K3072 should take about 8 h.
+  - K6144 is held back until K3072 shows whether K still helps on faces: at K1536, doubling K gave only -0.8.
+  - Afterwards: quench 1, Inception FID, gallery.
+
+### Quench on K6144 without patches (submitted 2026-11-15 18:05; the user: "without the patches the digits looked kind of good but a bit noisy")
+
+- **Question:** does the quench remove the noise of the global-unit-only model well enough that patches are not
+  needed?
+- **Run:** `mnist28_d0123456789_K6144_ema_potts_quad_local_quartic_r1_lin_pooled` (the 2026-11-10 sweep; Potts,
+  quartic, radius 1; trained with the older float64 path; noise-start samples only).
+- **Jobs:** quench 1 and 2 (4256046; platform allocator, chunk 25, 160 GB).
+- **Evaluation:** classifier FID 4256047, Inception 4256048, gallery 4256049
+  (`galleries/2026-11-15_mnist_K6144-no-patches_vs_K6144+patch7x7_zero-temperature-quench-1-2_noise-start/`).
+  - Compared with K6144 + patch7x7 from the same start states, with and without quench 1.
+  - Paired: quench 1 vs none; no-patches + quench 1 vs patches + quench 1.
+- **Result (19:55): the quench helps, but does not replace the patches.** n = 2000, noise start, test reference:
+
+  | Model | classifier FID | Inception FID (FID_inf) | recall (features) |
+  |---|---|---|---|
+  | K6144, no patches | 19.75 | 89.1 (87.0) | 0.45 |
+  | K6144, no patches, quench 1 | 15.33 | 57.8 (54.9) | 0.54 |
+  | K6144, no patches, quench 2 | 14.10 | 52.1 (49.1) | 0.57 |
+  | K6144 + patch7x7 | 6.53 | 55.3 (53.5) | 0.76 |
+  | K6144 + patch7x7, quench 1 | **4.95** | **18.0 (15.3)** | **0.80** |
+
+  - Paired, no patches: quench 1 vs none -4.42 [-4.54, -4.23]. No patches + quench 1 vs patches + quench 1: +10.38
+    [+9.64, +10.88]. Both p = 0.005.
+  - **The gallery explains it.** Without patches the strokes are ragged: broken edges, holes and stray dots inside
+    the stroke, and blotchy fills (the 0s, the 4s). The quench clears the background speckle, but the stroke-internal
+    defects stay; they are local minima of the t = 0 energy. With patches the strokes are smooth and solid.
+  - The quench moves the no-patch model only to where the patch model starts *before* its quench (Inception 52-58
+    vs 55).
+  - Caveat: the no-patch run is from the 2026-11-10 sweep (older float64 training path, noise start only), so it is
+    not a perfectly matched control. The gap is far larger than that difference would explain.
+  - **Conclusion:** the patches fix the stroke texture, which the global units cannot. On CelebA this is the
+    K3072-without-patches run (4256248).
+
+### Figure update: Inception FID with the quench (submitted 2026-11-15 18:20; the user: "replace the red circles with the quenched results")
+
+- `plot_inception_fid.py` now shows, per model:
+  - bars: the as-sampled FID;
+  - orange dots: the same samples after quench 1 (instead of the faint-pixels-zeroed diagnostic);
+  - labels "as sampled -> quenched".
+- **Quench 1 for the plotted models that had none** (equil start; the K3072 runs with the platform allocator):
+  - MNIST K784 4256052, MNIST K3072 + 7x7 4256054;
+  - Fashion K784 4256055, K784 + 14x14 4256058, K784 + 7x7 4256057, K1536 + 7x7 4256056, K3072 + 7x7 4256053;
+  - Inception FID: MNIST 4256059, Fashion 4256060.
+- **Other sources:**
+  - K6144 without patches: noise start + quench 1 (4256048);
+  - MNIST K784 + 7x7: 4255005; MNIST K6144 + 7x7: 4255378;
+  - Fashion K784 + 8x8: 4255010; Fashion K1536 + 8x8, seeds 1-3: 4255381.
+- **Plot job:** 4256062, after 4256048 / 4256059 / 4256060. Output: `out/latent_physical_SGM/figures/inception_fid_mnist_fashion.{png,pdf}`.
+- **Done 20:00 (4256062, exit code 0). Inception FID against train, n = 2000, as sampled -> quench 1:**
+
+  | MNIST | | Fashion | |
+  |---|---|---|---|
+  | K784 | 112.8 -> 86.3 | K784 | 131.1 -> 96.0 |
+  | K6144, no patches (noise start) | 89.1 -> 57.8 | K784 + 14x14 (64 states) | 95.0 -> 54.9 |
+  | K784 + 7x7 | 66.2 -> 27.7 | K784 + 7x7 | 70.0 -> 36.5 |
+  | K3072 + 7x7 | 58.3 -> 21.1 | K1536 + 7x7 | 68.6 -> 35.4 |
+  | K6144 + 7x7 | 55.9 -> **18.8** | K3072 + 7x7 | 68.0 -> 34.1 |
+  | | | K784 + 8x8 every 2 px | 56.7 -> 26.9 |
+  | | | K1536 + 8x8 every 2 px (3 seeds) | 55.9 -> **25.9 ± 0.04** |
+
+  - The quench helps every model, by 25-40 points with patches and less without them.
+  - The model order is unchanged.
+  - With patches + quench 1, all MNIST models beat Wang & Achour's 27.6 (K784 + 7x7 only just). Every Fashion model
+    with patches beats their 80.8, with or without the quench.
+  - Floors (real test images): 3.7 (MNIST), 7.2 (Fashion).
+
+### CelebA 64x64 grey and two patch scales (2026-11-15 21:00; the user: "I cannot afford to wait", two patch scales "a great idea")
+
+- **Data (job 4256480, 4 min):** the same crop at 64x64 (4096 visible units). The preview looks right
+  (`data/CelebA/preview_gray64.png`).
+  - `make_celeba_data.py` takes `CELEBA_SIZE=64` and writes `celeba_gray64_{train,valid,test}.npz`
+    (162,770 / 19,867 / 19,962; train pixel mean 0.435).
+- **Problem `celeba64g`.**
+  - `latent_model`: `celeba_grid(name)`, and `load_celeba_raw(split, grid)`.
+  - Dataset name `celeba64`, so its Inception statistics are cached apart from CelebA-32's.
+  - `fid_score.load_mnist`, `nn_check` and `inception_fid` accept 64x64.
+  - Backups: `../latent_physical_SGM_pre_ising_patch/*_pre_celeba64.py`.
+- **Estimates (scaled from CelebA-32, not measured yet):**
+  - K1536 at 64x64 has 6.3M global couplings per slice, comparable to MNIST K6144 (4.8M).
+  - Training about 7 h; sampling 2000 about 8 h at chunk 50; host memory 100-150 GB.
+- **Submitted:**
+  - smoke test **4256481**: K1536 + patch16x16 every 4 px, 1% of the steps, 100 samples at chunk 25, 160 GB;
+  - full run **4256482**: K1536 + patch16x16 every 4 px (16:4:32 from slice 55, init 0.06), 2000 samples from
+    the noise start at chunk 50, `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95`, 160 GB, 2-day limit.
+  - Why 16x16 every 4 px: at 64x64 it covers the same share of the face as 8x8 every 2 px at 32x32.
+  - Both are held (`scontrol hold`) until the --patch2 refactor below passes its regression test: they would start
+    with the changed code.
+- **Two patch scales: `train_latent.py --patch2 SIDE:STRIDE:STATES`.**
+  - A second set of Potts patch units with keys `Wp2`, `bp2`, `Qp2`, next to `--patch`.
+  - Each set has its own k-means reference (seeds PATCH_SEED0 + 100000 + 1000 (seed - 1) + p;
+    `patch2_reference.json`) and its own learning-rate scales.
+  - Shared with `--patch`: init scale, switch-on slice and lr scale.
+  - Diagnostics: record keys `patch2_*` and `force_rms_patch2`. The second set is stored in the slice files and,
+    last, in `hidden_history.npz`.
+  - `latent_model.PATCH_SETS`: the loss and the force sum over the sets present, the first set exactly as before.
+  - `sample_latent`: `prov['patch']` becomes a list of both sets; `make_drift` sums them; the manifest's
+    `patch_units` reads e.g. `16:4:32+8:2:32`. Fixed on the way: `--thin-knots` on a patch run sliced the kind
+    string.
+  - Backups: `*_pre_patch2.py`.
+- **Test job 4256601.**
+  1. Regression: old vs new code, `--patch` only, 4 slices, must be bit-identical.
+  2. A two-scale MNIST run (7:3:16 + 4:3:8) over all 100 slices: sampling, quench and equilibrated start.
+  3. Three slices of celeba64g with 16:4:32 + 8:2:32.
+  - Temporary old-code copy: `../latent_physical_SGM_oldcheck/` (deleted after).
+- **21:50: test 4256601 PASSED (33 min).**
+  - Regression: `--patch` only, old vs new code, 4 slices. Every array is bit-identical, and so is every record value
+    except the timings.
+  - Two scales on MNIST: 7:3:16 + 4:3:8, all 100 slices.
+    - Wp/bp/Qp and Wp2/bp2/Qp2 are zero before slice 55 and trained after it.
+    - The `patch2_*` diagnostics are recorded.
+    - Sampling, quench 1 and the equilibrated start give finite samples. The manifest records `7:3:16+4:3:8`; the
+      quench's manifest records no `patch_units`, which is cosmetic.
+  - celeba64g: K16 reference k-means 119 s. Patch k-means: 16:4:32 in 315 s (explained variance median 0.73),
+    8:2:32 in 347 s (0.85). 3 slices trained.
+  - The test runs and `../latent_physical_SGM_oldcheck/` are deleted.
+- **Holds released** (4256481 smoke, 4256482 K1536 + 16x16/4).
+- **Submitted 4256661:** K1536 + patch16x16 every 4 px + patch8x8 every 2 px (`--patch 16:4:32 --patch2 8:2:32`, from
+  slice 55, init 0.06). Same settings as 4256482: 2000 samples at chunk 50, 160 GB, 2-day limit.
+- **Watch item:** the 64x64 test slices ran at about 1 s per step at K16, with only 22 steps per slice, so compile
+  time probably dominates. The smoke test (1% of the steps, about 110 per slice) gives the real per-step time. If it
+  is about 1 s, the full runs (11,000 steps per slice) would not fit, and the step count or the steps schedule has to
+  change.
+
+### CelebA 32x32: equilibrated start (2026-11-15 22:30; sampling 4256032 / 34 / 36, Inception 4256040, gallery 4256041)
+
+- **Inception FID against train, n = 2000 (FID_inf in brackets); floor 6.43:**
+
+  | Model | noise start | equil:3 start | noise + quench 1 | equil + quench 1 |
+  |---|---|---|---|---|
+  | K784 | 238.0 | 232.8 | 104.4 | 99.1 (96.2) |
+  | K784 + patch8x8 | 98.4 | 94.6 | 24.7 | **23.8 (19.9)** |
+  | K1536 + patch8x8 | 98.2 | 94.5 | 23.9 | **23.9 (20.6)** |
+
+  - The equilibrated start gains about 4 as sampled, but after the quench it gains only 0-1. The quench removes
+    most of what the start fixes.
+  - K784 and K1536 with patches are equal within error after the quench, so on CelebA-32, K beyond 784 buys
+    nothing so far. The K3072 runs (4256247/8) test this further.
+- **Gallery** (`galleries/2026-11-15_celeba32-grey_K784-vs-K784+patch8x8-vs-K1536+patch8x8_equil-start_with-and-without-quench1/`):
+  - The same picture as from the noise start. The quench gives clean, smooth faces, a little blurry.
+  - The patch models have more coherent hair and face outlines than K784 alone.
+  - Some faces have a dark smudge over one eye, or an unclear face/background boundary.
+
+### Change of plan: two patch scales on CelebA 32 first (2026-11-15 22:45; the user: "maybe then stop the 64x64 after all...? and first investigate the two scale on 32?")
+
+- **Cancelled before they started:** CelebA-64 full runs 4256482 (K1536 + 16x16/4) and 4256661 (K1536 + 16x16/4 +
+  8x8/2). The smoke test 4256481 keeps running for the speed and memory numbers (27-29 steps/s at K1536 before
+  the patches).
+- **Two-scale runs on CelebA-32.**
+  - Both are K784, the size that ties K1536 after the quench.
+  - Both keep the proven `--patch 8:2:32` (identical start to the K784 + 8x8 run, so the comparison is paired) and
+    add a second scale from slice 55:
+
+    | Pipeline | Second scale |
+    |---|---|
+    | **4256794** | `--patch2 4:2:32`, finer: 15x15 = 225 patches of 4x4 (fine detail: eyes, teeth) |
+    | **4256795** | `--patch2 16:4:32`, coarser: 5x5 = 25 patches of 16x16 (face parts, outline, the smudges) |
+
+  - 2000 samples from the noise start each.
+- **Evaluation chain:**
+  - quench 1: 4256796 / 4256797;
+  - Inception FID of both runs and the one-scale K784 + 8x8 baseline, with and without the quench: 4256798;
+  - gallery 4256799 (`galleries/2026-11-15_celeba32-grey_K784+patch8x8_vs_+patch4x4_vs_+patch16x16_two-scale-patches_noise-start_with-and-without-quench1/`).
+
+### Disk full: /n/fs/cyrills-part at 99% (2026-11-15 23:00; CS disk-monitor email at 95%)
+
+- **df:** 492 of 500 GB used, 9 GB free. That was not enough for the running jobs.
+  - Each slice file of the CelebA-64 K1536 smoke test was 123 MB, and its assembled history would have added about
+    12 GB more.
+  - Writes stop at 102%, or after 7 days above 100%.
+- **Done:**
+  - Cancelled the smoke test 4256481 at slice 87. Its speed numbers are above.
+  - Held the two-scale jobs, then released them once there was room.
+  - Deleted, with the user's approval:
+    - the CelebA parquet download cache (11.7 GB);
+    - the smoke run (10.7 GB);
+    - `celeba_gray64_*.npz` (0.8 GB). To rebuild them: re-download (`make_celeba_data.py` fetches missing
+      shards), then `CELEBA_SIZE=64`.
+  - Now 470 GB used, 31 GB free (94%).
+- **Storage per run:** the per-slice files in `slices/` and the assembled `hidden_history.npz` hold the same
+  parameters, so finished runs store them twice. CelebA-32: about 5 GB per K3072 run each way. 64x64: about 12 GB
+  per K1536 run each way.
+- **CelebA-32 K3072 without patches (4256248): training done, sampling FAILED.** GPU memory: "Failed to allocate
+  5049912000 bytes for new constant", the history in float64, as with MNIST K6144. This was not the disk.
+  - Rerun of the sampling only, **4256809**: `XLA_PYTHON_CLIENT_ALLOCATOR=platform`, chunk 25, 160 GB.
+  - The same for K3072 + patches as **4256810**, which runs only if 4256247 fails (`afternotok`).
+- **CelebA-64 smoke 4256481, the speed from its log (before the cancel):**
+  - K1536 without patches: 27-46 steps/s.
+  - From slice 55, with the 16x16 patches every 4 px: **about 5 steps/s, nine times slower**.
+  - Peak host memory: 29.5 GB.
+  - At full steps (about 22,000-28,000 per patch slice, 45 slices) that is about 60 h of training for the patch
+    slices alone. The 2-day runs would not have fit; the cancelled 4256482 / 4256661 would have timed out.
+  - Likely cause: `PatchGeometry.unfold` / `fold` build one strided slice or pad per patch entry, 256 for 16x16, so
+    the graph and the memory traffic grow with side². 64x64 needs a cheaper unfold (a convolution with an identity
+    kernel, or a reshape when stride = side / 4) before it is worth running.
+  - The same may slow the CelebA-32 run with `--patch2 16:4:32` (4256795); its log will show it.
+- **23:15: CelebA-32 K3072 + patch8x8 (4256247): training done (all 100 slices), sampling failed** on GPU memory
+  ("Failed to allocate 5608017600 bytes for new constant"), like the run without patches.
+  - The backup sampling **4256810** is now active.
+  - Evaluation chain after the two sampling reruns:
+    - quench 1: 4256859 (no patches) / 4256860 (patches), platform allocator, chunk 25;
+    - Inception FID **4256861**: K3072 with and without patches, against the quenched K784 / K784 + p8 /
+      K1536 + p8;
+    - gallery **4256862** (`galleries/2026-11-16_celeba32-grey_K784-vs-K3072_with-and-without-patch8x8_noise-start_quench1/`).
+  - Disk at 23:15: 476 of 500 GB (96%, 25 GB free). The two-scale runs 4256794 / 4256795 are training.
+- **23:40: K1536 with two patch scales** (the user: "maybe submit one with two scale patches on K15..").
+  - Pipeline **4257324**: K1536 + `--patch 8:2:32 --patch2 16:4:32` from slice 55, seed 1, 2000 samples from the
+    noise start, 80 GB, 16 h limit.
+  - The coarse second scale was chosen because the remaining face defects are mid-scale (eye smudges, outlines);
+    the quench already removes the fine speckle.
+  - quench 1: 4257325; Inception FID against the one-scale K1536 + 8x8, with and without the quench: 4257326.
+  - Disk: 478 of 500 GB (23 GB free). This run adds about 5 GB, and the jobs queued before it about 7 GB.

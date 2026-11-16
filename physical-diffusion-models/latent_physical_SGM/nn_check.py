@@ -38,8 +38,8 @@ N_RANDOM, N_CLOSEST = 12, 6
 
 def raw_train(problem, prob):
     """The training images as the model saw them, raw (no pixel noise), (n, grid^2) in [0, 1]."""
-    if lm.problem_dataset(problem) == "celeba":
-        return lm.load_celeba_raw("train")[0]
+    if lm.problem_dataset(problem).startswith("celeba"):
+        return lm.load_celeba_raw("train", lm.celeba_grid(problem))[0]
     path = lm.problem_data_path(problem)
     z = np.load(path)
     if "images" in z.files:

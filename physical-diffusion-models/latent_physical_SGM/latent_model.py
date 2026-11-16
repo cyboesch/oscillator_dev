@@ -460,15 +460,21 @@ FASHION_CLASSES = ("T-shirt/top", "Trouser", "Pullover", "Dress", "Coat", "Sanda
 # CelebA (2026-11-15): celeba32g = aligned faces, centre crop 140x140, grey, 32x32 (1024 visible units), radius 16, the
 # full train split (162,770 images), one class (no labels), the same pixel noise and normalisation as the digit
 # subsets; data from make_celeba_data.py (celeba_gray32_<split>.npz in CELEBA_RAW_DIR, uint8)
-_CELEBA_PROBLEM = re.compile(r"celeba32g")
+_CELEBA_PROBLEM = re.compile(r"celeba(32|64)g")
 CELEBA_RAW_DIR = os.path.join(PKG, "data", "CelebA")
-CELEBA_GRID = 32
+CELEBA_GRID = 32          # celeba32g; celeba64g (2026-11-15 evening) is the same crop at 64x64 (4096 visible units)
 
 
-def load_celeba_raw(split):
-    """A CelebA 32x32 grey split ('train' 162,770, 'valid' 19,867, 'test' 19,962) from CELEBA_RAW_DIR: images (n, 1024)
-    float32 in [0, 1] (/255) and labels (n,) int64, all 0 (one class)."""
-    z = np.load(os.path.join(CELEBA_RAW_DIR, f"celeba_gray32_{split}.npz"))
+def celeba_grid(name):
+    """32 for celeba32g, 64 for celeba64g (None for other problems)."""
+    m = _CELEBA_PROBLEM.fullmatch(name)
+    return None if m is None else int(m.group(1))
+
+
+def load_celeba_raw(split, grid=CELEBA_GRID):
+    """A CelebA grid x grid grey split ('train' 162,770, 'valid' 19,867, 'test' 19,962) from CELEBA_RAW_DIR: images
+    (n, grid^2) float32 in [0, 1] (/255) and labels (n,) int64, all 0 (one class)."""
+    z = np.load(os.path.join(CELEBA_RAW_DIR, f"celeba_gray{int(grid)}_{split}.npz"))
     X = z["images"]
     return X.astype(np.float32) / 255.0, np.zeros(X.shape[0], np.int64)
 
@@ -486,9 +492,10 @@ def load_fashion_raw(split):
 
 
 def problem_dataset(name):
-    """'fashion' for the Fashion-MNIST problems (fashion28_c...), 'celeba' for celeba32g, 'mnist' otherwise."""
+    """'fashion' for the Fashion-MNIST problems (fashion28_c...), 'celeba' for celeba32g, 'celeba64' for celeba64g (its
+    own cached Inception statistics), 'mnist' otherwise."""
     if _CELEBA_PROBLEM.fullmatch(name):
-        return "celeba"
+        return "celeba" if celeba_grid(name) == 32 else f"celeba{celeba_grid(name)}"
     return "fashion" if _FASHION_PROBLEM.fullmatch(name) else "mnist"
 
 
@@ -500,7 +507,7 @@ def problem_geometry(name):
     if _FASHION_PROBLEM.fullmatch(name):
         return GRID, N_NEIGHBOUR_COUPLINGS
     if _CELEBA_PROBLEM.fullmatch(name):
-        return CELEBA_GRID, CELEBA_GRID // 2
+        return celeba_grid(name), celeba_grid(name) // 2
     m = _DIGIT_PROBLEM.fullmatch(name)
     if m is None:
         raise ValueError(f"unknown problem {name!r}")
@@ -523,7 +530,7 @@ def problem_data_path(name):
     paper's 0/1 file for mnist28 / mnist14 (and, as before, for the synthetic gauss2_8); fashion_<classes>_28.npz for
     the Fashion-MNIST problems."""
     if _CELEBA_PROBLEM.fullmatch(name):
-        return os.path.join(CELEBA_RAW_DIR, "celeba_gray32_train.npz")
+        return os.path.join(CELEBA_RAW_DIR, f"celeba_gray{celeba_grid(name)}_train.npz")
     mf = _FASHION_PROBLEM.fullmatch(name)
     if mf is not None:
         return os.path.join(DIGITS_DIR, f"fashion_{mf.group(1)}_28.npz")
@@ -568,7 +575,7 @@ def make_problem(name, radius=None, neighbourhood="chebyshev"):
     m = _DIGIT_PROBLEM.fullmatch(name)
     mf = _FASHION_PROBLEM.fullmatch(name)
     if _CELEBA_PROBLEM.fullmatch(name):     # CelebA 32x32 grey: one class, the digit subsets' noise and normalisation
-        raw, labels = load_celeba_raw("train")
+        raw, labels = load_celeba_raw("train", celeba_grid(name))
         digits = [0]
         data, mean, std = _normalise_like_paper(raw)
     elif mf is not None:                     # Fashion-MNIST classes: the digit subsets' noise and normalisation
@@ -1020,6 +1027,13 @@ def harmonic_free_energy(V, c, X):
 # Per-patch Potts hidden units (train_latent.py --patch SIDE:STRIDE:STATES; 2026-11-13)
 # ---------------------------------------------------------------------------------------------------------------
 PATCH_KEYS = ("Wp", "bp", "Qp")  # parameters of the per-patch Potts units (train_latent.py --patch)
+PATCH2_KEYS = ("Wp2", "bp2", "Qp2")   # a second patch scale (train_latent.py --patch2, 2026-11-15 evening)
+PATCH_SETS = (PATCH_KEYS, PATCH2_KEYS)   # summed in this order, after every other term; geometry from the shapes
+
+
+def patch_sets_in(params):
+    """The (W, b, Q) key triples of the patch sets present in params, in PATCH_SETS order."""
+    return [ks for ks in PATCH_SETS if ks[0] in params]
 PATCH_SEED0 = 20000              # k-means seed of patch p for --seed s: PATCH_SEED0 + 1000 (s - KEY_SEED) + p
 PATCH_KINDS = ("potts", "ising")  # train_latent.py --patch-kind: one Potts unit per patch, or STATES Ising units
 
@@ -1247,7 +1261,7 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
         raise ValueError("jackknife must be False / 0, True / 1, or 2 (2 needs samples divisible by 4)")
 
     def loss(params, X, key=None):
-        if "Wp" in params and samples > 0:       # trace time only: the default jaxpr is unchanged
+        if patch_sets_in(params) and samples > 0:   # trace time only: the default jaxpr is unchanged
             raise ValueError("patch units need exact hidden statistics")
         gv, lapv = vis.grad_lap(params["theta"], X)
 
@@ -1269,10 +1283,11 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
                 gm, lapm, _ = harmonic_terms(params["V"], params["c"], X)
                 g = g + gm
                 lap = lap + lapm
-            if "Wp" in params:                   # per-patch Potts (or Ising) units (--patch), after the modes
-                gp, lapp, _, _ = patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, kind=patch_kind)
-                g = g + gp
-                lap = lap + lapp
+            for kw, kb, kq in PATCH_SETS:        # per-patch Potts (or Ising) units (--patch, --patch2), after the modes
+                if kw in params:
+                    gp, lapp, _, _ = patch_terms(params[kw], params.get(kq), params[kb], X, T, kind=patch_kind)
+                    g = g + gp
+                    lap = lap + lapp
             return -lap / T + jnp.sum(g * g, axis=1) / (2.0 * T * T)
 
         if samples == 0:
@@ -1343,8 +1358,9 @@ def make_force(vis, T, K, hidden="ising", local=False, patch_kind="potts"):
             g = g + local_terms(params["wl"], params["bl"], X, T)[0]
         if "V" in params:                        # harmonic modes (--harmonic)
             g = g + harmonic_terms(params["V"], params["c"], X)[0]
-        if "Wp" in params:                       # per-patch Potts (or Ising) units (--patch)
-            g = g + patch_terms(params["Wp"], params.get("Qp"), params["bp"], X, T, with_lap=False, kind=patch_kind)[0]
+        for kw, kb, kq in PATCH_SETS:            # per-patch Potts (or Ising) units (--patch, --patch2)
+            if kw in params:
+                g = g + patch_terms(params[kw], params.get(kq), params[kb], X, T, with_lap=False, kind=patch_kind)[0]
         return g
 
     return force
