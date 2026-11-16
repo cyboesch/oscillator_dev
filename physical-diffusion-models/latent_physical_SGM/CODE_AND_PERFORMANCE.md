@@ -4053,3 +4053,31 @@ structure.
   - quench 1: 4262954; Inception FID **4262955** against K784 + 8x8, + 4x4, + 16x16 and K1536 + 8x8 + 16x16;
     gallery **4262956** (`galleries/2026-11-16_celeba32-grey_one-two-three-patch-scales_K784-8x8-4x4-16x16_noise-start_with-and-without-quench1/`).
   - Couplings per slice: global 1.61M + patches 0.69M + 0.23M + 0.41M = 2.94M (about K1536 + 8x8: 3.84M).
+
+### CelebA 64x64: one run submitted after all (2026-11-16 17:00; the user: "should we submit the 64x64 as well?" ... "yes please")
+
+- **Config:** K1536 + 16x16 patches every 4 px (16:4:32) from slice 55, init 0.06, seed 1. At 64x64 this covers the
+  same share of the face as 8x8 every 2 px at 32x32. Single patch scale; layout to be revisited after the CelebA-32
+  three-scale result.
+- **Expected cost** (from smoke 4256481 and test 4262849): slices 0-54 at 27-46 steps/s (about 7 h); the patch slices
+  at about 6 steps/s (blocks gain only 1.2x for 16:4 at 64x64), about 50-55 h; sampling about 10 h. **About 3 days.**
+- **Jobs:**
+  - data **4263036**: `CELEBA_SIZE=64 make_celeba_data.py`; re-downloads the parquet shards (about 12 GB);
+  - training **4263037**: `train_latent.py` directly via `run_gpu_neuronic.sh` (not the pipeline), so training keeps
+    JAX's default allocator; 160 GB, 5-day limit;
+  - sampling **4263038**: 2000 samples, noise start, chunk 25, `XLA_PYTHON_CLIENT_ALLOCATOR=platform` (history about
+    10 GB in float64), 1-day limit;
+  - quench 1: **4263039**; Inception FID **4263040** (dataset `celeba64`, its own statistics);
+  - gallery **4263041** (`galleries/2026-11-16_celeba64-grey_K1536+patch16x16-every4px_noise-start_with-and-without-quench1/`).
+- Disk at submission: 492 GB of 1 TB used. The run adds about 25 GB, the parquet cache 12 GB.
+- **In parallel (open):** find why the 64x64 patch term is slow, so that a better-configured second run can overtake
+  this one.
+- **Test 4262952 PASSED (26 min).**
+  - Regression: the `--patch` + `--patch2` run (4 slices) is bitwise identical with the old and the new code, every
+    array and the same record keys.
+  - Three scales (K64 + 8x8 + 4x4 + 16x16, 100 slices):
+    - all nine arrays (Wp/bp/Qp, Wp2/bp2/Qp2, Wp3/bp3/Qp3) are zero before slice 55 and trained after it;
+    - `patch3_*` and `force_rms_patch3` are recorded; set 3's k-means seeds are 220000-220024;
+    - sampling and the quench give finite samples; the manifest records `8:2:32+4:2:32+16:4:32`.
+  - The test runs and the old-code copy are deleted. Pipeline 4262953 is released by the dependency and waits in the
+    queue.
