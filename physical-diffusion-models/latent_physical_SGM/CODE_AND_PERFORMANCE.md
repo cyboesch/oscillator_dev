@@ -3998,3 +3998,35 @@ structure.
     the best models with their command lines, the evaluation scripts, the code changes since the paper code with
     their verification, known pitfalls, and data on disk.
   - Section 8 above now points to it, and the `train_latent.py` header now documents `--patch2`.
+- **Block unfold: test 4262849 PASSED (12 min).**
+  - **Exactness** (same random inputs, both implementations): unfold, fold, the loss and its gradients (dX, dWp, dQp,
+    dbp) are bitwise identical for 8:2, 4:2, 16:4 on 32x32 and 16:4 on 64x64, in float32 and float64. One
+    exception: on 64x64 8:2 the loss differs at 8.7e-8 relative (float32), the gradients still bitwise.
+  - **Time per loss-and-gradient of the patch term alone** (B = 256, float32, L40):
+
+    | Layout | slices | blocks | speed-up |
+    |---|---|---|---|
+    | 32x32, 8x8 every 2 px | 3.95 ms | 0.86 ms | **4.6x** |
+    | 32x32, 16x16 every 4 px | 0.70 ms | 0.30 ms | 2.3x |
+    | 32x32, 4x4 every 2 px | 0.34 ms | 0.31 ms | 1.1x |
+    | 64x64, 16x16 every 4 px | 5.72 ms | 4.75 ms | 1.2x |
+    | 64x64, 8x8 every 2 px | 8.70 ms | 14.51 ms | **0.6x (slower)** |
+    | 28x28, 7x7 every 3 px | slices in both | | |
+
+  - **Training, CelebA-32 K784 + 8x8 + 16x16** (5 slices at 2% of the steps, patches from slice 1): the patch
+    slices run at **13-14 steps/s with slices and 39-41 with blocks, 3x faster**. Slice 0, without patches, is
+    the same (18/s, including compile).
+  - **The trained parameters agree to rounding, not bitwise:**
+    - slice 0 (no patches) is bitwise;
+    - from slice 1 the relative differences are 1e-10 to 2e-6 and grow slowly through the Adam iterations
+      (W 1.4e-8 at slice 1, 2.3e-6 at slice 4);
+    - the losses agree to 1e-7.
+    - The isolated patch term is bitwise, so the difference arises in the fused training graph (XLA fuses the
+      larger graph differently). Same model, a different rounding path.
+  - **Consequences:**
+    - All CelebA-32 layouts use blocks: training with 8x8 + 16x16 is about 3x faster.
+    - 64x64 is not solved. 16x16 every 4 px gains only 1.2x there, and 8x8 every 2 px is slower with blocks. On
+      64x64 the patch term needs another approach (a convolution, or choosing the implementation per layout by
+      measurement) before 64x64 runs are worth it.
+    - `LATENT_PATCH_IMPL=slices` reproduces the old path exactly, for runs that must continue bit for bit.
+  - The temporary test runs and scripts are deleted.

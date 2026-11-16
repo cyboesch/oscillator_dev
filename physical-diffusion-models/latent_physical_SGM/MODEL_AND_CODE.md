@@ -130,7 +130,7 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 | 11-15 | Inception FID, nearest neighbours, chain switching, summary figure | `inception_fid.py`, `nn_check.py`, `chain_switch.py`, `plot_inception_fid.py` | real-vs-real floors, noise diagnostics |
 | 11-15 | second patch scale `--patch2` (`latent_model.PATCH_SETS`) | `latent_model`, `train_latent`, `sample_latent` | job 4256601: `--patch` alone bit-identical to the old code; two-scale run trains, samples, quenches |
 | 11-16 | `split_set_spec` for '+' in run names; `patch2` in gallery READMEs | `latent_model`, `evaluate_samples`, `make_gallery`, `fid_score`, `inception_fid` | rerun of the two-scale evaluation (4261206) |
-| 11-16 | block unfold / fold for patch layouts with side and grid multiples of the stride (`PatchGeometry.impl = 'blocks'`); `LATENT_PATCH_IMPL=slices` forces the old path | `latent_model` | job 4262849 (see 6) |
+| 11-16 | block unfold / fold for patch layouts with side and grid multiples of the stride (`PatchGeometry.impl = 'blocks'`); `LATENT_PATCH_IMPL=slices` forces the old path | `latent_model` | job 4262849: patch term and its gradients bitwise for every layout; training agrees to rounding (1e-10 to 2e-6 relative after 4 slices, not bitwise: the fused graph rounds differently); CelebA-32 8x8 + 16x16 training 3x faster |
 
 ## 4. Known pitfalls
 
@@ -141,7 +141,10 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
   CelebA-32 K3072 about 10 GB per run, CelebA-64 K1536 about 25 GB. The share is 1 TB since 2026-11-16; check
   `df -h /n/fs/cyrills-part` before large runs. Full-K smoke tests write full-size slices.
 - **Patch speed.** The 16x16 patch set was the slow part (CelebA-32 K784: 1.3 h -> 5.3 h of training; CelebA-64:
-  9x slower per step). The block unfold (11-16) targets this. MNIST's 7x7 every 3 px keeps the slice path.
+  9x slower per step). The block unfold (11-16) makes the CelebA-32 patch slices 3x faster (patch term alone: 8x8
+  every 2 px 4.6x, 16x16 every 4 px 2.3x). **On 64x64 it does not help:** 16x16 every 4 px gains only 1.2x, and
+  8x8 every 2 px is 1.7x slower with blocks than with slices. MNIST's 7x7 every 3 px keeps the slice path.
+  Runs that must continue bit for bit from older slices: `LATENT_PATCH_IMPL=slices`.
 - **Run names with two patch scales contain a '+'.** Fine for the scripts since 11-16; take care in shell globs.
 - **The equilibrated start and the quench.** `--init-dist` writes its own stem; quench it with the same
   `--init-dist` and `--quench` (it reads the existing file).
@@ -156,7 +159,8 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 
 ## 6. Open items
 
-- Block unfold test (job 4262849): result and measured speed-up to be entered here.
+- 64x64 patch speed: the block unfold does not help there (see 4); try a convolution-based unfold, or choose the
+  implementation per layout by measurement.
 - Three patch scales (4x4 + 8x8 + 16x16) on CelebA-32: needs a third patch set.
 - Seeds 2 and 3 of the best CelebA-32 model.
 - CelebA 64x64 once the patch code is fast enough.
