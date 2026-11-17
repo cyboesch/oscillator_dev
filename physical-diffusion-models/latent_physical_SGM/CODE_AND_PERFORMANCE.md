@@ -4081,3 +4081,114 @@ structure.
     - sampling and the quench give finite samples; the manifest records `8:2:32+4:2:32+16:4:32`.
   - The test runs and the old-code copy are deleted. Pipeline 4262953 is released by the dependency and waits in the
     queue.
+- **16:15: 64x64 data rebuilt** (4263036, 5 min). The test file's sha256 (ea0bde3b...) equals the first build's
+  (4256480), so the data are identical. Training **4263037** started at 16:15.
+
+### Are the hidden couplings learned beyond a dense associative memory? Frozen vs trained (2026-11-16 17:45)
+
+- **Question (the user):** compared with dense associative memories / modern Hopfield networks, whose stored patterns
+  are set to data rather than learned: how far do our learned weights move from the prototypes, and does learning
+  them matter?
+  - Summing out the global Potts unit gives F = -T log sum_m exp(a_m / T), the log-sum-exp energy of a DAM with the
+    rows W_m as patterns. The exact score of the empirical training distribution is such a softmax over all N
+    training images, which only memorises.
+- **What we had:**
+  - The global cosine of W with the prototype reference falls from 1 (t = 5) to about 0.95 / 0.9 at t = 3, then to
+    0.18-0.21 at t = 0. That holds for MNIST K784 + 7x7, CelebA K784 + 8x8 and CelebA K3072 without patches, so the
+    weights move far from the prototypes at low t. This is a global number only; no per-state analysis yet.
+  - README Result 10 (2026-11-08, digits 0/1, Potts 128, no Q): couplings frozen at the closed-form reference
+    (`--hidden-fixed`) were as good as trained ones (clean yield 80.2% vs 80.1% at 28x28), with more variety. Only
+    the learned spring Q added clean yield (+6 points).
+- **New test, step 1 (no code change):** K784 + per-pixel units, no Q (`--hidden-fixed` refuses Q), no patches,
+  seed 1, 2000 samples from the noise start, quench 1:
+
+  | Data | Trained | Frozen at the reference | Quench (trained / frozen) |
+  |---|---|---|---|
+  | MNIST, ten digits | 4263126 | 4263127 | 4263131 / 4263132 |
+  | CelebA-32 grey | 4263128 | 4263129 | 4263133 / 4263134 |
+
+  - MNIST: Inception FID **4263135**; classifier FID **4263139**, paired frozen vs trained, as sampled and
+    quenched; gallery 4263137.
+  - CelebA: Inception FID **4263140**; gallery 4263141.
+  - Galleries: `galleries/2026-11-16_<data>_K784-hidden-frozen-at-prototype-reference-vs-trained_no-Q_no-patches_noise-start_with-and-without-quench1/`.
+- **Next steps:**
+  - step 2, the full recipe frozen (global and patch couplings at their references, Q = 0) vs trained: needs a code
+    change;
+  - step 3, a per-state analysis of the drift from each state's prototype.
+- **MNIST result (ten digits; training 32 min each; Inception 4263135, classifier 4263139, gallery 4263137): trained
+  clearly beats frozen.** n = 2000, noise start; Inception floor 3.70:
+
+  | MNIST K784 + per-pixel, no Q, no patches | Inception FID (FID_inf) | far | clean, class-standardised |
+  |---|---|---|---|
+  | frozen at the reference | 204.9 (203.3) | 30.7% | 67.4% |
+  | frozen, quench 1 | 178.9 (177.6) | 42.4% | (classes too unbalanced) |
+  | trained | 151.4 (148.9) | 14.0% | 84.6% |
+  | trained, quench 1 | 135.6 (133.2) | 10.5% | |
+
+  - Paired frozen vs trained (same starts and noise): clean -17.2 points [-19.2, -15.2], far +17.8 [+15.8, +19.8],
+    both p < 2e-4.
+  - With the quench the frozen model collapses onto a few classes (821 of 2000 samples classed as 4s, 9 as 6s),
+    so its t = 0 energy has spurious, wide basins. The trained model keeps balanced classes (152-257 per class).
+  - **Unlike digits 0/1 (README Result 10, frozen = trained), on ten digits learning the hidden couplings is worth
+    17 points of clean yield and about 50 Inception FID.** A DAM with K784 k-means prototype memories plus a trained
+    visible model is far from enough here.
+  - Both models are rough (no Q, no patches; Inception 136-179 against 86 for K784 with Q). In the gallery the
+    frozen strokes are more broken and speckled, the trained ones more solid. The quench helps the trained model
+    less than with Q (151 -> 136, against 113 -> 86).
+- **CelebA-32 result (training 38 min each; Inception 4263140, gallery 4263141): trained clearly beats frozen here
+  too.** n = 2000, noise start; floor 6.43:
+
+  | CelebA K784 + per-pixel, no Q, no patches | Inception FID (FID_inf) | KID x1e3 | faint pixels |
+  |---|---|---|---|
+  | frozen at the reference | 294.7 (289.9) | 433 | 3.5% |
+  | frozen, quench 1 | 178.3 (172.7) | 264 | 2.9% |
+  | trained | 249.2 (245.3) | 329 | 7.2% |
+  | trained, quench 1 | **120.2 (116.5)** | **146** | 7.6% |
+  | (for scale: K784 with Q, trained, quench 1) | 104.4 | 120 | 7.5% |
+
+  - Trained beats frozen by 45 as sampled and 58 after the quench.
+  - Gallery: the frozen faces are low-contrast, mid-grey and uniform, with few dark or bright backgrounds (faint
+    pixels 3% vs 7-8% trained and 12% real). The trained faces vary in lighting and background like the real ones,
+    with more defined hair and face outlines.
+  - Q adds 16 more on top of training (120 -> 104 after the quench).
+- **Step 1 conclusion:** on both hard datasets, learning the hidden couplings by force matching beats holding them
+  at the k-means prototype reference (the DAM-like model) by a wide margin. The 0/1 result (frozen = trained) does
+  not carry over. Learning matters for MNIST shapes (17 points of clean yield) and for CelebA's contrast and
+  variety (about 58 Inception FID).
+
+### Step 2 set-up: frozen patch units (2026-11-16 17:50; the user: "the best K784 multipatch model compared to its analogue hidden structure with frozen")
+
+- **Code (`train_latent.py`; backup `train_latent_pre_fixedpatch.py`):** `--hidden-fixed` now works with Potts patch
+  units (`--patch`, `--patch2`, `--patch3`).
+  - From the switch-on slice, every patch set is held at its full closed-form k-means reference for that slice's t
+    (`patch_reference`, scale 1), and its learning rates are zero, as for the global unit.
+  - Still without Q, which has no reference. Ising patch units are refused.
+  - Trained runs are unaffected: the change only touches the `--hidden-fixed` branches.
+- **Test 4263528 (2.5 min), PASSED:** CelebA-32 K64 frozen + 8:2:32 + 4:2:32, patches from slice 1, 3 slices.
+  - Global |W| = reference with cos 1.000 in every slice.
+  - Patches: |Wp| 3.362 = reference, then 3.535 = reference; |Wp2| 2.154, then 2.265, both = reference, cos 1.000.
+    So the frozen sets follow the reference in t.
+  - The test run is deleted.
+- **Planned (after the three-scale result picks the best K784 multi-patch structure):** frozen (no Q) vs trained
+  without Q vs the trained recipe with Q, same patches; quench 1, Inception FID, gallery.
+- **19:40: step 2 submitted for the best CelebA-32 structure, K1536 + 8x8 every 2 px + 16x16 every 4 px** (22.4
+  with Q, trained). Submitted now because the GPU queue is congested: Slurm puts the three-scale quench (4262954)
+  at about 00:20.
+  - If the three-scale K784 run comes in below 22.4, its frozen variants follow.
+  - Pipelines: trained without Q **4264051**; frozen **4264052** (`--hidden-fixed`: global and both patch sets at
+    their references, no Q). Both 80 GB, 16 h limit, 2000 samples from the noise start.
+  - quench 1: 4264054 / 4264055; Inception FID **4264056** against the trained recipe with Q; gallery **4264057**
+    (`galleries/2026-11-16_celeba32-grey_K1536+patch8x8+patch16x16_hidden-frozen-vs-trained-without-Q-vs-trained-with-Q_noise-start_with-and-without-quench1/`).
+- **19:55: the three-scale structure's frozen comparison is also submitted** (the user is away overnight, so both
+  comparisons are ready in the morning whichever structure wins):
+  - pipelines: trained without Q **4264067**, frozen **4264068** (K784 + 8x8 + 4x4 + 16x16);
+  - quench 4264070 / 4264071; Inception FID **4264072** (also after the recipe's own quench 4262954); gallery
+    **4264073**.
+- **Queue and fair share (sshare / sprio, 19:55):**
+  - Our share of the seas account is 0.31% (NormShares 0.0031), but we used 0.82% of it recently (EffectvUsage
+    0.0082), so Slurm's fair-share factor is 0.10 (LevelFS 0.38).
+  - The fair-share term dominates our job priority (1031 of about 1100); age adds a few points per day.
+  - That is why short jobs wait hours when the cluster is busy.
+- **20:00: the three-scale frozen comparison is cancelled before it started** (the user: "remove the frozen
+  three-scale structure. we will run it in the morning if we need it"): 4264067 / 68 / 70 / 71 / 72 / 73. The
+  K1536 + 8x8 + 16x16 comparison (4264051 / 52 / 54 / 55 / 56 / 57) stays.

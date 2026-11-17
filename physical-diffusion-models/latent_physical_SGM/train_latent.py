@@ -280,7 +280,9 @@ def parse():
                          "slice file (files, default). The same file contents")
     ap.add_argument("--hidden-fixed", action="store_true",
                     help="hold the hidden couplings at the closed-form reference of each slice (Fisher or prototype "
-                         "W*, b*; per-pixel w*, c*) and train only the visible parameters. Not with --quad (no "
+                         "W*, b*; per-pixel w*, c*; with --patch / --patch2 / --patch3 every patch set at its k-means "
+                         "reference from the switch-on slice, 2026-11-16) and train only the visible parameters. Not "
+                         "with --quad (no "
                          "reference for Q)")
     ap.add_argument("--hidden-jackknife", action="store_true",
                     help="with --hidden-samples S (even): remove the O(1/S) bias of the plug-in statistics, 2 L(S) - "
@@ -1021,11 +1023,13 @@ def main():
                       "geom": lm.PatchGeometry(lm.problem_geometry(args.problem)[0], px[0], px[1])})
     xkeys = tuple(g for x in xsets for g in (x["kw"], x["kb"]) + ((x["kq"],) if args.quad else ()))
     if patch is not None:
-        if (args.hidden_samples > 0 or args.hidden_rule != "exact" or args.hidden_norm != "element" or args.hidden_fixed
+        if (args.hidden_samples > 0 or args.hidden_rule != "exact" or args.hidden_norm != "element"
                 or args.cls != "none"):
-            raise ValueError("--patch needs exact hidden statistics, the exact rule with per-element Adam, trained hidden "
-                             "units and both classes (not with --hidden-samples, --hidden-rule cd1, --hidden-norm group / "
-                             "state / occupancy, --hidden-fixed or --cls)")
+            raise ValueError("--patch needs exact hidden statistics, the exact rule with per-element Adam and both "
+                             "classes (not with --hidden-samples, --hidden-rule cd1, --hidden-norm group / state / "
+                             "occupancy or --cls)")
+        if args.hidden_fixed and args.patch_kind != "potts":
+            raise ValueError("--hidden-fixed with --patch: Potts patch units only (--patch-kind potts)")
         if args.seed < lm.KEY_SEED:
             raise ValueError(f"--seed {args.seed}: --patch needs --seed >= {lm.KEY_SEED} (k-means seeds "
                              f"{lm.PATCH_SEED0} + 1000 (seed - {lm.KEY_SEED}) + patch must be >= 0)")
@@ -1719,7 +1723,15 @@ def main():
                 if args.quad:
                     params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
             log(logf, f"slice {k}: patch units {lm.patch_spec_str(patch)} switched on at {lam_p:g} x the reference at "
-                      f"t = {t_curr:.4f}")
+                      f"t = {t_curr:.4f}" + ("; --hidden-fixed: held at the full reference from now on"
+                                             if args.hidden_fixed else ""))
+        if args.hidden_fixed and patch is not None and k >= K_on:   # frozen patch units (2026-11-16): every patch
+            params = dict(params)                # set = this slice's closed-form k-means reference (scale 1)
+            Wr, br = (a[0] for a in patch_ref(clus, [t_curr], lm.TEMP))
+            params["Wp"], params["bp"] = jnp.asarray(Wr), jnp.asarray(br)
+            for x in xsets:
+                Wr, br = (a[0] for a in lm.patch_reference(x["clus"], [t_curr], lm.TEMP))
+                params[x["kw"]], params[x["kb"]] = jnp.asarray(Wr), jnp.asarray(br)
         split_info = None
         if k in split_slices and k >= args.freeze_hidden_slices:   # --split-dead: dead states become copies
             Xsp = sample_forward_process(t_curr, VAL_N, lm.TEMP, lm.SIGMA_FORWARD, data_train,
@@ -1745,7 +1757,7 @@ def main():
             f_h = args.hidden_lr_scale * args.harmonic_lr_scale
             lrs.update(V=float(f_h * sV[k]) if on else 0.0, c=float(f_h * sc[k]) if on else 0.0)
         if "Wp" in params:                       # patch units: per-unit arrays of fixed shape (the runner traces once)
-            on = k >= max(K_on, args.freeze_hidden_slices)
+            on = k >= max(K_on, args.freeze_hidden_slices) and not args.hidden_fixed   # frozen: no steps
             f_p = args.hidden_lr_scale * args.patch_lr_scale
             lrs["Wp"] = jnp.asarray(f_p * sWp[k][:, None, None] if on else np.zeros((geom.P, 1, 1)))
             lrs["bp"] = jnp.asarray(f_p * sbp[k][:, None] if on else np.zeros((geom.P, 1)))
@@ -1754,7 +1766,7 @@ def main():
         for x in xsets:                          # --patch2 / --patch3: the same rule with their own scales
             if x["kw"] not in params:
                 continue
-            on = k >= max(K_on, args.freeze_hidden_slices)
+            on = k >= max(K_on, args.freeze_hidden_slices) and not args.hidden_fixed   # frozen: no steps
             f_p = args.hidden_lr_scale * args.patch_lr_scale
             lrs[x["kw"]] = jnp.asarray(f_p * x["sW"][k][:, None, None] if on else np.zeros((x["geom"].P, 1, 1)))
             lrs[x["kb"]] = jnp.asarray(f_p * x["sb"][k][:, None] if on else np.zeros((x["geom"].P, 1)))

@@ -180,3 +180,6 @@ cython_debug/
 *.sif
 *.out
 *.err
+
+# temporary old-code copies for regression tests (latent_physical_SGM, 2026-11-16); deleted after each test
+physical-diffusion-models/latent_physical_SGM_oldcheck/
