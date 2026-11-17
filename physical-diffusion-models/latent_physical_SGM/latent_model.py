@@ -932,11 +932,17 @@ def sampled_state_mean(A, T, key, S, part=None):
     return ph + ph * u - ph * jnp.sum(ph * u, axis=-1, keepdims=True)
 
 
-def loss_draw_occupation(params, X, T, key, S):
+def loss_draw_occupation(params, X, T, key, S, dtype=None):
     """Each Potts state's visit fraction among the S hidden draws per configuration that the measured-statistics loss
     (make_loss_per_sample with samples = S, replicates = 1, called with `key`) takes: the same fields A (summed in the
     same order as hidden_terms_quad / potts_terms), the same key (k_h, the first of jr.split(key)) and the same
-    categorical draws. A device can count the visits of the reads it already makes. Returns (M,) fractions."""
+    categorical draws. A device can count the visits of the reads it already makes. Returns (M,) fractions.
+    dtype (2026-11-17): the loss's compute_dtype (float32 with --precision mixed): the fields in that dtype with
+    full-float32 products, as in_compute_dtype evaluates the loss, so the draws are the loss's; None: as before."""
+    if dtype is not None:
+        p = {k: v.astype(dtype) for k, v in params.items()}
+        with jax.default_matmul_precision("float32"):
+            return loss_draw_occupation(p, X.astype(dtype), T, key, S).astype(jnp.float64)
     W, b = params["W"], params["b"]
     A = X @ W.T + (X * X) @ params["Q"].T + b if "Q" in params else X @ W.T + b
     k_h = jr.split(key)[0]
@@ -1300,7 +1306,9 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     draws (keys split from `key`). It keeps the bias of one S-draw estimate and divides its variance by R, which
     separates bias from noise (R S draws pooled into one estimate would have the smaller bias of S' = R S).
     compute_dtype = jnp.float32 (--precision mixed): the loss and its parameter gradient in float32 with full-float32
-    products (in_compute_dtype); None (default) leaves the function exactly as before. Exact statistics only.
+    products (in_compute_dtype); None (default) leaves the function exactly as before. Since 2026-11-17 also with
+    samples > 0: the hidden states are then drawn from the float32 fields (other draws than in float64 for the same
+    key, the same distribution; the earlier refusal was for reproducibility only).
     If params contains 'V' (and 'c'), the R harmonic hidden modes are added last (harmonic_terms; train_latent.py
     --harmonic): exact Gaussian integrals, the same in every sampled-statistics variant; in --precision mixed their two
     products are float32 at HIGHEST like the hidden units'. Without 'V' every path is exactly as before.
@@ -1313,9 +1321,6 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     terms = hidden_terms if hidden == "ising" else potts_terms
     if replicates < 1 or (replicates > 1 and samples < 1):
         raise ValueError("replicates must be >= 1, and > 1 only with samples > 0")
-    if compute_dtype is not None and samples > 0:
-        raise ValueError("compute_dtype needs exact hidden statistics (samples = 0): the sampled draws depend on the "
-                         "dtype of the fields")
     if jackknife not in (False, True, 0, 1, 2) or (jackknife == 2 and (samples < 4 or samples % 4)):
         raise ValueError("jackknife must be False / 0, True / 1, or 2 (2 needs samples divisible by 4)")
 

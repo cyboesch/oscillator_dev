@@ -4431,3 +4431,39 @@ structure.
   - their quenches 4267203 / 05 / 07 / 09;
   - Inception FID **4267210** with the standard sampler as reference; contrast 4267211; gallery 4267212
     (`galleries/2026-11-17_celeba32-grey_K1536+patch8x8+patch16x16_corrector-and-force-scale-scan_*`).
+
+### On-device training: sampled hidden statistics in mixed precision (2026-11-17 14:30; the user: "lets do B")
+
+- **Why:** on a device the hidden statistics (Potts state probabilities) can only be estimated from S sampled hidden
+  states per training image. Earlier (README, 11-08/10) this matched exact training on two or three digits (S = 16-64
+  with the visit-count rule and the jackknife), but fell 10 points short on four digits with Potts 512. Never tried
+  on faces.
+- **Code (backups `*_pre_mixedsamples.py`):**
+  - `latent_model.make_loss_per_sample`: no longer refuses `compute_dtype` (mixed precision) with samples > 0. The
+    states are drawn from the float32 fields: other draws than float64 for the same key, but the same distribution.
+    The refusal was for reproducibility only.
+  - `latent_model.loss_draw_occupation(..., dtype)`: with `--occ-same-draws` the visit counts recompute the fields
+    in the loss's precision, so they count the loss's own draws.
+  - `train_latent.py`: `--precision mixed` now allows `--hidden-samples` and `--hidden-norm occupancy`
+    (`build_runner(occ_dtype=)`). It still refuses `--hidden-rule cd1` and `--hidden-floor` (untested in float32).
+  - Previously only the float64 path (1-2 days per run on the L40s) could train with sampled statistics.
+- **Test 4267283:** CelebA-32 K64 + Q + per-pixel units, S = 16, jackknife, visit-count rule with same-draw counts,
+  4 slices at 1% of the steps, mixed vs f64. Both must run, with similar losses.
+- **Runs (only if the test passes):** CelebA-32 K784 + Q + per-pixel units, no patches (patch units need exact
+  statistics), mixed precision, seed 1, 2000 samples from the noise start:
+
+  | Pipeline | Hidden statistics | Optimiser for the hidden couplings |
+  |---|---|---|
+  | 4267284 | exact | visit-count rule (`--hidden-norm occupancy`) |
+  | **4267285** | **S = 64 sampled**, jackknife | visit-count rule, same-draw counts |
+  | **4267286** | **S = 256 sampled**, jackknife | visit-count rule, same-draw counts |
+  | (existing) | exact | Adam per element (Inception FID after the quench 104.4) |
+
+  - quench 4267287 / 88 / 89; Inception FID **4267290** (all four, quenched; sampled runs also as sampled); gallery
+    **4267291** (`galleries/2026-11-17_celeba32-grey_K784_on-device-training_exact-vs-S64-vs-S256-sampled-hidden-statistics_noise-start_quench1/`).
+- **Test 4267283 PASSED (1.7 min):**
+  - mixed and f64 both run at 22-24 steps/s (1% steps, K64);
+  - validation losses agree to the printed digits (6.70209e6, 6.54446e6, 6.3629e6, 6.18925e6);
+  - the hidden couplings train: Q_norm 0 -> 0.0035 -> 0.0072 -> 0.0113 and W_norm 1.136290 -> 1.136446;
+  - mixed vs f64: W_norm agrees to 1e-6 relative and Q_norm to 2e-5 (different draws, same distribution).
+  - The test runs are deleted; pipelines 4267284-86 are released by the dependency.

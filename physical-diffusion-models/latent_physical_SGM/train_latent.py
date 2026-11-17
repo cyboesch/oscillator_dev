@@ -711,7 +711,7 @@ class OccupancyTransform:
 def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sextic", n_pairs=None,
                  cd1_grad=None, cd1_releases=1, loss_key=False, floor=0.0, floor_samples=0, hidden_norm="element",
                  occ_beta=0.999, occ_same_draws=False, zero_slices=(), track_best=True, theta_masks=False,
-                 chunk_batches=False):
+                 chunk_batches=False, occ_dtype=None):
     """Jitted scan of n training steps, identical in effect to the paper's training_step loop.
     track_best, theta_masks, chunk_batches (--step-impl lean; the defaults True, False, False leave every step as
     before): track_best False (lean with --select ema, whose slice result is the EMA): best_params keeps its value
@@ -830,7 +830,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
             grads = dict(grads, theta=(jnp.where(k6_m, 0.0, grads["theta"]) if theta_masks
                                        else grads["theta"].at[k6].set(0.0)))
         if occupancy:
-            occ = (lm.loss_draw_occupation(params, X, lm.TEMP, k_loss, floor_samples) if occ_same_draws
+            occ = (lm.loss_draw_occupation(params, X, lm.TEMP, k_loss, floor_samples, dtype=occ_dtype)
+                   if occ_same_draws
                    else occupation(params, X, k_floor))
             direction, adam_state = adam.update(grads, adam_state, occ, p_unit)
         else:
@@ -960,11 +961,10 @@ def main():
                          "0 < --occ-beta < 1")
     if args.occ_same_draws and (args.hidden_norm != "occupancy" or args.hidden_samples < 1):
         raise ValueError("--occ-same-draws needs --hidden-norm occupancy and --hidden-samples S > 0")
-    if args.precision == "mixed" and (args.hidden_samples > 0 or args.hidden_rule != "exact"
-                                      or args.hidden_norm == "occupancy" or args.hidden_floor > 0):
-        raise ValueError("--precision mixed needs exact hidden statistics: not with --hidden-samples, --hidden-rule "
-                         "cd1, --hidden-norm occupancy or --hidden-floor (their draws and occupations would change "
-                         "with the float32 fields)")
+    if args.precision == "mixed" and (args.hidden_rule != "exact" or args.hidden_floor > 0):
+        raise ValueError("--precision mixed: not with --hidden-rule cd1 or --hidden-floor (untested in float32). "
+                         "--hidden-samples and --hidden-norm occupancy are allowed since 2026-11-17 (the draws come "
+                         "from the float32 fields)")
     pair_terms = lm.parse_pair_terms(args.pair_terms)          # raises on an invalid list
     steps_sched = parse_steps_schedule(args.steps_schedule)    # raises on an invalid schedule
     time_grid = lm.parse_time_grid(args.time_grid)             # canonical spec; raises on an invalid one
@@ -1224,6 +1224,7 @@ def main():
                              cd1_grad=cd1_grad, cd1_releases=args.cd1_releases, loss_key=args.hidden_samples > 0,
                              floor=args.hidden_floor, floor_samples=args.hidden_samples, hidden_norm=args.hidden_norm,
                              occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
+                             occ_dtype=cdt,
                              **lean)
     run_late = None
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
@@ -1233,7 +1234,8 @@ def main():
                          patch_kind=args.patch_kind),
             data_train, n_vis, args.ema_steps, args.visible, vis.P, loss_key=True,
             floor=args.hidden_floor, floor_samples=args.hidden_samples_late, hidden_norm=args.hidden_norm,
-            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices, **lean)
+            occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices, occ_dtype=cdt,
+            **lean)
 
     state_cls = None
     proto_stats = None                           # --harmonic-ref within: the prototype init's S_w (prototype_reference)
