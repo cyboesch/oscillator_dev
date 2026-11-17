@@ -4192,3 +4192,242 @@ structure.
 - **20:00: the three-scale frozen comparison is cancelled before it started** (the user: "remove the frozen
   three-scale structure. we will run it in the morning if we need it"): 4264067 / 68 / 70 / 71 / 72 / 73. The
   K1536 + 8x8 + 16x16 comparison (4264051 / 52 / 54 / 55 / 56 / 57) stays.
+
+### 2026-11-17 morning: overnight results
+
+- **Disk:** 540 GB of 1 TB used (53%).
+- **Three scales on CelebA-32** (pipeline 4262953: training 1.8 h for K784 with three patch sets, about 230 steps/s
+  in the patch slices, so the block unfold pays off; quench 4262954; Inception **4262955**; gallery 4262956).
+  Inception FID against train, n = 2000, noise start; floor 6.43:
+
+  | Model | as sampled | quench 1 (FID_inf) | KID x1e3 (q1) |
+  |---|---|---|---|
+  | K784 + 8x8 | 98.4 | 24.7 (20.9) | 17.5 |
+  | K784 + 8x8 + 4x4 | 78.3 | 23.3 (19.7) | 15.9 |
+  | K784 + 8x8 + 16x16 | 93.6 | 22.9 (19.2) | 15.4 |
+  | K1536 + 8x8 + 16x16 | 92.6 | 22.4 (18.7) | 14.5 |
+  | **K784 + 8x8 + 4x4 + 16x16** | **75.4** | **22.3 (18.7)** | 15.1 |
+
+  - The three scales add up as sampled: the 4x4 set removes speckle (98 -> 78), and the 16x16 set adds 3 more.
+  - After the quench, three scales at K784 tie the best model, K1536 + 8x8 + 16x16 (22.3 vs 22.4; FID_inf 18.7
+    both), with half the global states.
+  - Gallery: the quenched rows of all multi-scale models look alike. Three scales give slightly cleaner details in
+    places (column 1's eye smudge is lighter), but blur remains in every variant.
+  - Since the two structures are equal, the K1536 + 8x8 + 16x16 frozen comparison below stands for both; the
+    three-scale frozen comparison (cancelled last night) is not needed.
+- **Step 2: frozen vs trained, full structure K1536 + 8x8 + 16x16** (frozen 4264052 and trained without Q 4264051,
+  1.6 h each; quench 4264054 / 4264055; Inception **4264056**; gallery 4264057):
+
+  | Hidden couplings (K1536 + 8x8 + 16x16) | as sampled | quench 1 (FID_inf) | KID x1e3 (q1) | faint pixels |
+  |---|---|---|---|---|
+  | frozen at the k-means references, no Q | 225.6 | 213.6 (209.4) | 264 | 17.9% |
+  | trained, no Q | 128.8 | 34.4 (30.9) | 31 | 6.5% |
+  | trained, with Q (the recipe) | 92.6 | **22.4 (18.8)** | 14.5 | 6.9% |
+
+  - **Learning is worth 179 Inception FID after the quench (213.6 -> 34.4), and Q 12 more (-> 22.4).**
+  - The frozen multi-patch model is worse than the frozen model without patches (213.6 vs 178.3 after the quench).
+    The patch prototypes at full reference strength make the faces worse: in the gallery they are mosaics with
+    horizontal bars across the eyes, blocky stripes and saturated black or white regions (faint pixels 18% vs 7%
+    trained and 12% real). The quench does not repair them.
+  - The trained models give normal faces; without Q they are a little more speckled and less defined than with Q.
+  - **Conclusion for the paper:** for the full model, the frozen associative-memory analogue (global and patch
+    prototypes as memories, only the physical visible model trained) is far worse. Learning the couplings is what
+    makes the model work, and that holds even more with patches than without.
+- **CelebA 64x64:** training **4263037 finished in 6.9 h** (not 2.5 days; the patch slices ran at 66-69 steps/s);
+  sampling 4263038 took 8.2 h (chunk 25, platform allocator).
+  - **The quench 4263039 FAILED:** RESOURCE_EXHAUSTED, 11.5 GiB.
+  - **Cause:** in quench-only mode `sample_latent` built the sampler's SDE drift (a device copy of the 12 GB
+    parameter history) although only the quench drift is used, and then a second copy for the quench.
+  - **Fix (`sample_latent.main`):** quench-only no longer builds the SDE drift. The quench itself is unchanged.
+  - Resubmitted: quench **4266706** (platform allocator, chunk 25, 160 GB); Inception **4266707**; gallery
+    **4266708**. The old 4263040 / 41 could never start after the failure and were cancelled.
+- **Correction (2026-11-17 09:30; the user, looking at the frozen faces: "are you sure there is no bug in the frozen
+  code?"). Not a code bug, but an unfair frozen baseline.**
+  - The code holds each patch set exactly at its reference (test 4263528). But each patch reference is the complete
+    mixture model of its own patch, as if that patch unit alone described it.
+  - With 8x8 every 2 px and 16x16 every 4 px, each interior pixel lies in 16 patches of each set. The frozen model
+    therefore counts each pixel's evidence about 16 times per set: a product of over-confident experts.
+  - That explains what the faces show: saturated black and white, pixels snapped to patch prototypes (dark
+    horizontal bars at the eyes and mouth), and a regular grid with the patch stride. The frozen model without
+    patches has none of this.
+  - The trained runs start the patches at 0.06 x the reference (chosen 11-13 because 0.25 already cost +27 loss
+    units); 0.06 is close to 1/coverage = 1/16.
+  - **Fix: `--patch-fixed-scale S`** (`train_latent.py`, default 1; backup `train_latent_pre_patchfixedscale.py`):
+    with `--hidden-fixed`, the patch sets are held at S x their reference. It is recorded in config.json only when
+    not 1, and resume checks it.
+  - **Rerun:** frozen K1536 + 8x8 + 16x16 at S = 0.0625 = 1/coverage (each pixel counted once; also the trained
+    runs' start). Pipeline **4266722**, quench 4266723, Inception **4266724** against the scale-1 frozen run and
+    the trained models (without and with Q), gallery **4266725**.
+  - The scale-1 result above (213.6) stays in the notebook as the over-counted variant, not as the frozen
+    baseline.
+- **CelebA 64x64, first result** (quench 4266706, 6.6 min with the fix; Inception **4266707**; gallery 4266708;
+  K1536 + 16x16 every 4 px from t = 2.2, seed 1, noise start, n = 2000; floor = real test faces 5.91):
+
+  | CelebA 64x64 | Inception FID (FID_inf) | KID x1e3 | faint pixels |
+  |---|---|---|---|
+  | as sampled | 130.3 (127.0) | 174 | 4.0% |
+  | quench 1 | **58.5 (55.9)** | 54 | 3.3% (real 12.6%) |
+
+  - Gallery (quenched): recognisable faces with more detail than at 32x32 (eyes, mouths, teeth, hair strands), and
+    varied identities and poses.
+    - Defects: some faces are distorted or asymmetric (one eye, a smeared half).
+    - Contrast is too low: grey backgrounds, few dark pixels (3% vs 13% real), so dark hair and backgrounds come out
+      as mid-grey.
+  - First run, single patch scale; for comparison, CelebA-32 with K1536 + 8x8 gives 23.9. Next options: a second
+    patch scale (8x8 every 2 px, still slow with blocks at 64x64), or K3072.
+
+### CelebA 64x64: next steps (2026-11-17 10:15; the user: "lets 3, then 2 and maybe already submit 1 since this will take long")
+
+- **(1) Two patch scales at 64x64, submitted:** K1536 + 16x16 every 4 px + 8x8 every 2 px (`--patch 16:4:32
+  --patch2 8:2:32`), seed 1.
+  - `LATENT_PATCH_IMPL=slices` for both sets: on 64x64, 8x8 every 2 px is 1.7x faster with slices than with blocks,
+    and 16x16 every 4 px only 1.2x slower (test 4262849), so slices are faster for the pair.
+  - Training **4266791** (3-day limit); sampling 4266792 (platform allocator, chunk 25); quench 4266793;
+    Inception **4266794** against the single-scale quenched run; gallery 4266795.
+  - History in float64: about 14 GB (global 12.6M + patches 4.8M couplings per slice).
+- **(3) Low contrast, first look:** new `contrast_check.py` (CPU). For real test images and each sample set it reports:
+  - the pixel-value histogram and percentiles;
+  - per image: contrast (pixel std), mean brightness, and the share of dark (< 0.1) and bright (> 0.9) pixels;
+  - per pixel position: maps of the mean and of the spread over images.
+
+  Jobs: 64x64 (K1536 + 16x16, as sampled and quenched) **4266796**; 32x32 (K1536 + 8x8 + 16x16 as sampled and
+  quenched, K784 + 8x8 equilibrated start + quench) **4266797**; output in `galleries/2026-11-17_celeba<32|64>-grey_contrast-check_*`.
+- **(2) K3072 at 64x64:** after (3).
+- **(3) Contrast results (4266796 / 4266797, 1 min each):**
+
+  | | real | 64x64 sampled | 64x64 quench 1 | 32x32 best (K1536 + 8x8 + 16x16), quench 1 |
+  |---|---|---|---|---|
+  | per-image contrast (pixel std), mean | 0.234 | 0.182 | 0.180 | 0.198 (real 0.229) |
+  | dark pixels (< 0.1) | 13.5% | 4.1% | 3.3% | 6.9% (real 12.7%) |
+  | bright pixels (> 0.9) | 3.5% | 0.5% | 0.4% | 1.3% (real 3.3%) |
+  | pixel percentiles 1 / 99 | 0.004 / 0.980 | 0.045 / 0.871 | 0.064 / 0.863 | 0.038 / 0.913 |
+  | spread of the images' mean brightness | 0.114 | 0.095 | 0.097 | 0.115 (real 0.114) |
+
+  - The pixel range is compressed: the samples lack the extremes near 0 and 1, which real faces have plenty of
+    (black hair and backgrounds, saturated highlights).
+  - Per-image contrast is 23% too low at 64x64 and 13% at 32x32.
+  - **Where (maps):** the mean image is reproduced almost exactly. The variety over images is right in the face
+    interior but much too low in the background and the hair ring. Real backgrounds range from black to white
+    (highest spread in the corners); ours stay near mid-grey.
+  - The quench does not cause it (sampled 4.1% dark, quenched 3.3%), and neither does the start (32x32 equilibrated
+    start: the same).
+  - **Reading:** the model regresses large, smooth regions (background, hair) towards the mean. Their brightness is
+    a long-range, image-wide choice. The 16x16 patches are local, and the global unit apparently does not carry
+    enough of it, more so at 64x64.
+  - So K (step 2) and a coarser or global brightness mechanism are the candidates. The second patch scale (8x8)
+    adds detail, not range.
+- **(2) K3072 at 64x64: training submitted, 4266799** (K3072 + 16x16 every 4 px from slice 55, seed 1; only K differs
+  from the first 64x64 run; 200 GB, 3-day limit).
+  - **Sampling needs a change first.** The history in float64 is about 22 GB, and the sampler holds 2-3 device
+    copies (`helper_fns.interpolate_parameters` sorts a copy, and jit embeds it as a constant). That does not fit
+    the 46 GB L40 (the only GPU type here). K1536 at 64x64 was 12.3 GB per copy.
+  - Plan: a sampler option that holds the history in float32 (halves it), tested against float64 on a small run
+    before use. Rounding the parameters to float32 is about 1e-7 relative, far below the SDE tolerance (1e-4).
+- **`sample_latent --history-dtype float32`** (2026-11-17; backup `sample_latent_pre_hist32.py`):
+  - holds the stacked parameter history in float32 on the device, half the memory;
+  - default float64, every path unchanged;
+  - float32 samples get the suffix `_hist32`, and the manifest records `history_dtype`; `--fast` refuses it.
+- **Test** (CelebA-32 K1536 + 8x8 + 16x16, 50 samples, same starts and noise; jobs 4266800 / 4266809):
+  - as sampled: max |float32 - float64| 4.2e-4, median 2.8e-6 (normalised units; sample std 0.885);
+  - quench 1: max 3.7e-4, median 2.5e-6.
+  - Negligible. The test files were removed.
+  - Side note: 4266800's float64 sample + quench in one process was OOM-killed at 48 GB of host memory during the
+    quench; quench-only with 64 GB was fine.
+- **K3072 64x64 evaluation chain (after training 4266799):**
+  - sampling **4266810** (`--history-dtype float32`, platform allocator, chunk 25, 200 GB, 2-day limit);
+  - quench 4266811;
+  - Inception FID **4266812** against K1536 + 16x16 (quenched);
+  - gallery 4266813 (`galleries/2026-11-17_celeba64-grey_K1536-vs-K3072_patch16x16-every4px_noise-start_quench1/`);
+  - contrast check 4266814: does K3072 restore the background and hair range?
+- **Corrected frozen baseline: result** (pipeline 4266722, 1.5 h; quench 4266723; Inception **4266724**; gallery
+  4266725, `galleries/2026-11-17_celeba32-grey_K1536+patch8x8+patch16x16_frozen-patches-full-vs-over-coverage_vs_trained_noise-start_quench1/`).
+  CelebA-32, K1536 + 8x8 + 16x16, n = 2000, noise start; floor 6.43:
+
+  | Hidden couplings | as sampled | quench 1 (FID_inf) | KID x1e3 (q1) | faint pixels |
+  |---|---|---|---|---|
+  | frozen, patches at the full reference (over-counted) | 225.6 | 213.6 (210.6) | 265 | 17.9% |
+  | **frozen, patches at reference / coverage (0.0625)** | 276.7 | **147.0 (143.8)** | 212 | 2.x% |
+  | (frozen without patches, 11-16) | 294.7 | 178.3 | 264 | 2.9% |
+  | trained, no Q | 128.8 | 34.4 (30.9) | 31 | 6.5% |
+  | trained, with Q (the recipe) | 92.6 | **22.4 (18.7)** | 14.6 | 6.9% |
+
+  - Counting each pixel once removes the stripes and the saturation. The frozen faces are now face-like but
+    mottled, blotchy and low in contrast, as the frozen model without patches was.
+  - Frozen patches help the frozen model (178 -> 147 after the quench), but **learning is worth about 113 Inception
+    FID (147 -> 34), and Q another 12 (-> 22)**.
+  - **This replaces the 179 quoted this morning** (that baseline over-counted the patches). Conclusion unchanged:
+    for the full model, the frozen associative-memory analogue is far worse, and learning the couplings by force
+    matching is essential.
+
+### Image quality on the sampling side: corrector steps and force scale (2026-11-17 11:00; the user: "lets do 1 and 2 first, then 3")
+
+- **Code (`sample_latent.py`; backup `sample_latent_pre_corrector.py`); both default off, every existing path
+  unchanged:**
+  - `--force-scale LAMBDA`: the sampling drift is x - 2 LAMBDA grad F, i.e. sampling at temperature T / LAMBDA
+    (LAMBDA > 1 colder and sharper, at a likely cost in variety). The quench is not scaled. Suffix `_fs<LAMBDA>`.
+  - `--corrector M:SNR` (`sample_corrector`): predictor-corrector sampling.
+    - The reverse SDE is solved from knot to knot (100 segments; Brownian key fold_in(key, segment)).
+    - After each segment, M unadjusted Langevin steps at that slice: x += eps s + sqrt(2 eps) z, with
+      s = -LAMBDA grad F / T and grad F = x - the PF-ODE drift; eps = 2 (SNR |z| / |s|)^2 per sample (the SNR rule
+      of Song et al. 2021).
+    - M = 0 is the segmented sampler without corrector, the right baseline (different Brownian paths from the
+      standard sampler). Suffix `_corr<M>x<SNR>`.
+  - Metropolis-adjusted steps (MALA) would need the free energy F itself, which the sampler does not build yet.
+    That is the next step if the corrector helps.
+- **Test 4266899:** CelebA-32 K1536 + 8x8 + 16x16, 50 samples each, with `--corrector 0:0.16`, `--corrector
+  2:0.16` and `--force-scale 1.2`. It reports run time, finiteness, contrast, and dark and bright shares.
+
+### Solver convergence check of the reverse sampler (2026-11-17 11:30; the user: "are you using a fixed step size for the reverse sampler? ... make sure that reducing does not change the images")
+
+- **The reverse sampler is adaptive, not fixed-step:** diffrax SRA1 with a PID controller, rtol 1e-4 and atol 1e-6
+  (the paper code's values), forced to step onto the 98 interior knots; Brownian increments from a
+  VirtualBrownianTree (tolerance 1e-12); initial dt 1e-8. The quench uses the ODE tolerances (rtol 1e-7, atol 1e-9).
+- **This was never checked for convergence.** All earlier checks compared sampler variants at the same tolerance.
+- **New `--sde-tol-scale F`** (`sample_latent.py`; backup `sample_latent_pre_tolscale.py`): multiplies rtol and atol
+  by F (default 1, unchanged). Suffix `_tol<F>`; the manifest records the actual rtol and atol.
+  - The Brownian path of a trajectory does not depend on the steps, so samples of the same trajectories can be
+    compared one by one: pathwise (strong) convergence.
+  - Note: for CelebA, `trajectory_set` draws the start states and keys for the whole set at once, so the first 200 of
+    an n = 2000 set differ from an n = 200 set; the reference is therefore resampled at the same n.
+- **New `tol_check.py`:** per trajectory, the max and RMS of |x_tight - x_ref| against the typical distance between
+  two different samples (median nearest-neighbour RMS), plus contrast and dark share per set.
+- **Jobs:**
+  - **4266909:** CelebA-32 K1536 + 8x8 + 16x16, n = 200 at tolerance x 1, x 0.1, x 0.01, each as sampled and after
+    quench 1;
+  - **4266910:** CelebA-64 K1536 + 16x16, n = 50 at x 1 and x 0.1 (platform allocator).
+- **Test 4266899 (+ contrast 4266936), CelebA-32 K1536 + 8x8 + 16x16, n = 50 each:** all three variants run.
+  - Time per 50: segmented without corrector 311 s, + 2 corrector steps 339 s (+20%), force scale 1.2 315 s.
+  - Contrast (n = 50, preliminary):
+
+    | | contrast (pixel std) | dark < 0.1 | bright > 0.9 |
+    |---|---|---|---|
+    | real | 0.229 | 12.7% | 3.3% |
+    | standard sampler (n = 2000) | 0.200 | 7.4% | 1.5% |
+    | segmented, no corrector | 0.197 | 6.2% | 1.6% |
+    | + 2 corrector steps (SNR 0.16) | 0.209 | 6.5% | 1.4% |
+    | force scale 1.2 (colder) | 0.188 | 5.4% | 0.6% |
+
+  - The corrector raises contrast a little (+6%).
+  - **Colder sampling lowers it.** The learned modes themselves sit at mid-grey, so concentrating on them compresses
+    the range further. The contrast deficit is in where the model puts its mass, not in thermal smearing, which
+    favours the model-side fix (3, global factors).
+  - Full scan (n = 2000, Inception FID): corrector M = 2 and 4, and force scale 0.9 (warmer). Submitted after the
+    tolerance check settles the solver tolerance.
+- **Tolerance convergence: the sampler is converged at the default tolerance.**
+
+  | Check | max abs diff | median RMS diff / NN distance | contrast, dark share |
+  |---|---|---|---|
+  | CelebA-64 K1536 + 16x16, x0.1 vs x1, n = 50 (4266910: 1338 s vs 4030 s) | 5.2e-4 | 4.9e-6 | identical (0.1794, 3.31%) |
+  | same, after quench 1 | 4.4e-4 | 6.1e-6 | identical (0.1767, 2.45%) |
+  | CelebA-32 K1536 + 8x8 + 16x16, x0.1 vs x1, n = 200 (4266909: 791 s vs 3156 s; CPU 4267198) | 1.2e-3 | 7.2e-6 | identical (0.2008, 6.01%) |
+
+  - A 10x tighter tolerance moves each sample by about a millionth of the distance between two different samples,
+    and costs 3-4x the time. The images do not change, so their defects are not solver artefacts. The x0.01 run on
+    CelebA-32 is still running and adds a third point.
+- **Corrector / temperature scan submitted at the default tolerance** (CelebA-32 K1536 + 8x8 + 16x16, n = 2000,
+  noise start, chunk 250):
+  - variants: `--corrector 0:0.16` (segmented baseline) 4267202, `2:0.16` 4267204, `4:0.16` 4267206,
+    `--force-scale 0.9` (warmer) 4267208;
+  - their quenches 4267203 / 05 / 07 / 09;
+  - Inception FID **4267210** with the standard sampler as reference; contrast 4267211; gallery 4267212
+    (`galleries/2026-11-17_celeba32-grey_K1536+patch8x8+patch16x16_corrector-and-force-scale-scan_*`).

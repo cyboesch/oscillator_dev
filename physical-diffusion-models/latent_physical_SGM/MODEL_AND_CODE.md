@@ -88,6 +88,8 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 | MNIST, ten digits | K6144 + 7x7 every 3 px, equil start | 18.8 (FID_inf 15.9) | 3.87 |
 | Fashion, ten classes | K1536 + 8x8 every 2 px, equil start, 3 seeds | 25.9 +- 0.04 (21.3) | 2.71 +- 0.07 |
 | CelebA 32x32 grey | K1536 + 8x8 every 2 px + 16x16 every 4 px, noise start | 22.4 (18.6) | - |
+| CelebA 32x32 grey | K784 + 8x8 every 2 px + 4x4 every 2 px + 16x16 every 4 px, noise start (ties the above with half the global states, 2026-11-17) | 22.3 (18.7) | - |
+| CelebA 64x64 grey | K1536 + 16x16 every 4 px, noise start (first run, 2026-11-17; floor 5.9) | 58.5 (55.9) | - |
 
 Floors (real held-out images at n = 2000): MNIST 3.7, Fashion 7.2, CelebA 6.4. Wang & Achour: MNIST 27.6,
 Fashion 80.8 (their n and FID code are not stated).
@@ -110,6 +112,8 @@ sbatch --mem 64G --time 02:00:00 jobs/run_gpu_neuronic.sh sample_latent.py --run
 | `make_gallery.py` | side-by-side galleries with a README per folder | descriptive names, e.g. `K784+patch8x8-every2px_start-noise_quench1` |
 | `nn_check.py` | nearest training / test image distances (memorisation) | |
 | `plot_inception_fid.py` | the summary figure `figures/inception_fid_mnist_fashion.{png,pdf}` (MNIST, Fashion, CelebA) | |
+| `contrast_check.py` | pixel histograms, per-image contrast and brightness, dark / bright shares, maps of the mean and the spread over images | CPU; 2026-11-17 |
+| `tol_check.py` | per-sample differences between sample files of the same trajectories (solver convergence) | CPU; 2026-11-17 |
 
 Sample specs `PATH+PATH` concatenate files; `latent_model.split_set_spec` keeps run names that contain a '+'.
 
@@ -132,12 +136,25 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 | 11-16 | `split_set_spec` for '+' in run names; `patch2` in gallery READMEs | `latent_model`, `evaluate_samples`, `make_gallery`, `fid_score`, `inception_fid` | rerun of the two-scale evaluation (4261206) |
 | 11-16 | block unfold / fold for patch layouts with side and grid multiples of the stride (`PatchGeometry.impl = 'blocks'`); `LATENT_PATCH_IMPL=slices` forces the old path | `latent_model` | job 4262849: patch term and its gradients bitwise for every layout; training agrees to rounding (1e-10 to 2e-6 relative after 4 slices, not bitwise: the fused graph rounds differently); CelebA-32 8x8 + 16x16 training 3x faster |
 | 11-16 | third patch scale `--patch3` (`PATCH3_KEYS`); the extra sets handled in one loop in `train_latent` | `latent_model`, `train_latent`, `sample_latent`, `make_gallery` | job 4262952: two-scale run bit-identical to the pre-change code; three-scale run trains, samples, quenches |
+| 11-16 | `--hidden-fixed` with Potts patch units: every patch set held at its k-means reference from the switch-on slice | `train_latent` | job 4263528: frozen sets equal their reference (cos 1.000, equal norms) in every slice |
+| 11-17 | quench-only mode no longer builds the unused SDE drift (a second device copy of the parameter history; CelebA-64 K1536 ran out of GPU memory) | `sample_latent` | the quench path itself is unchanged |
+| 11-17 | `--patch-fixed-scale S` (with `--hidden-fixed`): frozen patch sets at S x their reference; 1/coverage = 0.0625 counts each pixel once (the full reference over-counts 16-fold) | `train_latent` | frozen faces lose the stripe artefacts (job 4266722) |
+| 11-17 | `--history-dtype float32`: the parameter history on the device in float32 (half the memory; needed for CelebA-64 K3072) | `sample_latent` | vs float64, same trajectories: samples within 4.2e-4, quench within 3.7e-4 (jobs 4266800 / 4266809) |
+| 11-17 | `--force-scale LAMBDA` (sampling at T / LAMBDA) and `--corrector M:SNR` (segmented predictor-corrector sampler, unadjusted Langevin, SNR step size) | `sample_latent` | test 4266899; full scan 4267202-12 |
+| 11-17 | `--sde-tol-scale F` (solver tolerances x F) | `sample_latent` | convergence check: x0.1 moves samples by ~1e-6 of the sample spacing (jobs 4266909 / 4266910) |
 
 ## 4. Known pitfalls
 
 - **GPU memory for K >= 3072 (sampling).** The default sampler holds the float64 parameter history several times
   (K3072 on CelebA-32: 5.0-5.6 GB constants). Use `XLA_PYTHON_CLIENT_ALLOCATOR=platform`, `--chunk 25`, 160 GB host
   memory (MNIST K6144, CelebA K3072). `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` alone was not enough.
+  CelebA-64: K1536 needs the same (12 GB per copy); K3072 (22 GB per copy) additionally needs
+  `--history-dtype float32`. Quench-only no longer builds a second copy (11-17).
+- **Solver tolerance.** The reverse SDE is adaptive (SRA1, rtol 1e-4, atol 1e-6, steps onto the knots). It is
+  converged at these values (2026-11-17): 10x tighter changes each sample by ~1e-6 of the distance between samples,
+  at 3-4x the cost. Image defects are not solver artefacts.
+- **Frozen baselines with overlapping patches.** Holding patch units at their full k-means reference counts each
+  pixel about 16 times (stripes, saturation); use `--patch-fixed-scale 1/coverage`.
 - **Disk.** Each run stores its parameters twice (`slices/` and `hidden_history.npz` + `params_history.npy`):
   CelebA-32 K3072 about 10 GB per run, CelebA-64 K1536 about 25 GB. The share is 1 TB since 2026-11-16; check
   `df -h /n/fs/cyrills-part` before large runs. Full-K smoke tests write full-size slices.
@@ -154,14 +171,21 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 
 ## 5. Data on disk
 
-- `data/CelebA/celeba_gray32_{train,valid,test}.npz` (uint8). The parquet download cache and the 64x64 files were
-  deleted on 2026-11-15 (disk full); `make_celeba_data.py` downloads missing shards again, then
-  `CELEBA_SIZE=64 python make_celeba_data.py` rebuilds the 64x64 files (4 min on 8 CPUs).
+- `data/CelebA/celeba_gray32_{train,valid,test}.npz` and `celeba_gray64_{train,valid,test}.npz` (uint8), and the
+  parquet download cache `data/CelebA/parquet/` (about 12 GB).
+  - The parquet cache and the 64x64 files were deleted on 2026-11-15 (disk full) and rebuilt on 2026-11-16
+    (job 4263036; identical to the first build).
+  - To rebuild: `make_celeba_data.py` downloads missing shards, then `CELEBA_SIZE=64 python make_celeba_data.py`
+    builds the 64x64 files (4 min on 8 CPUs).
 
 ## 6. Open items
 
 - 64x64 patch speed: the block unfold does not help there (see 4); try a convolution-based unfold, or choose the
-  implementation per layout by measurement.
-- Three patch scales (8x8 + 4x4 + 16x16) on CelebA-32: running (pipeline 4262953, 2026-11-16).
+  implementation per layout by measurement. (CelebA-64 with 16x16 patches turned out to train in 6.9 h anyway.)
+- Contrast: the samples regress backgrounds and hair towards mid-grey (contrast -13% at 32x32, -23% at 64x64);
+  colder sampling makes it worse. Candidate model fix: near-global factor units (large patches / a second global
+  unit). Running (2026-11-17): the CelebA-32 corrector / temperature scan; CelebA-64 K3072 and two patch scales.
+- Frozen vs trained (the dense-associative-memory question): done for MNIST ten digits and CelebA-32, with and
+  without patches; learning the couplings is essential (CODE_AND_PERFORMANCE.md, 2026-11-16/17).
 - Seeds 2 and 3 of the best CelebA-32 model.
-- CelebA 64x64 once the patch code is fast enough.
+- Metropolis-adjusted corrector (MALA): needs the free energy F in the sampler; only if the corrector helps.

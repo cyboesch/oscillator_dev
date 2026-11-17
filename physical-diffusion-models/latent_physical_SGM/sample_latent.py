@@ -214,6 +214,10 @@ def step_knots(taus=None):
     return jnp.asarray(np.sort(lm.T_FORWARD - taus)[1:-1])
 
 
+HISTORY_DTYPE = np.float64   # dtype of the stacked parameter history in make_drift; main sets it from --history-dtype
+SDE_TOL_SCALE = 1.0          # factor on RTOL_SDE and ATOL_SDE in the reverse-SDE solves (--sde-tol-scale, 2026-11-17)
+
+
 def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="ising", local=None, quad=None,
                radius=None, neighbourhood="chebyshev", taus=None, harmonic=None, patch=None):
     """Drift and diffusion of the reverse SDE (sampler 'sde') or the PF-ODE ('ode') of a run's parameter history, the
@@ -266,6 +270,8 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
         if with_qp:
             parts += [Qp_h.reshape(Qp_h.shape[0], -1)]
     stacked = np.concatenate(parts, axis=1)
+    if HISTORY_DTYPE != np.float64:                      # --history-dtype float32 (2026-11-17): half the device memory
+        stacked = stacked.astype(HISTORY_DTYPE)          # of the parameter history; float64 (default): as before
     taus = lm.forward_time_pts() if taus is None else np.asarray(taus, dtype=np.float64)
     if taus.shape != (stacked.shape[0],):
         raise ValueError(f"slice times of shape {taus.shape} for a history of {stacked.shape[0]} slices")
@@ -705,6 +711,24 @@ def main():
                     help="(--fast) cached: the same Brownian tree, evaluated once per step instead of twice")
     ap.add_argument("--stem-suffix", default="",
                     help="(--fast) appended to the samples file name, e.g. _fast to keep them next to existing ones")
+    ap.add_argument("--history-dtype", choices=["float64", "float32"], default="float64",
+                    help="default sampler (2026-11-17): dtype of the parameter history on the device. float32 halves its "
+                         "memory (CelebA-64 K3072: 22 GB per copy in float64 does not fit the 46 GB L40); the samples get "
+                         "the suffix _hist32 and the manifest records history_dtype. float64 (default): as before")
+    ap.add_argument("--sde-tol-scale", type=float, default=1.0,
+                    help="default SDE sampler (2026-11-17): multiply the reverse-SDE solver tolerances (rtol 1e-4, atol "
+                         "1e-6) by F, for a convergence check: the Brownian paths do not depend on the steps, so samples "
+                         "of the same trajectories can be compared one by one. Suffix _tol<F>; 1 (default): as before")
+    ap.add_argument("--force-scale", type=float, default=1.0,
+                    help="default SDE sampler (2026-11-17): multiply the learned force grad F by LAMBDA during sampling "
+                         "(drift x - 2 LAMBDA grad F; sampling at temperature T / LAMBDA: > 1 colder, sharper). The quench "
+                         "is not scaled. Samples get the suffix _fs<LAMBDA>; 1 (default): as before")
+    ap.add_argument("--corrector", default="",
+                    help="default SDE sampler (2026-11-17): M:SNR, predictor-corrector sampling. The reverse SDE is solved "
+                         "segment by segment between the slice knots (Brownian key fold_in(key, segment)), and after each "
+                         "segment M unadjusted Langevin steps at that slice: x += eps s + sqrt(2 eps) z, s = -LAMBDA grad F / T, "
+                         "eps = 2 (SNR |z| / |s|)^2 per sample (Song et al. 2021). M = 0: the segmented sampler without "
+                         "corrector (the baseline). Samples get the suffix _corr<M>x<SNR>")
     ap.add_argument("--thin-knots", default="",
                     help="test of the knot spacing (default sampler only; thin_knot_keep): 'LO:HI' drops every slice "
                          "with an odd index whose time lies strictly between LO and HI, so the knot spacing there "
@@ -762,6 +786,8 @@ def main():
                 or args.sampler != "sde"):
             ap.error("--fixed-langevin works alone (default SDE sampler; no --fast, --thin-knots, --oracle-start, "
                      "--init-dist or --quench)")
+    if args.fast and args.history_dtype != "float64":
+        ap.error("--history-dtype is for the default sampler (--fast has --precision)")
     if args.fast:
         return main_fast(args, quench)
     if (args.brownian_tol is not None or args.precision != "f64" or args.visible_impl != "auto"
@@ -773,6 +799,39 @@ def main():
     out_dir = os.path.join(run_dir, "samples")
     os.makedirs(out_dir, exist_ok=True)
     stem = os.path.join(out_dir, f"{args.sampler}_{args.set}_n{args.n}")
+    if args.history_dtype == "float32":       # --history-dtype float32: every make_drift of this job, own file names
+        global HISTORY_DTYPE
+        HISTORY_DTYPE = np.float32
+        stem += "_hist32"
+        prov["history_dtype"] = "float32"
+    if args.sde_tol_scale != 1.0:             # --sde-tol-scale (2026-11-17): solver convergence check
+        if not (math.isfinite(args.sde_tol_scale) and args.sde_tol_scale > 0.0) or args.sampler != "sde":
+            raise SystemExit("--sde-tol-scale: a finite factor > 0, default SDE sampler only")
+        global SDE_TOL_SCALE
+        SDE_TOL_SCALE = float(args.sde_tol_scale)
+        stem += f"_tol{args.sde_tol_scale:g}"
+        prov["sde_tol_scale"] = float(args.sde_tol_scale)
+    corr = None                               # --corrector M:SNR / --force-scale (2026-11-17)
+    if args.corrector:
+        try:
+            m_s, snr_s = args.corrector.split(":")
+            corr = (int(m_s), float(snr_s))
+        except ValueError:
+            corr = None
+        if corr is None or corr[0] < 0 or not (math.isfinite(corr[1]) and corr[1] > 0.0):
+            raise SystemExit(f"--corrector {args.corrector!r}: expected M:SNR with M >= 0 and SNR > 0 (e.g. 2:0.16)")
+    if corr is not None or args.force_scale != 1.0:
+        if args.sampler != "sde" or args.fixed_langevin or args.oracle_start is not None or args.thin_knots:
+            raise SystemExit("--corrector and --force-scale: default SDE sampler only (no --sampler ode, "
+                             "--fixed-langevin, --oracle-start or --thin-knots)")
+        if not (math.isfinite(args.force_scale) and args.force_scale > 0.0):
+            raise SystemExit(f"--force-scale {args.force_scale}: must be finite and > 0")
+        if args.force_scale != 1.0:
+            stem += f"_fs{args.force_scale:g}"
+            prov["force_scale"] = float(args.force_scale)
+        if corr is not None:
+            stem += f"_corr{corr[0]}x{corr[1]:g}"
+            prov["corrector"] = {"steps": corr[0], "snr": corr[1], "kind": "unadjusted Langevin, SNR step size"}
     t_start = time.time()
     print(f"=== start {time.strftime('%Y-%m-%d %H:%M:%S')}; job {os.environ.get('SLURM_JOB_ID', 'manual')}; "
           f"jax {jax.__version__}; devices {jax.devices()}; run {args.run}; K {W_hist.shape[1]}; {args.sampler}, "
@@ -833,9 +892,14 @@ def main():
             raise SystemExit(f"{stem}.npy exists; --init-dist does not overwrite samples (with --quench it quenches them)")
         print(f"--init-dist {args.init_dist}" + ("" if args.init_rank is None else f" --init-rank {args.init_rank}")
               + f": writes {stem}.npy", flush=True)
-    drift, diffusion = make_drift(theta_hist, W_hist, b_hist, args.sampler, problem, prov.get("hidden", "ising"),
-                                  local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
-                                  harmonic=harm_p, patch=patch_p)
+    if quench and os.path.exists(stem + ".npy") and not args.fixed_langevin:
+        # quench only (2026-11-17): the sampler's drift is not used, and building it would put a second device copy
+        # of the parameter history next to the quench's (CelebA-64 K1536: 2 x 12 GB, RESOURCE_EXHAUSTED, job 4263039)
+        drift = diffusion = None
+    else:
+        drift, diffusion = make_drift(theta_hist, W_hist, b_hist, args.sampler, problem, prov.get("hidden", "ising"),
+                                      local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
+                                      harmonic=harm_p, patch=patch_p)
     if args.fixed_langevin:                   # control: one frozen slice, no time evolution; then stop
         del drift
         fixed_langevin(args, (theta_hist, W_hist, b_hist, local_p, quad_p), problem, prov, taus, diffusion, harm_p,
@@ -849,7 +913,18 @@ def main():
         x_final = np.load(stem + ".npy")
         print(f"quench only: loaded {stem}.npy ({x_final.shape[0]} samples)", flush=True)
     else:
-        x_final = sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus, t0, x_init)
+        grad_ode = None
+        if args.force_scale != 1.0:           # --force-scale: drift x - 2 LAMBDA grad F (the SDE drift is x - 2 grad F)
+            drift_base, lam_f = drift, float(args.force_scale)
+
+            def drift(t, x, a):
+                return x - lam_f * (x - drift_base(t, x, a))
+        if corr is not None and corr[0] > 0:  # --corrector: grad F from the PF-ODE drift x - grad F
+            grad_ode, _ = make_drift(theta_hist, W_hist, b_hist, "ode", problem, prov.get("hidden", "ising"),
+                                     local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
+                                     harmonic=harm_p, patch=patch_p)
+        x_final = sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus, t0, x_init,
+                         corr=corr, grad_ode=grad_ode)
     if quench:
         drift_ode, _ = make_drift(theta_hist, W_hist, b_hist, "ode", problem, prov.get("hidden", "ising"),
                                   local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
@@ -938,7 +1013,44 @@ def do_quench(x_final, drift_ode, durations, stem, args, t_start):
               f"{time.time() - t_q:.0f} s; saved {name}.npy", flush=True)
 
 
-def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=None, t0=0.0, x_init=None):
+def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, lam):
+    """Predictor-corrector sampling (--corrector M:SNR, 2026-11-17) of one padded chunk: the reverse SDE solved from
+    knot to knot (segments [t0, k_1], [k_1, k_2], ..., [k_last, T_FORWARD]; Brownian key fold_in(key, segment)), and
+    after every segment but the last M unadjusted Langevin steps at that knot's slice, x += eps s + sqrt(2 eps) z with
+    s = -lam grad F / T (grad F = x - drift_ode) and eps = 2 (SNR |z| / |s|)^2 per sample (Song et al. 2021, the SNR
+    rule); noise keys fold_in(fold_in(key, 100000 + segment), step). M = 0: the segmented sampler alone."""
+    seg_t = np.concatenate([[t0], np.asarray(knots, dtype=np.float64), [lm.T_FORWARD]])
+    seg_t = seg_t[np.concatenate([[True], np.diff(seg_t) > 1e-12])]
+
+    def seg_solve(y, k, ta, tb):
+        sol = solve_SDE(drift, diffusion, y, k, ta, tb, 2, lm.DT0, rtol=lm.RTOL_SDE * SDE_TOL_SCALE,
+                        atol=lm.ATOL_SDE * SDE_TOL_SCALE,
+                        brownian_tolerance=lm.BROWNIAN_TOL)
+        return sol.ys[-1]
+
+    seg_fn = vmap(seg_solve, in_axes=(0, 0, None, None))
+
+    def corr_step(y, z, tb):
+        s = -lam * (y - grad_ode(tb, y, ())) / lm.TEMP
+        eps = 2.0 * (snr * jnp.linalg.norm(z) / (jnp.linalg.norm(s) + 1e-300)) ** 2
+        return y + eps * s + jnp.sqrt(2.0 * eps) * z
+
+    corr_fn = jax.jit(vmap(corr_step, in_axes=(0, 0, None)))
+    y = jnp.asarray(x0)
+    keys = jnp.asarray(keys)
+    for j in range(seg_t.size - 1):
+        ks = vmap(lambda k: jr.fold_in(k, j))(keys)
+        y = seg_fn(y, ks, jnp.asarray(seg_t[j]), jnp.asarray(seg_t[j + 1]))   # traced times: one compile
+        if M > 0 and j < seg_t.size - 2:
+            for m in range(M):
+                zs = vmap(lambda k: jr.normal(jr.fold_in(jr.fold_in(k, 100000 + j), m), (y.shape[1],),
+                                              dtype=y.dtype))(keys)
+                y = corr_fn(y, zs, jnp.asarray(seg_t[j + 1]))
+    return y
+
+
+def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=None, t0=0.0, x_init=None, corr=None,
+           grad_ode=None):
     """Solves the reverse SDE (or PF-ODE) for the trajectory set in chunks, stepping onto the knots of the slice times
     taus (default the uniform grid; the same taus as make_drift's), and writes <stem>.npy and <stem>.json.
     t0, x_init (--oracle-start): start at reverse time t0 from the states x_init (the knots after t0 only); the
@@ -956,8 +1068,9 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
     if x_init is not None:
         x0 = np.asarray(x_init, dtype=np.asarray(x0).dtype)
     if args.sampler == "sde":
-        fn = vmap(lambda y, k: solve_SDE(drift, diffusion, y, k, t0, lm.T_FORWARD, n_save, lm.DT0, rtol=lm.RTOL_SDE,
-                                         atol=lm.ATOL_SDE, brownian_tolerance=lm.BROWNIAN_TOL, step_ts=knots))
+        fn = vmap(lambda y, k: solve_SDE(drift, diffusion, y, k, t0, lm.T_FORWARD, n_save, lm.DT0,
+                                         rtol=lm.RTOL_SDE * SDE_TOL_SCALE, atol=lm.ATOL_SDE * SDE_TOL_SCALE,
+                                         brownian_tolerance=lm.BROWNIAN_TOL, step_ts=knots))
     else:
         fn = vmap(lambda y, k: solve_ODE(drift, y, t0, lm.T_FORWARD, n_save, lm.DT0, rtol=lm.RTOL_ODE, atol=lm.ATOL_ODE,
                                          step_ts=knots))
@@ -968,9 +1081,14 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
         t_c = time.time()
         idx = np.arange(c0, min(c0 + args.chunk, args.n))
         pad = np.concatenate([idx, np.repeat(idx[-1:], args.chunk - idx.size)])
-        sol = fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad]))
-        x_final[idx] = np.asarray(sol.ys[:, -1, :])[: idx.size]
-        if x_snap is not None:
+        if corr is not None:                  # --corrector: segmented predictor-corrector sampler
+            yc = sample_corrector(drift, diffusion, grad_ode, x0[pad], keys[pad], knots, t0, corr[0], corr[1],
+                                  float(args.force_scale))
+            x_final[idx] = np.asarray(yc)[: idx.size]
+        else:
+            sol = fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad]))
+            x_final[idx] = np.asarray(sol.ys[:, -1, :])[: idx.size]
+        if x_snap is not None and corr is None:
             x_snap[idx] = np.asarray(sol.ys, dtype=np.float32)[: idx.size]
         np.save(stem + ".partial.npy", x_final[: idx[-1] + 1])
         chunk_times.append(time.time() - t_c)
@@ -981,8 +1099,9 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
     os.remove(stem + ".partial.npy")
     manifest = {
         "run": args.run, "problem": problem, "K": int(W_hist.shape[1]), "sampler": args.sampler, "set": args.set, "n": args.n,
-        "chunk": args.chunk, "rtol": lm.RTOL_SDE if args.sampler == "sde" else lm.RTOL_ODE,
-        "atol": lm.ATOL_SDE if args.sampler == "sde" else lm.ATOL_ODE, "brownian_tol": lm.BROWNIAN_TOL, "dt0": lm.DT0,
+        "chunk": args.chunk, "rtol": lm.RTOL_SDE * SDE_TOL_SCALE if args.sampler == "sde" else lm.RTOL_ODE,
+        "atol": lm.ATOL_SDE * SDE_TOL_SCALE if args.sampler == "sde" else lm.ATOL_ODE, "brownian_tol": lm.BROWNIAN_TOL,
+        "dt0": lm.DT0,
         "interp": "linear", "step_ts": "98 interior knots", "knots_t": [float(v) for v in taus],
         "chunk_seconds": chunk_times,
         "max_abs_final": float(np.nanmax(np.abs(x_final))), "n_nonfinite": int(np.sum(~np.isfinite(x_final).all(1))),

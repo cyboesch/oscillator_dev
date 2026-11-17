@@ -401,6 +401,10 @@ def parse():
                          "reference (seeds PATCH_SEED0 + 100000 + 1000 (seed - 1) + patch; patch2_reference.json) and "
                          "learning-rate scales; the same --patch-init-scale, --patch-on-slice and --patch-lr-scale as "
                          "--patch. Needs --patch (Potts). Recorded in config.json as 'patch2' (absent without it)")
+    ap.add_argument("--patch-fixed-scale", type=float, default=1.0,
+                    help="with --hidden-fixed and patch units (2026-11-17): the frozen patch sets are this factor x their "
+                         "k-means reference (default 1, the full reference; 1 / coverage, e.g. 0.0625 for 16-fold overlap, "
+                         "counts each pixel once). Recorded in config.json as patch_fixed_scale only when not 1")
     ap.add_argument("--patch3", default="",
                     help="a third patch scale SIDE:STRIDE:STATES (2026-11-16), as --patch2 with keys Wp3, bp3, Qp3, "
                          "k-means seeds PATCH_SEED0 + 200000 + 1000 (seed - 1) + patch, patch3_reference.json; needs "
@@ -1091,6 +1095,11 @@ def main():
         config["patch_kind"] = args.patch_kind
     for x in xsets:                              # --patch2 / --patch3 only: other configs as before
         config[x["name"]] = lm.patch_spec_str(x["spec"])
+    if args.patch_fixed_scale != 1.0:            # --patch-fixed-scale only: other configs as before
+        if not (args.hidden_fixed and patch is not None and np.isfinite(args.patch_fixed_scale)
+                and args.patch_fixed_scale > 0.0):
+            raise ValueError("--patch-fixed-scale needs --hidden-fixed and --patch, and a finite value > 0")
+        config["patch_fixed_scale"] = float(args.patch_fixed_scale)
     xspec = {f"patch{nx}": next((lm.patch_spec_str(x["spec"]) for x in xsets if x["n"] == nx), "") for nx in (2, 3)}
     if args.hidden_rule == "cd1":
         config.update(cd1_kappa=args.cd1_kappa, cd1_dt=args.cd1_dt, cd1_releases=args.cd1_releases,
@@ -1127,6 +1136,8 @@ def main():
         for kx, vx in xspec.items():             # recorded with --patch2 / --patch3 only: both directions
             if old.get(kx, "") != vx:
                 diff[kx] = (old.get(kx, ""), vx)
+        if float(old.get("patch_fixed_scale", 1.0)) != float(args.patch_fixed_scale):   # both directions
+            diff["patch_fixed_scale"] = (old.get("patch_fixed_scale", 1.0), args.patch_fixed_scale)
         if diff:
             raise RuntimeError(f"existing run {out_dir} has a different config: {diff}")
         if old.get("sha256") != code_sha:
@@ -1727,10 +1738,10 @@ def main():
                                              if args.hidden_fixed else ""))
         if args.hidden_fixed and patch is not None and k >= K_on:   # frozen patch units (2026-11-16): every patch
             params = dict(params)                # set = this slice's closed-form k-means reference (scale 1)
-            Wr, br = (a[0] for a in patch_ref(clus, [t_curr], lm.TEMP))
+            Wr, br = (a[0] for a in patch_ref(clus, [t_curr], lm.TEMP, scale=args.patch_fixed_scale))
             params["Wp"], params["bp"] = jnp.asarray(Wr), jnp.asarray(br)
             for x in xsets:
-                Wr, br = (a[0] for a in lm.patch_reference(x["clus"], [t_curr], lm.TEMP))
+                Wr, br = (a[0] for a in lm.patch_reference(x["clus"], [t_curr], lm.TEMP, scale=args.patch_fixed_scale))
                 params[x["kw"]], params[x["kb"]] = jnp.asarray(Wr), jnp.asarray(br)
         split_info = None
         if k in split_slices and k >= args.freeze_hidden_slices:   # --split-dead: dead states become copies
