@@ -216,6 +216,23 @@ def step_knots(taus=None):
 
 HISTORY_DTYPE = np.float64   # dtype of the stacked parameter history in make_drift; main sets it from --history-dtype
 SDE_TOL_SCALE = 1.0          # factor on RTOL_SDE and ATOL_SDE in the reverse-SDE solves (--sde-tol-scale, 2026-11-17)
+# Largest parameter history interpolated as one array (2026-11-17); LATENT_INTERP_MAX_ELEMS overrides it (for tests)
+INTERP_MAX_ELEMS = int(os.environ.get("LATENT_INTERP_MAX_ELEMS", str(2**31 - 1)))
+
+
+def interpolate_history(stacked, taus):
+    """interpolate_parameters(stacked, taus) for the stacked history (n_slices, n_params) of make_drift.
+    Up to INTERP_MAX_ELEMS elements (every run before 2026-11-17): the single call, as before. Larger: in column
+    blocks of at most INTERP_MAX_ELEMS // 2 elements each, the results concatenated (2026-11-17). One array of 2^31 or
+    more elements crashes XLA: CelebA-64 K3072 + 16x16 patches, 2.79e9 elements, segmentation fault in job 4266810.
+    Each parameter is interpolated on its own, so the blocks give the same values as the single call."""
+    if stacked.size <= INTERP_MAX_ELEMS:
+        return interpolate_parameters(jnp.asarray(stacked), jnp.asarray(taus))
+    cols = max(1, (INTERP_MAX_ELEMS // 2) // stacked.shape[0])
+    fs = [interpolate_parameters(jnp.asarray(stacked[:, i:i + cols]), jnp.asarray(taus))
+          for i in range(0, stacked.shape[1], cols)]
+    print(f"parameter history of {stacked.size:.3e} elements: interpolated in {len(fs)} column blocks", flush=True)
+    return lambda t: jnp.concatenate([f(t) for f in fs], axis=-1)
 
 
 def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="ising", local=None, quad=None,
@@ -275,7 +292,7 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
     taus = lm.forward_time_pts() if taus is None else np.asarray(taus, dtype=np.float64)
     if taus.shape != (stacked.shape[0],):
         raise ValueError(f"slice times of shape {taus.shape} for a history of {stacked.shape[0]} slices")
-    interp = interpolate_parameters(jnp.asarray(stacked), jnp.asarray(taus))
+    interp = interpolate_history(stacked, taus)
     conn = lm.connectivity(grid, radius, neighbourhood)       # the run's neighbourhood (config, default chebyshev)
     _, unflatten = lm.paper_theta_layout(conn.shape[0], n)
     if 4 * n + 3 * conn.shape[0] != n_theta:

@@ -4467,3 +4467,211 @@ structure.
   - the hidden couplings train: Q_norm 0 -> 0.0035 -> 0.0072 -> 0.0113 and W_norm 1.136290 -> 1.136446;
   - mixed vs f64: W_norm agrees to 1e-6 relative and Q_norm to 2e-5 (different draws, same distribution).
   - The test runs are deleted; pipelines 4267284-86 are released by the dependency.
+- **14:25: two-scale 64x64 run cancelled** (training 4266791 and its chain 4266792-95; the user agreed).
+  - With `--patch 16:4:32 --patch2 8:2:32` (slices implementation) the first patch slice (55) took 4541 s:
+    **5 steps/s**, against 69 steps/s for 16x16 alone (blocks) and 144 steps/s without patches.
+  - The remaining 45 patch slices would need about 3 days, over the 3-day job limit.
+  - 8x8 every 2 px at 64x64 is not viable until the patch term is faster for this layout (open item: a
+    convolution-based unfold, or choosing the implementation per layout).
+  - Slices 0-55 remain on disk in `celeba64g_K1536_..._patch16s4S32+patch8s2S32on55_seed1/` and can be resumed.
+
+### 2026-11-17 evening: sampler results
+
+- **Tolerance check, final** (4266909: x1 791 s, x0.1 3156 s, x0.01 14504 s; CelebA-32 K1536 + 8x8 + 16x16, n = 200):
+  x0.1 and x0.01 differ from x1 by the same tiny amount (median RMS / NN distance 7.2e-6 and 7.1e-6; after the
+  quench 9.7e-6 and 9.9e-6), and contrast and dark share are identical. **The default tolerance is converged.**
+- **Corrector / temperature scan** (CelebA-32 K1536 + 8x8 + 16x16, n = 2000, noise start; Inception **4267210**,
+  contrast 4267211, gallery 4267212); floor 6.43:
+
+  | Sampler | as sampled | quench 1 (FID_inf) | KID x1e3 (q1) | contrast (q1) | dark / bright (q1) |
+  |---|---|---|---|---|---|
+  | standard | 92.6 | 22.37 (18.69) | 14.5 | 0.198 | 6.9% / 1.3% |
+  | segmented, no corrector | 93.1 | 22.64 (19.44) | 14.9 | 0.197 | 6.4% / 1.4% |
+  | **+ 2 corrector steps** (SNR 0.16) | 76.5 | **21.50 (17.98)** | **12.5** | 0.200 | 7.5% / 1.6% |
+  | + 4 corrector steps | 70.5 | 21.71 (18.25) | 12.5 | 0.203 | 7.9% / 1.8% |
+  | force scale 0.9 (warmer) | 140.7 | 35.24 (31.07) | 35.0 | 0.217 | 8.5% / 2.2% |
+  | (real) | | | | 0.229 | 12.7% / 3.3% |
+
+  - **The corrector helps.**
+    - As sampled it cuts the FID a lot (93 -> 77 -> 71 with 2 and 4 steps): it removes much of the speckle on the
+      way.
+    - After the quench it gains about 1.1 over its segmented baseline (22.64 -> 21.50), 0.9 over the standard
+      sampler, and KID 14.9 -> 12.5. 4 steps add nothing over 2.
+    - **New best on CelebA-32: 21.50 (FID_inf 18.0).**
+    - Gallery: the corrector faces are more coherent and better defined (eyes, mouth, hair outline), with fewer
+      smudges. Some look more frontal and average; a recall check would tell whether variety suffers.
+    - Cost: +4% sampling time for 2 steps here (2.5 h vs 2.4 h per 2000; the segmentation itself is the larger cost
+      over the standard sampler, 1.8 h).
+  - **Temperature trades contrast against fidelity.** Warmer (0.9) restores contrast (0.217, dark 8.5%), colder
+    (1.2, n = 50) lowers it, but warmer costs 13 Inception FID after the quench (noisier textures that the quench
+    only partly removes). So temperature is not the fix for the contrast deficit.
+  - Next on the sampler side: a Metropolis-adjusted corrector (MALA), only if worth the code (the gain is about 1
+    FID); the corrector is ready to use for the paper models (`--corrector 2:0.16`).
+- **On-device training, interim** (Inception 4267845; CelebA-32 K784 + Q + per-pixel units, no patches, n = 2000,
+  noise start; training 2.6 h exact + visit-count rule, 2.8 h S = 64; floor 6.43):
+
+  | Hidden statistics, optimiser | as sampled | quench 1 (FID_inf) | KID x1e3 (q1) |
+  |---|---|---|---|
+  | exact, Adam (11-15) | 238.0 | 104.4 (100.6) | 119 |
+  | exact, visit-count rule | 238.4 | 106.4 (102.0) | 124 |
+  | **S = 64 sampled**, jackknife, visit-count rule (same-draw counts) | 246.9 | **109.1 (105.8)** | 130 |
+
+  - **Training from 64 sampled hidden states per image comes within about 3 Inception FID of exact statistics with
+    the same optimiser** (109.1 vs 106.4; bootstrap sd 1.5-2.1), and within about 5 of our standard training.
+  - The visit-count rule itself costs 2.0 against Adam with exact statistics.
+  - So on faces with 784 states, device-measurable statistics nearly suffice at S = 64. S = 256 (4267286, slice 85
+    at 17:45) follows in the full comparison 4267290.
+  - Caveat: the no-patch model is the weak one (104 against 22 with patches). The decisive test is the patch model
+    with sampled statistics, which needs sampled statistics for the patch units (code).
+
+### On-device training with patch units: measured patch statistics (2026-11-17 18:30; the user: "start coding this up to have [patches] with the learning rule")
+
+- **Step 1 (this entry): sampled statistics for the patch units.**
+  - `latent_model.patch_terms(..., stat=)`: a measured estimate replaces the posteriors, as `potts_terms(stat=)`
+    does for the global unit.
+  - `make_loss_per_sample`: with samples = S > 0 and Potts patch units, each patch unit's posterior is estimated
+    from S sampled states per sample, with key fold_in(key, 1000 + set index) and the same jackknife parts.
+    The global and per-pixel draws keep their keys, so runs without patches are bit-identical.
+  - `train_latent.py`: `--patch` accepts `--hidden-samples` (Potts patch units) and `--hidden-norm occupancy`.
+  - Under the visit-count rule (`OccupancyTransform`) the patch couplings get per-element Adam: they are in neither
+    its Potts keys (W, b, Q) nor its group keys.
+  - Backups `*_pre_sampledpatch.py`.
+- **Step 2 (next):** the visit-count rule for the patch states (a visit counter per patch unit and state).
+- **Test 4267958:**
+  1. New `check_sampledpatch.py` on the trained CelebA-32 K784 + 8x8 run (slices 60 and 85; one batch of 128):
+     loss and gradients with S = 16 / 64 / 256 sampled states (jackknife, 8 keys) against the exact ones, per
+     parameter group (cosine, single-key error, error of the key mean).
+  2. Regression: exact statistics with patches, old vs new code, 3 slices, must be bitwise.
+  3. Training: K64 + 8x8 + 16x16 patches, S = 16, jackknife, visit-count rule with same-draw counts, 4 slices.
+- **Test 4267958 PASSED (8 min).**
+  1. **Estimator** (`check_sampledpatch.py`, CelebA-32 K784 + 8x8, batch 128, 8 keys, jackknife):
+
+     | | slice 60 (t = 1.97): Wp cos / err(1 key) / err(mean of 8) | slice 85 (t = 0.71): Wp | W (global unit), slice 85 |
+     |---|---|---|---|
+     | S = 16 | 0.906 / 0.47 / 0.17 | 0.900 / 0.48 / 0.17 | 0.876 / 0.57 / 0.17 |
+     | S = 64 | 0.976 / 0.23 / 0.08 | 0.975 / 0.23 / 0.08 | 0.964 / 0.28 / 0.10 |
+     | S = 256 | 0.994 / 0.11 / 0.04 | 0.994 / 0.11 / 0.04 | 0.992 / 0.13 / 0.05 |
+
+     - The loss is unbiased within its noise at every S. For example at slice 85: S = 16 gives -23583.9 +- 3.3,
+       against exact -23583.9.
+     - The single-key gradient error halves for every 4x in S (1/sqrt(S)), and the mean of 8 keys has about
+       1/sqrt(8) of it. So it is pure noise, with no detectable bias.
+     - The patch gradients (Wp, bp, Qp) behave like the global unit's: bp is the noisiest, as b is.
+  2. **Regression:** exact statistics with patches, old vs new code, slices 0-2: all arrays bitwise.
+  3. **Training** (K64 + 8x8 + 16x16, S = 16, jackknife, visit-count rule for the global unit): it runs (11
+    steps/s at this size), and the patch couplings train (Qp_norm 0.010 -> 0.021 -> 0.032).
+  - Temporary runs and the old-code copy are deleted. `check_sampledpatch.py` stays as a tool.
+- **18:45: step-1 runs submitted** (the user: "A now and B in parallel"). CelebA-32 K784 + 8x8 every 2 px + 16x16 every
+  4 px from slice 55, Q, per-pixel units, mixed precision, seed 1, 2000 samples from the noise start:
+
+  | Pipeline | Hidden statistics | Optimiser |
+  |---|---|---|
+  | (existing) | exact | Adam (quench 1: 22.85) |
+  | **4268000** | exact | visit-count rule for the global unit, Adam for the patches |
+  | **4268001** | **S = 64 sampled** for the global unit and every patch unit, jackknife | visit-count rule (same-draw counts) for the global unit, Adam for the patches |
+
+  - quench 4268002 / 4268003; Inception FID **4268004**; gallery **4268005**
+    (`galleries/2026-11-17_celeba32-grey_K784+patch8x8+patch16x16_on-device-training_exact-vs-S64-sampled-statistics_noise-start_quench1/`).
+- **Step 2 (in parallel):** the visit-count rule for the patch states.
+- **Step 2, code (2026-11-17 19:15): the visit-count rule for the patch states, `train_latent.py --patch-occupancy`**
+  (with `--hidden-norm occupancy` and Potts patch units).
+  - `latent_model.patch_occupation(params, X, T, key, S, dtype)`: each patch state's occupation in the batch, per
+    patch set. Exact (batch-mean posterior) or the visit fraction of S draws from the same fields and keys as the
+    loss's patch draws (fold_in(key, 1000 + set)), so with the loss key they are the loss's own draws.
+  - `OccupancyTransform(patch_sets=...)`: per patch state, the leaky-averaged gradient divided by the state's
+    leaky-averaged occupation, as for the global unit's states. Each patch unit has its own step scale (the
+    occupation-weighted mean square over its states), where the global unit (one unit) has one. Same clip, same
+    visit floor (1 / (B S)).
+  - Without `--patch-occupancy` the optimiser state and update are as before. The runner passes `{'b': global,
+    patch b key: (P, S)}` only with the flag; before the switch-on slice the patch part is empty.
+  - Recorded in config.json as `patch_occupancy` (only when set); resume checks it.
+  - Backup of the pre-step-1 code: `*_pre_sampledpatch.py`.
+  - **The step-1 runs 4268000 / 4268001 were held (`scontrol hold`) during the edit**, since they would start with
+    the new code. They will be released after the regression test. Their path, without the flag, is unchanged.
+- **Test 4268021:**
+  1. `patch_occupation` with the loss key reproduces the loss's patch draws exactly (via `sampled_state_mean`).
+  2. Regression: visit-count rule without patches, code from before 18:30 vs now, bitwise.
+  3. K64 + 8x8 + 16x16 with `--patch-occupancy`, 4 slices: S = 16 with jackknife and same-draw counts, and exact
+     statistics.
+- **Test 4268021 PASSED (8 min):**
+  1. `patch_occupation` with the loss key reproduces the loss's patch draws exactly (max difference 0 for both
+     patch sets); occupations sum to 1 per patch unit.
+  2. Regression: visit-count rule without patches, before vs after the change, slices 0-2: all arrays bitwise.
+  3. `--patch-occupancy` trains, with S = 16 and with exact statistics. K64 + 8x8 + 16x16, slice 3: Wp_norm
+     0.20208 / 0.20232, Qp_norm 0.0327 / 0.0329, median effective patch states 28.8 of 32; validation losses agree
+     to 4 digits.
+  - The temporary runs and the old-code copy are deleted.
+- **18:35: step-1 runs released** (4268000 / 4268001; their path, without `--patch-occupancy`, is unchanged).
+- **Step-2 runs submitted** (same structure and settings, plus `--patch-occupancy`):
+  - exact statistics **4268085**; S = 64 sampled, jackknife, same-draw counts **4268086**;
+  - quench 4268087 / 4268088;
+  - **Inception FID 4268089** of all five variants after the quench: exact + Adam; exact + visit-count rule for
+    the global unit; S = 64 + that; exact + visit-count rule for global unit and patch states; S = 64 + that;
+  - gallery **4268090**.
+- **On-device training without patches: final** (S = 256 training 4267286, 5.5 h; Inception **4267290**; gallery
+  4267291, `galleries/2026-11-17_celeba32-grey_K784_on-device-training_exact-vs-S64-vs-S256-sampled-hidden-statistics_noise-start_quench1/`).
+  CelebA-32 K784 + Q + per-pixel units, n = 2000, quench 1; floor 6.43:
+
+  | Hidden statistics, optimiser | quench 1 (FID_inf) | KID x1e3 |
+  |---|---|---|
+  | exact, Adam | 104.4 (100.6) | 119 |
+  | exact, visit-count rule | 106.4 (102.2) | 123 |
+  | S = 64 sampled, jackknife, visit-count rule | 109.1 (105.3) | 129 |
+  | S = 256 sampled, jackknife, visit-count rule | 110.1 (105.9) | 129 |
+
+  - **S = 256 is no better than S = 64** (110.1 vs 109.1; bootstrap sd about 1.5). So the remaining 3-4 points
+    against exact statistics with the same optimiser are not sample noise in the hidden statistics: 4x more
+    samples would have shrunk them.
+  - Candidates: training-seed variance (single seeds; the bootstrap sd covers only the sample noise), or a small
+    systematic difference of the sampled runs (float32 draws, same-draw visit counts).
+  - Either way, **S = 64 is enough**: device-measurable statistics train the model to within a few points of the
+    exact computation.
+  - Gallery: after the quench the rows for exact, S = 64 and S = 256 show essentially the same faces in every
+    column (same start and noise), with no visible degradation.
+- **19:40 status:** the patch runs are at slice 54-62 of 100. Exact statistics run at about 110 s per slice; S = 64
+  runs at about 310 s per slice, so they need about 3.7 h more. Inception FID 4268004 / 4268089 is expected around
+  01:00. `make_gallery.py` now names the real-image panel `01_real_images.png` (it was `01_real_digits.png`, which
+  is wrong for faces); older gallery folders keep the old name.
+
+### Overnight 2026-11-17/18: global factor units and a second seed for on-device training (submitted 20:05; the user: "yes, lets do it!")
+
+- **Global factor units against the contrast deficit** (step 3 of the quality list; existing code via `--patch3`).
+  K784 + 8x8 + 16x16 (exact statistics, Adam, seed 1) plus a third patch set from slice 55:
+  - **4268394: `--patch3 32:32:32`**, one full-image patch, i.e. a second global Potts unit with 32 states (blocks
+    with m = 1). It can carry an image-wide factor (lighting, background brightness) next to the K784 unit;
+  - **4268395: `--patch3 24:4:32`**, 9 near-global 24x24 patches every 4 px (localised lighting, background per
+    side).
+  - quench 4268396 / 97; Inception FID **4268398** against the two-scale baseline (22.85 after the quench);
+    contrast check **4268399**; gallery **4268400**.
+- **Second seed for on-device training without patches** (is the 3-4 point gap between S = 64 and exact statistics
+  run-to-run variance?): K784 + Q + per-pixel units, visit-count rule, seed 2.
+  - exact **4268401**; S = 64 sampled with jackknife and same-draw counts **4268402**;
+  - quench 4268403 / 4268404; Inception FID **4268405** of seeds 1 and 2 of both (quenched).
+
+### CelebA-64 K3072: sampling crash and fix (2026-11-17 22:00)
+
+- **Sampling 4266810 failed after 5 min with a segmentation fault** (exit 139; host memory 143 of 200 GB, so not an
+  out-of-memory kill; no core file). The training (4266799, 10.4 h) is complete. The quench, Inception, gallery and
+  contrast jobs (4266811-4266814) were stuck on the failed dependency.
+- **Cause: the stacked parameter history is one array of 2.79e9 elements**, above 2^31 = 2.15e9. W and Q are
+  1.26e9 each, the patch units 2.8e8. `make_drift` concatenates every group into one (100, 28M) array for
+  `interpolate_parameters`, and XLA crashes on an array that size. Every array on its own is below the limit. The
+  CelebA-64 K1536 history (1.54e9) sampled fine, and `--history-dtype float32` does not help, since it halves the
+  bytes, not the element count.
+- **Fix, `sample_latent.interpolate_history`:** a history above 2^31 - 1 elements is interpolated in column
+  blocks of at most 2^30 elements, and the results are concatenated. Here that means 3 blocks. Each parameter is
+  interpolated on its own, so the values are the same. A history up to 2^31 - 1 elements, which covers every
+  earlier run, takes the single call as before. `LATENT_INTERP_MAX_ELEMS` overrides the limit for tests. Backup:
+  `sample_latent_pre_chunkinterp.py`.
+- **Test 4268591:** the drift of the CelebA-32 K784 + 8x8 + 16x16 run with forced blocks (10^6 elements) against
+  the single call, 9 times, 3 states, float64 and float32 history; must agree to 1e-12 relative.
+  - **It ran out of host memory (32 GB) after 1.5 min.** The forced limit made 547 blocks, each a separate constant in
+    the compiled drift. That is a flaw of the test setting, not of the fix, which makes 3 blocks here.
+  - **Retest 4268605:** a limit of 2e8, i.e. 3 blocks of at most 1e8 elements for this 2.7e8-element history, as in
+    production; 96 GB. Sampling 4268592 now depends on it.
+- **Resubmitted:** sampling **4268592** (after the test passes; same settings: n 2000, chunk 25, float32
+  history, 200 GB). The quench 4266811 now depends on 4268592, so Inception 4266812, gallery 4266813 and contrast
+  4266814 follow as before.
+- **Retest 4268605 PASSED (2.4 min, 31 GB host memory):** 3 column blocks against the single call, maximum
+  difference 3.6e-15 for a drift of magnitude 28 (1.3e-16 relative, i.e. float64 rounding from a different XLA
+  fusion; not bitwise), in float64 and float32 history. Sampling 4268592 is released (22:04, waiting for priority).

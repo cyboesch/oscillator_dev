@@ -293,6 +293,11 @@ def parse():
     ap.add_argument("--ising-weak-boost", type=float, default=1.0,
                     help="K Ising units (split tree): step-size factor, for one slice, for the units that are weak at "
                          "its start (1 = off)")
+    ap.add_argument("--patch-occupancy", action="store_true",
+                    help="with --hidden-norm occupancy and Potts patch units (2026-11-17): the visit-count rule for the "
+                         "patch states too (per patch state: gradient / occupation; one step scale per patch unit; "
+                         "occupations exact or from the same / fresh draws as the global unit). Default: per-element "
+                         "Adam for the patch couplings. Recorded in config.json as patch_occupancy only when set")
     ap.add_argument("--occ-same-draws", action="store_true",
                     help="with --hidden-norm occupancy and --hidden-samples S: count each Potts state's visits among the "
                          "S draws per sample that the gradient statistics already use (latent_model."
@@ -673,27 +678,67 @@ class OccupancyTransform:
     and the visits of rare states, weighted by their small occupation, hardly change it. Other group keys (wl, bl): as
     scale_by_adam_grouped; theta per element (optax.scale_by_adam)."""
 
-    def __init__(self, potts_keys, group_keys, beta_o=0.999, b1=0.9, b2=0.999, eps=1e-8, clip=1.0):
+    def __init__(self, potts_keys, group_keys, beta_o=0.999, b1=0.9, b2=0.999, eps=1e-8, clip=1.0, patch_sets=()):
         self.potts_keys, self.group_keys = tuple(potts_keys), tuple(group_keys)
         self.beta_o, self.b1, self.b2, self.eps, self.clip = beta_o, b1, b2, eps, clip
+        # --patch-occupancy (2026-11-17): the same rule for the Potts patch sets ((W, b, Q) key triples), each patch
+        # unit with its own step scale; empty (default): state and update exactly as before
+        self.patch_sets = tuple(tuple(ks) for ks in patch_sets)
+
+    def _patch_of(self, k):
+        """The (W, b, Q) key triple of the patch set a parameter key belongs to under the rule, else None."""
+        for ks in self.patch_sets:
+            if k in ks:
+                return ks
+        return None
 
     def init(self, params):
         mu = {k: jnp.zeros_like(v) for k, v in params.items()}
-        nu = {k: (jnp.zeros((), v.dtype) if k in self.group_keys else jnp.zeros_like(v)) for k, v in params.items()}
-        return mu, nu, jnp.zeros_like(params["b"]), jnp.zeros((), jnp.int32)
+        nu = {}
+        for k, v in params.items():
+            ks = self._patch_of(k)
+            if ks is not None and ks[0] in params:
+                nu[k] = jnp.zeros((v.shape[0],), v.dtype)                 # one step scale per patch unit
+            else:
+                nu[k] = jnp.zeros((), v.dtype) if k in self.group_keys else jnp.zeros_like(v)
+        if not self.patch_sets:
+            return mu, nu, jnp.zeros_like(params["b"]), jnp.zeros((), jnp.int32)
+        pbar = {"b": jnp.zeros_like(params["b"])}
+        pbar.update({ks[1]: jnp.zeros_like(params[ks[1]]) for ks in self.patch_sets if ks[0] in params})
+        return mu, nu, pbar, jnp.zeros((), jnp.int32)
 
     def update(self, grads, state, occ, p_unit):
         mu, nu, pbar, count = state
         bo, b1, b2, eps = self.beta_o, self.b1, self.b2, self.eps
         count = count + 1
-        pbar = bo * pbar + (1.0 - bo) * occ
         co, c1, c2 = 1.0 - bo ** count, 1.0 - b1 ** count, 1.0 - b2 ** count
-        phat = pbar / co
-        den = jnp.maximum(phat, jnp.maximum((1.0 - bo) / co * p_unit, 1e-30))     # one value per state
+        floor = jnp.maximum((1.0 - bo) / co * p_unit, 1e-30)
+        pden = {}
+        if self.patch_sets:                       # occ: {'b': (M,), patch b key: (P, S)}
+            pbar = {k: bo * v + (1.0 - bo) * occ[k] for k, v in pbar.items()}
+            for kb, v in pbar.items():
+                if kb != "b":
+                    ph = v / co
+                    pden[kb] = (jnp.maximum(ph, floor), ph / jnp.maximum(jnp.sum(ph, axis=1, keepdims=True), 1e-30))
+            phat = pbar["b"] / co
+        else:
+            pbar = bo * pbar + (1.0 - bo) * occ
+            phat = pbar / co
+        den = jnp.maximum(phat, floor)                                           # one value per state
         wts = phat / jnp.maximum(jnp.sum(phat), 1e-30)                           # occupation weights of the scale
         new_mu, new_nu, out = {}, {}, {}
         for k, g in grads.items():
-            if k in self.potts_keys:
+            ks = self._patch_of(k) if self.patch_sets else None
+            if ks is not None and ks[1] in pden:   # patch state: per-state occupation, per-unit step scale
+                dp, wp = pden[ks[1]]                                             # (P, S) each
+                dd = dp[..., None] if g.ndim == 3 else dp
+                m = bo * mu[k] + (1.0 - bo) * g
+                gt = g / dd
+                ms = jnp.mean(gt * gt, axis=2) if g.ndim == 3 else gt * gt         # (P, S)
+                n = b2 * nu[k] + (1.0 - b2) * jnp.sum(wp * ms, axis=1)           # (P,)
+                sc = jnp.sqrt(n / c2)[:, None, None] if g.ndim == 3 else jnp.sqrt(n / c2)[:, None]
+                out[k] = jnp.clip(((m / co) / dd) / (sc + eps), -self.clip, self.clip)
+            elif k in self.potts_keys:
                 dd = den[:, None] if g.ndim == 2 else den
                 m = bo * mu[k] + (1.0 - bo) * g
                 gt = g / dd                                   # this step's gradient per unit occupation
@@ -711,7 +756,7 @@ class OccupancyTransform:
 def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sextic", n_pairs=None,
                  cd1_grad=None, cd1_releases=1, loss_key=False, floor=0.0, floor_samples=0, hidden_norm="element",
                  occ_beta=0.999, occ_same_draws=False, zero_slices=(), track_best=True, theta_masks=False,
-                 chunk_batches=False, occ_dtype=None):
+                 chunk_batches=False, occ_dtype=None, patch_occ=False):
     """Jitted scan of n training steps, identical in effect to the paper's training_step loop.
     track_best, theta_masks, chunk_batches (--step-impl lean; the defaults True, False, False leave every step as
     before): track_best False (lean with --select ema, whose slice result is the EMA): best_params keeps its value
@@ -752,7 +797,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         adam = scale_by_adam_per_state(("W", "Q"))
     occupancy = hidden_norm == "occupancy"
     if occupancy:                         # --hidden-norm occupancy: a per-state learning rate from the occupation
-        adam = OccupancyTransform(("W", "b", "Q"), lm.HIDDEN_KEYS, beta_o=occ_beta)
+        adam = OccupancyTransform(("W", "b", "Q"), lm.HIDDEN_KEYS, beta_o=occ_beta,
+                                  patch_sets=lm.PATCH_SETS if patch_occ else ())   # --patch-occupancy
     p_unit = 1.0 / (lm.BATCH_SIZE * floor_samples) if floor_samples > 0 else 0.0
     if occ_same_draws and not (occupancy and loss_key and floor_samples > 0 and cd1_grad is None):
         raise ValueError("occ_same_draws needs hidden_norm occupancy, sampled statistics (loss_key, floor_samples > 0) "
@@ -833,6 +879,10 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
             occ = (lm.loss_draw_occupation(params, X, lm.TEMP, k_loss, floor_samples, dtype=occ_dtype)
                    if occ_same_draws
                    else occupation(params, X, k_floor))
+            if patch_occ:                         # --patch-occupancy: the patch states' occupations too ({} before switch-on)
+                occ_p = lm.patch_occupation(params, X, lm.TEMP, k_loss if occ_same_draws else k_floor,
+                                            floor_samples, dtype=occ_dtype)
+                occ = {"b": occ, **occ_p}
             direction, adam_state = adam.update(grads, adam_state, occ, p_unit)
         else:
             direction, adam_state = adam.update(grads, adam_state)
@@ -959,6 +1009,8 @@ def main():
         raise ValueError("--hidden-norm occupancy needs trained Potts units (--hidden potts --K >= 2, not "
                          "--hidden-fixed), --hidden-rule exact, no --hidden-replicates, no --hidden-floor, and "
                          "0 < --occ-beta < 1")
+    if args.patch_occupancy and (args.hidden_norm != "occupancy" or not args.patch or args.patch_kind != "potts"):
+        raise ValueError("--patch-occupancy needs --hidden-norm occupancy and Potts patch units (--patch)")
     if args.occ_same_draws and (args.hidden_norm != "occupancy" or args.hidden_samples < 1):
         raise ValueError("--occ-same-draws needs --hidden-norm occupancy and --hidden-samples S > 0")
     if args.precision == "mixed" and (args.hidden_rule != "exact" or args.hidden_floor > 0):
@@ -1027,11 +1079,13 @@ def main():
                       "geom": lm.PatchGeometry(lm.problem_geometry(args.problem)[0], px[0], px[1])})
     xkeys = tuple(g for x in xsets for g in (x["kw"], x["kb"]) + ((x["kq"],) if args.quad else ()))
     if patch is not None:
-        if (args.hidden_samples > 0 or args.hidden_rule != "exact" or args.hidden_norm != "element"
+        if (args.hidden_rule != "exact" or args.hidden_norm not in ("element", "occupancy")
                 or args.cls != "none"):
-            raise ValueError("--patch needs exact hidden statistics, the exact rule with per-element Adam and both "
-                             "classes (not with --hidden-samples, --hidden-rule cd1, --hidden-norm group / state / "
-                             "occupancy or --cls)")
+            raise ValueError("--patch needs the exact rule, per-element Adam or the visit-count rule for the global "
+                             "unit, and both classes (not with --hidden-rule cd1, --hidden-norm group / state or --cls)")
+        if args.hidden_samples > 0 and args.patch_kind != "potts":
+            raise ValueError("--hidden-samples with --patch: Potts patch units only (2026-11-17: the patch units' "
+                             "posteriors are then measured too, S states per unit and sample)")
         if args.hidden_fixed and args.patch_kind != "potts":
             raise ValueError("--hidden-fixed with --patch: Potts patch units only (--patch-kind potts)")
         if args.seed < lm.KEY_SEED:
@@ -1095,6 +1149,8 @@ def main():
         config["patch_kind"] = args.patch_kind
     for x in xsets:                              # --patch2 / --patch3 only: other configs as before
         config[x["name"]] = lm.patch_spec_str(x["spec"])
+    if args.patch_occupancy:                     # --patch-occupancy only: other configs as before
+        config["patch_occupancy"] = True
     if args.patch_fixed_scale != 1.0:            # --patch-fixed-scale only: other configs as before
         if not (args.hidden_fixed and patch is not None and np.isfinite(args.patch_fixed_scale)
                 and args.patch_fixed_scale > 0.0):
@@ -1136,6 +1192,8 @@ def main():
         for kx, vx in xspec.items():             # recorded with --patch2 / --patch3 only: both directions
             if old.get(kx, "") != vx:
                 diff[kx] = (old.get(kx, ""), vx)
+        if bool(old.get("patch_occupancy", False)) != bool(args.patch_occupancy):   # both directions
+            diff["patch_occupancy"] = (old.get("patch_occupancy", False), args.patch_occupancy)
         if float(old.get("patch_fixed_scale", 1.0)) != float(args.patch_fixed_scale):   # both directions
             diff["patch_fixed_scale"] = (old.get("patch_fixed_scale", 1.0), args.patch_fixed_scale)
         if diff:
@@ -1224,7 +1282,7 @@ def main():
                              cd1_grad=cd1_grad, cd1_releases=args.cd1_releases, loss_key=args.hidden_samples > 0,
                              floor=args.hidden_floor, floor_samples=args.hidden_samples, hidden_norm=args.hidden_norm,
                              occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
-                             occ_dtype=cdt,
+                             occ_dtype=cdt, patch_occ=args.patch_occupancy,
                              **lean)
     run_late = None
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
@@ -1235,6 +1293,7 @@ def main():
             data_train, n_vis, args.ema_steps, args.visible, vis.P, loss_key=True,
             floor=args.hidden_floor, floor_samples=args.hidden_samples_late, hidden_norm=args.hidden_norm,
             occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices, occ_dtype=cdt,
+            patch_occ=args.patch_occupancy,
             **lean)
 
     state_cls = None

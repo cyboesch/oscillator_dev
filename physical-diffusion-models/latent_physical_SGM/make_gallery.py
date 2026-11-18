@@ -5,7 +5,7 @@ For one problem and a list of sample sets NAME=PATH (PATH relative to out/latent
 allowed, as in evaluate_samples.py), writes into --out:
   00_side_by_side.png    one row per set (first row: real images), 16 columns; for the sample sets column j is the
                          same trajectory index j, i.e. the same initial state and Brownian keys in every model
-  01_real_digits.png     100 random real training images (the evaluation probes' pixel space: data * std + mean)
+  01_real_images.png     100 random real training images (the evaluation probes' pixel space: data * std + mean)
   NN_<NAME>.png          the first 100 samples of the set (trajectory indices 0-99), in trajectory order, unsorted;
                          a diverged sample (|x| > 15 or not finite, as in the evaluation) is a red square; NN = 02, 03,
                          ... in the order the sets are given (= row order of 00_side_by_side.png)
@@ -123,7 +123,7 @@ def main():
         readme += ["How to read the names:", args.legend, ""]
     readme += ["Files:", "  00_side_by_side.png   one row per model, 16 columns; column j = trajectory j in every model "
                "(same start and noise), first row real digits",
-               "  01_real_digits.png    100 random real training images"]
+               "  01_real_images.png    100 random real training images"]
 
     prob = lm.make_problem(args.problem)
     data, labels, mean, std, g = np.asarray(prob["data"]), prob["labels"], prob["mean"], prob["std"], prob["grid"]
@@ -132,7 +132,7 @@ def main():
     rng = np.random.default_rng(2026)
     real_idx = rng.choice(px.shape[0], size=100, replace=False)
     no_div = np.zeros(100, bool)
-    save(canvas(px[real_idx], no_div, g, 10, 10), os.path.join(args.out, "01_real_digits.png"),
+    save(canvas(px[real_idx], no_div, g, 10, 10), os.path.join(args.out, "01_real_images.png"),
          f"{args.title}: 100 random real training images", scale)
 
     sets = []

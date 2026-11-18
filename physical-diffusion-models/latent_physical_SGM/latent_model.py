@@ -932,6 +932,36 @@ def sampled_state_mean(A, T, key, S, part=None):
     return ph + ph * u - ph * jnp.sum(ph * u, axis=-1, keepdims=True)
 
 
+def patch_occupation(params, X, T, key=None, S=0, dtype=None):
+    """Each patch state's occupation in the batch, per Potts patch set present in params (2026-11-17; the visit-count
+    rule for patch units, train_latent --patch-occupancy): {bp key: (P, S_states)}. S = 0: exact, the batch mean of
+    the posteriors; S > 0: the visit fraction among S draws per unit and sample, drawn with fold_in(key, 1000 + set
+    index) from the same fields as patch_terms (so with the loss key they are the loss's own patch draws, as in
+    make_loss_per_sample). dtype: the loss's compute_dtype (float32 fields, full-float32 products), or None."""
+    if dtype is not None:
+        p = {k: v.astype(dtype) for k, v in params.items()}
+        with jax.default_matmul_precision("float32"):
+            out = patch_occupation(p, X.astype(dtype), T, key, S)
+        return {k: v.astype(jnp.float64) for k, v in out.items()}
+    out = {}
+    for i, (kw, kb, kq) in enumerate(PATCH_SETS):
+        if kw not in params:
+            continue
+        Wp, bp, Qp = params[kw], params[kb], params.get(kq)
+        geom = patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
+        Xp = geom.unfold(X)                                                   # (P, B, d), as in patch_terms
+        A = _pdot(Xp, Wp) + bp[:, None, :]
+        if Qp is not None:
+            A = A + _pdot(Xp * Xp, Qp)
+        if S == 0:
+            out[kb] = jnp.mean(jax.nn.softmax(A / T, axis=-1), axis=1)
+        else:
+            idx = jr.categorical(jr.fold_in(key, 1000 + i), A / T, axis=-1, shape=(S,) + A.shape[:-1])   # (S, P, B)
+            oh = jax.nn.one_hot(idx, A.shape[-1], dtype=A.dtype)
+            out[kb] = jnp.mean(oh, axis=(0, 2))
+    return out
+
+
 def loss_draw_occupation(params, X, T, key, S, dtype=None):
     """Each Potts state's visit fraction among the S hidden draws per configuration that the measured-statistics loss
     (make_loss_per_sample with samples = S, replicates = 1, called with `key`) takes: the same fields A (summed in the
@@ -1215,7 +1245,7 @@ def _pdot_t(p, w):
     return lax.dot_general(p, w, (((2,), (1,)), ((0,), (0,))))
 
 
-def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts"):
+def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts", stat=None):
     """Contributions of P per-patch Potts units (train_latent.py --patch) to grad F and to the Laplacian of F: the
     Potts branch of hidden_terms_quad applied to each patch. Unit p has S states with fields
       a_ps = bp_ps + Wp_ps . x_p (+ Qp_ps . x_p^2),   pi_ps = softmax_s(a_ps / T),   G_ps = Wp_ps + 2 Qp_ps * x_p,
@@ -1238,7 +1268,10 @@ def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts"):
     if Qp is not None:
         X2p = Xp * Xp
         A = A + _pdot(X2p, Qp)
-    p = jnp.tanh(A / T) if kind == "ising" else jax.nn.softmax(A / T, axis=-1)
+    if stat is not None:                 # measured statistics (2026-11-17): stat(A) replaces the posteriors (P, B, S)
+        p = stat(A)
+    else:
+        p = jnp.tanh(A / T) if kind == "ising" else jax.nn.softmax(A / T, axis=-1)
     gbar = _pdot_t(p, Wp)
     if Qp is not None:
         gbar = gbar + 2.0 * Xp * _pdot_t(p, Qp)
@@ -1313,7 +1346,9 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     --harmonic): exact Gaussian integrals, the same in every sampled-statistics variant; in --precision mixed their two
     products are float32 at HIGHEST like the hidden units'. Without 'V' every path is exactly as before.
     If params contains 'Wp' (and 'bp', optionally 'Qp'), the per-patch Potts units (patch_terms; train_latent.py
-    --patch) are added after everything else, with exact statistics only (samples = 0; ValueError otherwise); in
+    --patch) are added after everything else; with samples = S > 0 (2026-11-17, Potts patch units only) their
+    posteriors are measured too, S states per patch unit and sample (key fold_in(key, 1000 + set index); the
+    global and per-pixel draws keep their keys), with the same jackknife parts; in
     --precision mixed their products are float32 at HIGHEST too. Without 'Wp' every path is exactly as before.
     patch_kind = 'ising' (train_latent.py --patch-kind ising): the patch keys hold STATES independent Ising units per
     patch (patch_terms kind='ising'); 'potts' (default) as before."""
@@ -1325,11 +1360,11 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
         raise ValueError("jackknife must be False / 0, True / 1, or 2 (2 needs samples divisible by 4)")
 
     def loss(params, X, key=None):
-        if patch_sets_in(params) and samples > 0:   # trace time only: the default jaxpr is unchanged
-            raise ValueError("patch units need exact hidden statistics")
+        if patch_sets_in(params) and samples > 0 and patch_kind != "potts":   # trace time only
+            raise ValueError("measured statistics for patch units: Potts patch units only")
         gv, lapv = vis.grad_lap(params["theta"], X)
 
-        def per_sample(st_h, st_l):              # summation order as before (exact path bit-identical)
+        def per_sample(st_h, st_l, st_p=None):   # summation order as before (exact path bit-identical)
             g, lap = gv, lapv
             if K > 0 and "Q" in params:
                 gh, laph, _, _ = hidden_terms_quad(params["W"], params["Q"], params["b"], X, T, hidden, stat=st_h)
@@ -1347,9 +1382,10 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
                 gm, lapm, _ = harmonic_terms(params["V"], params["c"], X)
                 g = g + gm
                 lap = lap + lapm
-            for kw, kb, kq in PATCH_SETS:        # per-patch Potts (or Ising) units (--patch, --patch2), after the modes
-                if kw in params:
-                    gp, lapp, _, _ = patch_terms(params[kw], params.get(kq), params[kb], X, T, kind=patch_kind)
+            for i_p, (kw, kb, kq) in enumerate(PATCH_SETS):   # per-patch Potts (or Ising) units (--patch, --patch2,
+                if kw in params:                              # --patch3), after the modes; st_p: measured statistics
+                    gp, lapp, _, _ = patch_terms(params[kw], params.get(kq), params[kb], X, T, kind=patch_kind,
+                                                 stat=None if st_p is None else st_p[i_p])
                     g = g + gp
                     lap = lap + lapp
             return -lap / T + jnp.sum(g * g, axis=1) / (2.0 * T * T)
@@ -1363,7 +1399,13 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
             def stats(part):
                 sh = partial(sampled_spin_mean if hidden == "ising" else sampled_state_mean, T=T, key=k_h,
                              S=samples, part=part)
-                return sh, partial(sampled_spin_mean, T=T, key=k_l, S=samples, part=part)
+                sl = partial(sampled_spin_mean, T=T, key=k_l, S=samples, part=part)
+                if not patch_sets_in(params):     # no patch units: the two keys as before (bit-identical draws)
+                    return sh, sl
+                # patch set i (2026-11-17): S Potts states per patch unit and sample, key fold_in(key, 1000 + i)
+                sp = tuple(partial(sampled_state_mean, T=T, key=jr.fold_in(key, 1000 + i), S=samples, part=part)
+                           for i in range(len(PATCH_SETS)))
+                return sh, sl, sp
 
             if not jackknife:
                 return per_sample(*stats(None))
