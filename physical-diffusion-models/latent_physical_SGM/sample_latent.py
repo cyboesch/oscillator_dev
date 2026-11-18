@@ -90,7 +90,7 @@ from physical_diffusion_fns.helper_fns import interpolate_parameters  # noqa: E4
 from physical_diffusion_fns.network_fns import setup_energy_fn, solve_ODE, solve_SDE  # noqa: E402
 
 
-def load_params(run, with_harmonic=False, with_patch=False):
+def load_params(run, with_harmonic=False, with_patch=False, with_cond=False):
     """Returns (params_history (100, n_theta), W (100, K, N), b (100, K), out_dir, provenance, problem).
     provenance['time_grid'] is the run's time grid (config.json 'time_grid'; 'uniform' for runs without it and for
     the paper checkpoint), checked against the 't' of the run's hidden_history.npz (latent_model.checked_time_pts:
@@ -180,6 +180,14 @@ def load_params(run, with_harmonic=False, with_patch=False):
             prov["patch"] = (prov["patch"] if isinstance(prov["patch"], list) else [prov["patch"]]) + \
                 [(W_x, b_x, Q_x, "potts")]
             prov["patch_units"] += "+" + lm.patch_spec_str((side_x, stride_x, S_x))
+    ck = [g for g in lm.COND_KEYS if g in hid.files]
+    if ck:                                                # a clamped per-image label (train_latent --cond, 2026-11-18)
+        if not with_cond:
+            raise RuntimeError(f"{run_dir} is a --cond run (label parameters {ck}): this caller does not hold a label "
+                               f"per sample (the default SDE sampler of main does)")
+        cz = np.load(os.path.join(run_dir, "cond_clusters.npz"))
+        prov["cond"] = {"hist": {g: hid[g] for g in ck}, "counts": np.asarray(cz["counts"]), "C": int(cfg["cond"]),
+                        "on": cfg.get("cond_on", "")}
     return th, hid["W"], hid["b"], run_dir, prov, problem
 
 
@@ -216,6 +224,8 @@ def step_knots(taus=None):
 
 HISTORY_DTYPE = np.float64   # dtype of the stacked parameter history in make_drift; main sets it from --history-dtype
 SDE_TOL_SCALE = 1.0          # factor on RTOL_SDE and ATOL_SDE in the reverse-SDE solves (--sde-tol-scale, 2026-11-17)
+COND_E = None                # a --cond run: the samples' one-hot labels (n, C), held through the SDE and the quench
+COND_SAMPLE_SEED = 32000     # their draw: default_rng(COND_SAMPLE_SEED).choice(C, n, p = the clusters' frequencies)
 # Largest parameter history interpolated as one array (2026-11-17); LATENT_INTERP_MAX_ELEMS overrides it (for tests)
 INTERP_MAX_ELEMS = int(os.environ.get("LATENT_INTERP_MAX_ELEMS", str(2**31 - 1)))
 
@@ -236,7 +246,7 @@ def interpolate_history(stacked, taus):
 
 
 def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="ising", local=None, quad=None,
-               radius=None, neighbourhood="chebyshev", taus=None, harmonic=None, patch=None):
+               radius=None, neighbourhood="chebyshev", taus=None, harmonic=None, patch=None, cond=None):
     """Drift and diffusion of the reverse SDE (sampler 'sde') or the PF-ODE ('ode') of a run's parameter history, the
     parameters interpolated linearly in forward time between the slice times taus (slice order, t = 5 first; default
     lm.forward_time_pts(), the uniform grid; a --time-grid run: slice_times(prov)).
@@ -286,6 +296,13 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
         parts += [Wp_h.reshape(Wp_h.shape[0], -1), bp_h.reshape(bp_h.shape[0], -1)]
         if with_qp:
             parts += [Qp_h.reshape(Qp_h.shape[0], -1)]
+    cspec = {}                                           # --cond (load_params' prov['cond']): the label parameters,
+    if cond is not None:                                 # interpolated like the rest, after everything else; the drift
+        for g in lm.COND_KEYS:                           # then takes the sample's one-hot label as its args
+            if g in cond["hist"]:
+                h = np.asarray(cond["hist"][g])
+                cspec[g] = (sum(a.shape[1] for a in parts), h.shape[1:])
+                parts += [h.reshape(h.shape[0], -1)]
     stacked = np.concatenate(parts, axis=1)
     if HISTORY_DTYPE != np.float64:                      # --history-dtype float32 (2026-11-17): half the device memory
         stacked = stacked.astype(HISTORY_DTYPE)          # of the parameter history; float64 (default): as before
@@ -302,13 +319,25 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
     th_lin = lm.theta_lin(n_theta, n)
     scale = 2.0 if sampler == "sde" else 1.0
 
+    def cpar(g):                                         # a label parameter at this time, its full shape
+        o, shp = cspec[g]
+        return o, shp, int(np.prod(shp))
+
     def drift(t, x, args):
         p = interp(lm.T_FORWARD - t)
         th = p[:n_theta]
         d = -grad_E(x, scale * th - th_lin)
+        e = None
+        if cspec:                                        # --cond: args = the sample's one-hot label (C,)
+            if args is None:
+                raise ValueError("a --cond run: the drift needs the sample's one-hot label as args")
+            e = args
         if K > 0:
             W = p[n_theta:n_theta + K * n].reshape(K, n)
             b = p[n_theta + K * n:n_theta + K * n + K]
+            if "Bc" in cspec:                            # the label's bias offsets of the global unit's states
+                o, shp, m = cpar("Bc")
+                b = b + e @ p[o:o + m].reshape(shp)
             if quad is not None:                       # a_j = b_j + W_j.x + Q_j.x^2; force sum_j m_j (W_j + 2 Q_j x)
                 Q = p[n_theta + K * n + K:n_theta + 2 * K * n + K].reshape(K, n)
                 a = W @ x + Q @ (x * x) + b
@@ -326,11 +355,17 @@ def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="i
             o = n_theta + K * n + K + (K * n if quad is not None else 0) + (2 * n if local is not None else 0)
             Vt, ct = p[o:o + R * n].reshape(R, n), p[o + R * n:o + R * n + R]
             d = d + scale * ((Vt @ x + ct) @ Vt)
-        for o, Pp, Sp, dp, with_qp, patch_kind in pspecs:   # patch units: -grad F_patch = fold(sum_s pi_ps G_ps)
-            m = Pp * Sp * dp                           # (Ising patch units: fold(sum_s m_ps G_ps)); --patch2: 2 sets
-            Wt, bt = p[o:o + m].reshape(Pp, Sp, dp), p[o + m:o + m + Pp * Sp].reshape(Pp, Sp)
+        for j_s, (o, Pp, Sp, dp, with_qp, patch_kind) in enumerate(pspecs):   # patch units: -grad F_patch =
+            m = Pp * Sp * dp                           # fold(sum_s pi_ps G_ps) (Ising patch units: fold(sum_s m_ps
+            Wt, bt = p[o:o + m].reshape(Pp, Sp, dp), p[o + m:o + m + Pp * Sp].reshape(Pp, Sp)   # G_ps)); --patch2: 2 sets
             Qt = p[o + m + Pp * Sp:o + 2 * m + Pp * Sp].reshape(Pp, Sp, dp) if with_qp else None
+            if lm.COND_PATCH_KEYS[j_s] in cspec:       # --cond: the label's bias offsets of this set's states
+                oc, shp, mc = cpar(lm.COND_PATCH_KEYS[j_s])
+                bt = bt + jnp.einsum("c,cps->ps", e, p[oc:oc + mc].reshape(shp))
             d = d - scale * lm.patch_terms(Wt, Qt, bt, x[None], lm.TEMP, with_lap=False, kind=patch_kind)[0][0]
+        if "hc" in cspec:                              # --cond: the label's visible field (energy -hc[c] . x)
+            oc, shp, mc = cpar("hc")
+            d = d + scale * (e @ p[oc:oc + mc].reshape(shp))
         return d
 
     def diffusion(t, x, args):
@@ -740,6 +775,10 @@ def main():
                     help="default SDE sampler (2026-11-17): multiply the learned force grad F by LAMBDA during sampling "
                          "(drift x - 2 LAMBDA grad F; sampling at temperature T / LAMBDA: > 1 colder, sharper). The quench "
                          "is not scaled. Samples get the suffix _fs<LAMBDA>; 1 (default): as before")
+    ap.add_argument("--cond-scale", type=float, default=1.0,
+                    help="a --cond run (2026-11-18): guidance by label amplification, every label parameter (Bc, "
+                         "Bpc*, hc) multiplied by LAMBDA >= 0 in the drift and the quench (the same drawn labels). "
+                         "Samples get the suffix _cs<LAMBDA>; 1 (default): as trained")
     ap.add_argument("--corrector", default="",
                     help="default SDE sampler (2026-11-17): M:SNR, predictor-corrector sampling. The reverse SDE is solved "
                          "segment by segment between the slice knots (Brownian key fold_in(key, segment)), and after each "
@@ -811,7 +850,8 @@ def main():
             or args.brownian != "tree" or args.stem_suffix):
         ap.error("--brownian-tol, --brownian, --precision, --visible-impl and --stem-suffix need --fast")
 
-    theta_hist, W_hist, b_hist, run_dir, prov, problem = load_params(args.run, with_harmonic=True, with_patch=True)
+    theta_hist, W_hist, b_hist, run_dir, prov, problem = load_params(args.run, with_harmonic=True, with_patch=True,
+                                                                     with_cond=True)
     taus = slice_times(prov)                  # the run's knots ('uniform': lm.forward_time_pts(), as before)
     out_dir = os.path.join(run_dir, "samples")
     os.makedirs(out_dir, exist_ok=True)
@@ -862,6 +902,30 @@ def main():
         prov["harmonic_modes"] = int(harm_p[0].shape[1])
     patch_p = prov.pop("patch", None)         # patch units (train_latent --patch): (Wp, bp, Qp) histories, or None;
     #                                           the manifest records prov['patch_units'] (runs without them: no new key)
+    cond_p = prov.pop("cond", None)           # a --cond run (2026-11-18): one label per sample, drawn from the
+    if cond_p is None and args.cond_scale != 1.0:
+        raise SystemExit("--cond-scale: only for a --cond run")
+    if cond_p is not None:                    # clusters' frequencies, held through the SDE and the quench
+        if (args.sampler != "sde" or args.thin_knots or args.oracle_start is not None or args.fixed_langevin
+                or corr is not None or args.force_scale != 1.0 or init_kind != "set"):
+            raise SystemExit("a --cond run: the default SDE sampler (and --quench) only")
+        if args.cond_scale != 1.0:            # --cond-scale: guidance by label amplification
+            if not (math.isfinite(args.cond_scale) and args.cond_scale >= 0.0):
+                raise SystemExit(f"--cond-scale {args.cond_scale}: a finite factor >= 0")
+            cond_p = dict(cond_p, hist={g: args.cond_scale * np.asarray(h) for g, h in cond_p["hist"].items()})
+            stem += f"_cs{args.cond_scale:g}"
+            prov["cond_scale"] = float(args.cond_scale)
+        global COND_E
+        lab = np.random.default_rng(COND_SAMPLE_SEED).choice(cond_p["C"], size=args.n,
+                                                             p=cond_p["counts"] / cond_p["counts"].sum())
+        COND_E = np.eye(cond_p["C"])[lab]
+        lpath = stem + "_cond_labels.npy"
+        if os.path.exists(lpath) and not np.array_equal(np.load(lpath), lab):
+            raise SystemExit(f"{lpath} holds other labels than this draw")
+        np.save(lpath, lab)
+        prov["cond_sampling"] = {"C": cond_p["C"], "on": cond_p["on"], "label_seed": COND_SAMPLE_SEED,
+                                 "label_counts": np.bincount(lab, minlength=cond_p["C"]).tolist(),
+                                 "labels_file": os.path.basename(lpath)}
     if args.thin_knots:                       # --thin-knots: a subset of the slices as knots (a spacing test)
         keep, lo, hi = thin_knot_keep(taus, args.thin_knots)
         stem += f"_thin{lo:g}-{hi:g}"
@@ -916,7 +980,7 @@ def main():
     else:
         drift, diffusion = make_drift(theta_hist, W_hist, b_hist, args.sampler, problem, prov.get("hidden", "ising"),
                                       local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
-                                      harmonic=harm_p, patch=patch_p)
+                                      harmonic=harm_p, patch=patch_p, cond=cond_p)
     if args.fixed_langevin:                   # control: one frozen slice, no time evolution; then stop
         del drift
         fixed_langevin(args, (theta_hist, W_hist, b_hist, local_p, quad_p), problem, prov, taus, diffusion, harm_p,
@@ -945,7 +1009,7 @@ def main():
     if quench:
         drift_ode, _ = make_drift(theta_hist, W_hist, b_hist, "ode", problem, prov.get("hidden", "ising"),
                                   local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
-                                  harmonic=harm_p, patch=patch_p)
+                                  harmonic=harm_p, patch=patch_p, cond=cond_p)
         do_quench(x_final, drift_ode, quench, stem, args, t_start)
     print(f"total {time.time() - t_start:.0f} s", flush=True)
 
@@ -1010,12 +1074,17 @@ def do_quench(x_final, drift_ode, durations, stem, args, t_start):
     idx_ok = np.flatnonzero(ok)
     for s in durations:
         t_q = time.time()
-        fn = vmap(lambda y: solve_ODE(qdrift, y, 0.0, s, 2, lm.DT0, rtol=lm.RTOL_ODE, atol=lm.ATOL_ODE))
+        if COND_E is None:
+            fn = vmap(lambda y: solve_ODE(qdrift, y, 0.0, s, 2, lm.DT0, rtol=lm.RTOL_ODE, atol=lm.ATOL_ODE))
+        else:                                 # a --cond run: each sample's label held (COND_E)
+            fn = vmap(lambda y, e: solve_ODE(lambda s_, x, a_: drift_ode(lm.T_FORWARD, x, e) - x, y, 0.0, s, 2,
+                                             lm.DT0, rtol=lm.RTOL_ODE, atol=lm.ATOL_ODE))
         xq = np.full_like(x_final, np.nan)
         for c0 in range(0, idx_ok.size, args.chunk):
             idx = idx_ok[c0:c0 + args.chunk]
             pad = np.concatenate([idx, np.repeat(idx[-1:], args.chunk - idx.size)])
-            sol = fn(jnp.asarray(x_final[pad]))
+            sol = (fn(jnp.asarray(x_final[pad])) if COND_E is None
+                   else fn(jnp.asarray(x_final[pad]), jnp.asarray(COND_E[pad])))
             xq[idx] = np.asarray(sol.ys[:, -1, :])[: idx.size]
         name = f"{stem}_q{s:g}"
         np.save(name + ".npy", xq)
@@ -1084,7 +1153,11 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
         raise SystemExit(f"set {args.set} has only {x0.shape[0]} trajectories for {problem}; --n {args.n} is too large")
     if x_init is not None:
         x0 = np.asarray(x_init, dtype=np.asarray(x0).dtype)
-    if args.sampler == "sde":
+    if args.sampler == "sde" and COND_E is not None:   # a --cond run: each sample's label held through the solve
+        fn = vmap(lambda y, k, e: solve_SDE(lambda t, x, a: drift(t, x, e), diffusion, y, k, t0, lm.T_FORWARD, n_save,
+                                            lm.DT0, rtol=lm.RTOL_SDE * SDE_TOL_SCALE, atol=lm.ATOL_SDE * SDE_TOL_SCALE,
+                                            brownian_tolerance=lm.BROWNIAN_TOL, step_ts=knots))
+    elif args.sampler == "sde":
         fn = vmap(lambda y, k: solve_SDE(drift, diffusion, y, k, t0, lm.T_FORWARD, n_save, lm.DT0,
                                          rtol=lm.RTOL_SDE * SDE_TOL_SCALE, atol=lm.ATOL_SDE * SDE_TOL_SCALE,
                                          brownian_tolerance=lm.BROWNIAN_TOL, step_ts=knots))
@@ -1103,7 +1176,8 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
                                   float(args.force_scale))
             x_final[idx] = np.asarray(yc)[: idx.size]
         else:
-            sol = fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad]))
+            sol = (fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad])) if COND_E is None
+                   else fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad]), jnp.asarray(COND_E[pad])))
             x_final[idx] = np.asarray(sol.ys[:, -1, :])[: idx.size]
         if x_snap is not None and corr is None:
             x_snap[idx] = np.asarray(sol.ys, dtype=np.float32)[: idx.size]

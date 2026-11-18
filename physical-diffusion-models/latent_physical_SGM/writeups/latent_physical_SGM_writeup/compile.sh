@@ -6,6 +6,6 @@
 #SBATCH --partition=all
 #SBATCH --cpus-per-task=1
 #SBATCH --mem=2G
-cd /n/fs/cyrills-part/oscillator_dev/physical-diffusion-models/latent_physical_SGM_writeup
+cd /n/fs/cyrills-part/oscillator_dev/physical-diffusion-models/latent_physical_SGM/writeups/latent_physical_SGM_writeup
 latexmk -pdf -interaction=nonstopmode -halt-on-error theory.tex
 echo "exit $?"

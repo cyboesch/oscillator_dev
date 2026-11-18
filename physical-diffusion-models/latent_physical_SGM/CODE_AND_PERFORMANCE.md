@@ -4675,3 +4675,444 @@ structure.
 - **Retest 4268605 PASSED (2.4 min, 31 GB host memory):** 3 column blocks against the single call, maximum
   difference 3.6e-15 for a drift of magnitude 28 (1.3e-16 relative, i.e. float64 rounding from a different XLA
   fusion; not bitwise), in float64 and float32 history. Sampling 4268592 is released (22:04, waiting for priority).
+
+### Overnight results 2026-11-17/18 (written 2026-11-18 09:55)
+
+- **On-device training with patch units: final** (Inception **4268089**; gallery **4268090**,
+  `galleries/2026-11-17_celeba32-grey_K784+patch8x8+patch16x16_on-device-training_exact-vs-S64_Adam-vs-visit-count-rule_quench1/`).
+  CelebA-32 K784 + 8x8 every 2 px + 16x16 every 4 px from slice 55, Q, per-pixel units, mixed precision, seed 1,
+  n = 2000, noise start, quench 1; floor 6.43:
+
+  | Hidden statistics | Optimiser | quench 1 (FID_inf) | KID x1e3 | training |
+  |---|---|---|---|---|
+  | exact | Adam (standard) | 22.85 (19.14) | 15.2 | |
+  | exact | visit-count rule, global unit (patches Adam) | 22.63 (18.87) | 15.2 | 3.3 h (4268000) |
+  | S = 64 sampled, global and patch units | visit-count rule, global unit (patches Adam) | 23.46 (19.91) | 16.0 | 6.4 h (4268001) |
+  | exact | visit-count rule, global unit and patch states | 23.12 (19.58) | 15.3 | 3.3 h (4268085) |
+  | **S = 64 sampled, global and patch units** | **visit-count rule, global unit and patch states** | **23.59 (19.99)** | **16.1** | 6.4 h (4268086) |
+
+  - **The fully on-device model (every hidden statistic measured from 64 samples, every hidden state on the
+    visit-count rule) reaches 23.59, 0.7 Inception FID from the standard training (22.85).** Bootstrap sd 0.3-0.4.
+  - Sampled statistics cost 0.5-0.8 (23.46 vs 22.63; 23.59 vs 23.12). The visit-count rule for the patch states
+    costs about 0.1-0.5; for the global unit, nothing (22.63 vs 22.85).
+  - With patches the cost of sampled statistics is much smaller than without them (about 3 FID at 106-111).
+  - Gallery: after the quench, the five models show the same faces in every column (same start and noise), with no
+    visible degradation from the sampled statistics. The as-sampled row of the fully on-device model is noisy, as
+    every model before the quench (95.5 as sampled).
+  - The sampled-statistics runs take about 2x longer to train (6.4 h vs 3.3 h) at S = 64.
+- **Second seed, on-device training without patches** (Inception **4268405**; K784 + Q + per-pixel units, visit-count
+  rule, quench 1):
+
+  | | seed 1 | seed 2 | gap S = 64 - exact |
+  |---|---|---|---|
+  | exact statistics | 106.42 | 108.04 | |
+  | S = 64 sampled, jackknife | 109.11 | 111.37 | seed 1: 2.7; seed 2: 3.3 |
+
+  - The 3-point gap of sampled statistics reproduces with seed 2, so it is a small systematic cost of the sampled
+    statistics in the no-patch model, not seed-to-seed variance. Seeds differ by about 1.6-2.3.
+  - S = 256 did not reduce it (11-17), so it is not noise in the statistics either. With patches the cost drops to
+    about 0.7. Open: the cause (the float32 draws or the same-draw visit counts); not pressing.
+- **Global factor units against the contrast deficit** (Inception **4268398**; contrast **4268399**; gallery
+  **4268400**, `galleries/2026-11-17_celeba32-grey_K784+patch8x8+patch16x16_plus-global-factor-units_full-image-32-states_vs_24x24-every4px_noise-start_quench1/`).
+  K784 + 8x8 + 16x16 plus a third patch set from slice 55, quench 1:
+
+  | | quench 1 (FID_inf) | image contrast (real 0.229) | dark pixels (real 12.7%) | training |
+  |---|---|---|---|---|
+  | baseline (two scales) | 22.85 (19.14) | 0.197 | 6.8% | |
+  | + one full-image Potts unit, 32 states | 22.76 (19.27) | 0.197 | 6.7% | 2.3 h (4268394) |
+  | + 24x24 every 4 px (9 patches) | 22.43 (18.95) | 0.196 | 6.7% | 3.3 h (4268395) |
+
+  - **Neither restores contrast**: image contrast stays at 0.196-0.197 (real 0.229), and dark pixels at half the
+    real share. The FID changes are within about 1 sd (0.2-0.4).
+  - So the contrast deficit is not a missing image-wide factor that a global or near-global unit could carry.
+    Remaining suspects: the visible model (quartic potential pulling pixels to mid-grey), or the training loss
+    weighting the tails of the pixel distribution too weakly.
+  - Gallery: the faces are the same in every column with and without the extra units.
+- **CelebA-64 K3072 sampling 4268592**: running since 23:08 with the column-block interpolation, chunk 79 of 80
+  at 09:48 (about 8 min per chunk of 25). The fix works on the real history. Quench, Inception, gallery and
+  contrast follow (4266811-4266814).
+
+### Toward a minimal model: small global units (2026-11-18 10:10; the user: "can we find a minimal model that performs just or almost as well [...] maybe we can try K32+8x8+16 [...] submit both K32 and K64 in parallel")
+
+- **Parameter budget per time slice** (couplings W + Q): the global unit is 2 x K x 1024 (K784 1.61 M, K64 0.13 M,
+  K32 0.07 M); the two patch sets are fixed at 1.10 M (8x8 every 2 px 0.69 M, 16x16 every 4 px 0.41 M). So at small
+  K the patches dominate, and K alone can cut the count by at most about 2.4x (2.71 M -> 1.17 M). Further cuts must
+  come from the patch states (32 each), the Q terms, or the number of time slices (100 knots).
+- **Dead states in the K784 two-scale run** (training log, states with mean occupation below 1e-6 on the slice's
+  batch; effective states = exp of the occupation entropy):
+
+  | slice (t) | 0 (5.0) | 10 (4.5) | 20 (4.0) | 30 (3.5) | 40 (3.0) | 55 (2.2) | 70 (1.5) | 85 (0.7) | 99 (0) |
+  |---|---|---|---|---|---|---|---|---|---|
+  | dead of 784 | 0 | 284 | 217 | 72 | 31 | 56 | 231 | 271 | 307 |
+  | effective states | 693 | 237 | 322 | 405 | 500 | 386 | 257 | 253 | 244 |
+
+  - The dead set changes with t: states die at t = 4.5, revive by t = 3 (31 dead), and die again towards t = 0. A
+    state can be removed from hardware only if it is dead at every t. 250-500 states are in use, but the K784 vs
+    K1536 vs K3072 comparison with patches (24.7 / 23.9 / 23.8 with 8x8) suggests the patches carry most of the
+    detail, so a much smaller global unit may do.
+- **Submitted** (same recipe as the K784 baseline, 22.85 after the quench: exact statistics, Adam, 8x8 every 2 px +
+  16x16 every 4 px from slice 55, seed 1, 2000 samples from the noise start):
+  - K32: pipeline **4271874**, quench 4271876; K64: pipeline **4271875**, quench 4271877;
+  - Inception FID **4271878** (with the K784 baseline); gallery **4271879**
+    (`galleries/2026-11-18_celeba32-grey_K32-vs-K64-vs-K784_global-states+patch8x8+patch16x16_noise-start_quench1/`).
+  - Training about 3 h each (the patch slices dominate); pending on priority at 10:10.
+- **10:15: K64 + 8x8 only** (the user: "maybe directly submit K64 + 8x8 only as well"): 0.82 M couplings per slice
+  (0.13 M global + 0.69 M patches), 3.3x fewer than the K784 two-scale model. Same recipe without the 16x16 set.
+  - Pipeline **4271892**, quench 4271893; Inception FID **4271894** against K784 + 8x8 (24.7 after the quench, 11-16);
+    gallery **4271895** (`galleries/2026-11-18_celeba32-grey_K64-vs-K784_global-states+patch8x8-only_noise-start_quench1/`).
+- **CelebA-64 K3072 + 16x16 every 4 px: result** (training 4266799, 10.4 h; sampling 4268592, 10.8 h with the
+  column-block interpolation and float32 history; quench 4266811; Inception **4266812**; gallery 4266813,
+  `galleries/2026-11-17_celeba64-grey_K1536-vs-K3072_patch16x16-every4px_noise-start_quench1/`; contrast 4266814,
+  `galleries/2026-11-17_celeba64-grey_contrast-check_K1536-vs-K3072_patch16x16_quench1/`). n = 2000, floor 5.91:
+
+  | | as sampled | quench 1 (FID_inf) | KID x1e3 | image contrast (real 0.234) | dark pixels (real 13.5%) |
+  |---|---|---|---|---|---|
+  | K1536 + 16x16 (11-17) | | 58.46 (55.62) | 53.7 | 0.180 | 3.3% |
+  | K3072 + 16x16 | 130.8 | **58.28 (55.74)** | 53.6 | 0.179 | 3.3% |
+
+  - **Doubling the global unit gains nothing at 64x64** (58.3 vs 58.5, within 1 sd), and the contrast deficit
+    (-23%) is unchanged. As at 32x32, K is not the bottleneck once patch units are there.
+  - Gallery: blurry, low-contrast faces of the same quality for both K; backgrounds and hair at mid-grey.
+  - So 64x64 needs something other than more global states: finer patches (8x8 at 64x64 was too slow, 5 steps/s),
+    or a fix of the contrast / blur problem. This also supports the small-model direction.
+
+### Where do the faces go wrong? Oracle-start scan on CelebA-32 (2026-11-18 10:55; the user: "yes")
+
+- **Context: K has saturated.** CelebA-64 K3072 = K1536, and at 32x32 with patches K784 to K3072 gains about 1. The
+  validation losses (lower is better) show why:
+
+  | | slice 50 (t = 2.5, before the patches) | slice 60 (t = 2.0, with 8x8 + 16x16) | slice 98 |
+  |---|---|---|---|
+  | K32 + 8x8 + 16x16 | -23651 | -23918 | -41597 |
+  | K64 + 8x8 + 16x16 | -23717 | -23921 | -41532 |
+  | K784 + 8x8 + 16x16 | -23921 | -23924 | -42023 |
+  | K1536 + 8x8 + 16x16 | -23954 | -23931 | -42265 |
+  | K784 + 8x8 + 4x4 + 16x16 | -23921 | -23935 | -49107 |
+
+  - Once the patches act, the global unit's size barely matters for the loss (K32 within 6 units of K784 at
+    slice 60).
+  - More patch scales lower the late-slice loss a lot (-49107 vs -42023) but the FID only a little (22.3 vs 22.9):
+    at small t the loss is dominated by pixel-scale detail that the FID hardly sees.
+  - Working hypothesis: the limit is the model's form, not its size. It is one layer of independent template units
+    whose forces add, so each pixel is pulled to an average of the templates covering it (blur, mid-grey contrast
+    loss). Every large gain so far was structural (patches, switch-on time, quench).
+- **The scan:** start the reverse process at forward time t from exactly noised *training* images (`--oracle-start
+  K`: x = e^-t x0 + sqrt(T (1 - e^-2t)) xi; a fixed choice of images and noise, the same in every job), then quench 1.
+  If starting from real noised faces at some t gives much better samples than the normal start, the model errs in
+  the part of the reverse process before t. MNIST (11-12): the error built up at t = 1.5-2.7.
+  - Model: K784 + 8x8 every 2 px + 16x16 every 4 px from slice 55 (t = 2.22), exact statistics, Adam, seed 1
+    (22.85 after the quench from the normal start). It is the reference for the on-device and small-K runs.
+  - Slices 20 / 30 / 40 / 55 / 70 / 85 / 95 (t = 3.99 / 3.48 / 2.98 / 2.22 / 1.46 / 0.71 / 0.20): jobs **4271997**
+    to **4272003**, sampling and quench in one job each (the sampler refuses to quench an existing oracle file).
+  - Inception FID **4272004** (as sampled and quenched, with the normal start); gallery **4272005**
+    (`galleries/2026-11-18_celeba32-grey_K784+patch8x8+patch16x16_oracle-start-scan_t3.99-to-0.20_quench1/`).
+  - Reading: the FID at small t tends to the floor, since the samples are then nearly the training images.
+- **11:10 status.** Small-K training is done: K64 + 8x8 (pipeline incl. sampling 1.1 h; its quench waits for a GPU),
+  K32 / K64 + 8x8 + 16x16 (sampling). Oracle starts at t = 1.46 / 0.71 / 0.20 are done, the other four are running.
+  - Validation losses of the small models: K32 + 8x8 + 16x16 at slice 70 is -23296 vs -23324 for K784 (28 units
+    worse; K784 8x8-only vs two-scale differ by 101 and 1.9 FID); before the patches (slice 50) the gap is 270.
+  - K32's global unit ends with 3 effective states at t = 0 (31 at slice 50).
+- **Small global units: results** (Inception **4271878** and **4271894**; galleries **4271879**
+  `galleries/2026-11-18_celeba32-grey_K32-vs-K64-vs-K784_global-states+patch8x8+patch16x16_noise-start_quench1/` and
+  **4271895** `galleries/2026-11-18_celeba32-grey_K64-vs-K784_global-states+patch8x8-only_noise-start_quench1/`).
+  CelebA-32, exact statistics, Adam, seed 1, n = 2000, noise start; floor 6.43:
+
+  | Model | couplings per slice | as sampled | quench 1 (FID_inf) | KID x1e3 | training + sampling |
+  |---|---|---|---|---|---|
+  | K784 + 8x8 + 16x16 | 2.71 M | | 22.85 (19.14) | 15.2 | |
+  | K64 + 8x8 + 16x16 | 1.23 M | 98.0 | **24.61 (20.97)** | 17.0 | 1.5 h (4271875) |
+  | K32 + 8x8 + 16x16 | 1.17 M | 98.8 | 25.36 (21.67) | 18.1 | 1.5 h (4271874) |
+  | K784 + 8x8 | 2.30 M | | 24.66 (20.83) | 17.4 | |
+  | K64 + 8x8 | **0.82 M** | 104.1 | 26.41 (22.74) | 19.5 | 1.1 h (4271892) |
+
+  - **The global unit can shrink 12-25x for 1.8-2.5 FID.** K64 + 8x8 + 16x16 (1.23 M) equals K784 + 8x8 (2.30 M),
+    and K64 + 8x8 (0.82 M) is 1.75 behind K784 + 8x8. K32 vs K64 costs 0.75.
+  - Gallery: after the quench K32 and K64 make coherent faces of the same style as K784 (smooth, slightly flat);
+    no broken shapes. Different people in many columns (different models from the same noise).
+  - The patches are now most of the budget (1.10 M of 1.23 M). Next levers for a minimal model: fewer patch states
+    (32 -> 16 / 8), no Qp, fewer time knots.
+  - Training is fast at small K: 1.1-1.5 h including sampling (K784 two-scale: 3.3 h).
+- **Oracle-start scan: result** (Inception **4272004**; gallery **4272005**,
+  `galleries/2026-11-18_celeba32-grey_K784+patch8x8+patch16x16_oracle-start-scan_t3.99-to-0.20_quench1/`).
+  K784 + 8x8 + 16x16, n = 2000, quench 1; floor 6.43; dark = share of pixels < 0.1 (real test 11.8%):
+
+  | start | as sampled | quench 1 (FID_inf) | KID x1e3 | dark (q1) |
+  |---|---|---|---|---|
+  | noise, t = 5 (normal) | | 22.85 (19.14) | 15.2 | 6.8% |
+  | real noised, t = 3.99 | 88.8 | 22.46 (19.06) | 14.4 | 7.6% |
+  | t = 3.48 | 88.2 | 22.54 (18.96) | 14.1 | 7.8% |
+  | t = 2.98 | 86.5 | 21.81 (18.16) | 13.6 | 8.2% |
+  | t = 2.22 | 75.6 | 19.91 (16.39) | 11.3 | 11.3% |
+  | t = 1.46 | 68.3 | 17.62 (13.68) | 9.1 | 11.5% |
+  | t = 0.71 | 55.4 | 14.50 (10.72) | 6.5 | 11.5% |
+  | t = 0.20 | 36.7 | 12.56 (8.65) | 5.9 | 11.6% |
+
+  - **Above t = 3.5 nothing is lost**: real noised faces at t = 4 or 3.5 give the same FID as the normal start.
+  - **Below t = 3 the FID falls steadily with later starts** (about 2 per 0.75 time units), so the error builds up
+    over the whole range t < 3, not in one stage.
+  - **The last stretch alone costs about 6**: from nearly clean real faces (t = 0.2) the SDE and the quench give
+    12.6, twice the floor. The Inception FID is very sensitive to pixel-scale texture (real test images + 1%
+    Gaussian pixel noise: 6.4 -> 10.8; + 2%: 28.1), so a large part of the gap is fine texture at the very end,
+    which the gallery does not show (the t = 0.2 faces look like the training images).
+  - **The contrast deficit forms early**: the dark-pixel share is real-like (11.3-11.6%) for every start at
+    t <= 2.22, but low for starts at t >= 2.98 (7.6-8.2%) and from noise (6.8%). So the mid-grey bias arises in
+    the global stage (t > 2.2), before the patches act.
+  - My gallery reading (problem between t = 3 and 1.5) was incomplete: the faces' identity and contrast are set
+    there, but the FID loses as much again in fine texture over t < 1.5.
+  - Implications: (1) contrast and global layout: the early stage, where a clamped per-image variable would act;
+    (2) texture: the small-t model and the quench (finer patch scales lower the late loss most: 4x4 three-scale
+    22.3).
+  - Open diagnostic: what the last stretch and the quench do to real faces (RMS change, contrast, high-frequency
+    power of the t = 0.2 samples against their source training images; the quench applied directly to clean
+    training images).
+- **What the last stretch and the quench do to real faces** (submitted 12:05; the user: "lets run the cheap
+  diagnostics!"). New tool `oracle_source_check.py`:
+  - takes the 2000 training images behind the oracle sets (indices from the samples' .json), saves them as
+    `samples/oracle-source_train-x0_n2000.npy`, and quenches them directly (`sample_latent.do_quench`, quench 1)
+    into `..._q1.npy`;
+  - compares each image with its source: x0 quenched, and the oracle sets from t = 0.20 / 0.71 / 1.46 / 2.22 (as
+    sampled and quenched). RMS pixel change, correlation, contrast ratio, brightness shift, dark share, and the
+    power in low / mid / high spatial-frequency bands relative to the source (also of the change itself). The normal
+    samples' band powers are compared unpaired. Figures: examples, radial spectra.
+  - Job **4272175** (`galleries/2026-11-18_celeba32-grey_K784+patch8x8+patch16x16_what-the-last-stretch-and-the-quench-do-to-real-faces/`);
+    Inception FID **4272176** of the sources, the sources quenched, the t = 0.20 oracle set and the normal samples.
+- **Result: the last stretch and the quench on real faces** (job 4272175, 1 min; Inception **4272176**; report,
+  `examples.png` and `spectra.png` in the gallery folder above). The 2000 oracle source images, pixels in [0, 1]:
+
+  | set (paired with its source) | Inception FID (FID_inf) | RMS change | contrast ratio | power vs source: low / mid / high |
+  |---|---|---|---|---|
+  | **the training images themselves** | **11.07 (6.88)** | 0 | 1 | 1 / 1 / 1 |
+  | training images, quench 1 only | 13.36 (9.71) | 0.023 | 0.992 | 1.005 / 0.956 / 0.789 |
+  | oracle t = 0.20, as sampled | 36.7 | 0.029 | 0.999 | 0.999 / 0.990 / 0.988 |
+  | oracle t = 0.20, quench 1 | 12.56 (8.62) | 0.031 | 0.992 | 1.007 / 0.955 / 0.786 |
+  | oracle t = 0.71, quench 1 | 14.50 | 0.046 | 0.991 | 1.008 / 0.945 / 0.771 |
+  | oracle t = 1.46, quench 1 | 17.62 | 0.073 | 0.988 | 1.006 / 0.924 / 0.742 |
+  | oracle t = 2.22, quench 1 | 19.91 | 0.109 | 0.979 | 0.996 / 0.879 / 0.706 |
+  | normal samples, quench 1 (unpaired) | 22.85 | | 0.865 (0.197 vs 0.228) | **0.766 / 0.705 / 0.587** |
+
+  (bands: |k| <= 4, 4 < |k| <= 8, |k| > 8 cycles per image; image mean removed)
+  - **The training images score 11.07, not the 6.43 of the raw test images.** The model is trained on the paper's
+    preprocessing, which adds N(0, 0.01^2) pixel noise to every training image (`latent_model._normalise_like_paper`,
+    as for MNIST). Real test images + 1% noise score 10.75. So a perfect model of its training data would score
+    about 11: **the reachable floor is about 11, not 6.4**, and the normal samples are about 12 above it.
+  - **The quench costs about 2.3 on real images** (11.07 -> 13.36): it removes the noise but also some fine detail
+    (high-band power -21%; above |k| = 16 about 10x less power), without changing the contrast (0.992).
+  - So of the "last stretch costs about 6" (oracle t = 0.2: 12.56), about 4.6 is the noise in the training data
+    and about 1.5-2.3 the quench; the model's own late stage is nearly lossless.
+  - **The normal samples lack power at every scale, most at the coarse scale relative to the oracle runs**: low band
+    0.77 of the real faces, while every oracle start at t <= 2.22 keeps it at 0.99-1.01. So the large-scale contrast
+    deficit is made in the global stage (t > 2.2), as the dark-pixel share said.
+  - Options: (1) evaluate also against the statistics of the noisy training images, or train on clean images
+    (the 1% noise is the paper's choice; one K64 two-scale run is 1.5 h); (2) for the coarse-scale deficit, the
+    global stage (a clamped per-image variable, or global-to-patch coupling).
+
+### Training on clean images, and a clamped per-image variable (2026-11-18 12:50; the user: "could we try both in parallel?")
+
+- **(A) Clean training data: `train_latent.py --data-noise SD`** (code 12:40).
+  - `latent_model._normalise_like_paper(raw, noise)` / `make_problem(..., data_noise=)`: the training images get
+    SD x the paper's noise draw instead of 0.01 (0: clean). The global mean / std stay those of the paper's noisy
+    images, so sampling and every evaluation tool map back to pixels as before. Default (None): exactly the paper's
+    data. Refused for mnist28 and gauss2_8.
+  - Recorded in config.json as `data_noise` only when set; resume checks it in both directions.
+  - Backups `*_pre_datanoise.py`.
+  - Test **4272439**: the default data bitwise as before (old module vs new); data_noise 0 maps back to the raw
+    images; 0.005 is half the default noise; mnist28 refuses; a 3-slice K64 training with `--data-noise 0`
+    records `data_noise: 0.0`.
+  - Run (after the test): K64 + 8x8 + 16x16, `--data-noise 0`, otherwise as the K64 two-scale run (24.61 after the
+    quench): pipeline **4272440**, quench 4272441, Inception **4272442** (as sampled and quenched, against the
+    paper-data run), contrast 4272443, gallery **4272444**
+    (`galleries/2026-11-18_celeba32-grey_K64+patch8x8+patch16x16_trained-on-paper-data-1pct-noise_vs_clean-data_noise-start_with-and-without-quench1/`).
+  - Expectation: up to about 4.6 better if the samples become clean; the quench may become unnecessary (compare
+    as sampled).
+  - **Test 4272439 PASSED (1.5 min):** default data bitwise as before (CelebA-32 and Fashion); `--data-noise 0`
+    maps back to the raw images to 6e-17 with the same mean / std; the default noise has SD 0.01000 and 0.005 gives
+    exactly half; mnist28 refuses; the 3-slice training records `data_noise: 0.0`. The temporary run is deleted.
+    Pipeline 4272440 released (waiting for priority at 13:50).
+- **(B) A clamped per-image variable c** (the user's idea of 11-18): code next.
+- **(B) code (2026-11-18 14:30): a clamped per-image label, `train_latent.py --cond C [--cond-on global,patch,visible]`.**
+  - Every training image gets a fixed label c: its k-means cluster among C (normalised training images, seed
+    31000 + seed; `cond_clusters.npz` in the run). The label shifts the global unit's state biases (`Bc` (C, K)),
+    every patch set's state biases (`Bpc`, `Bpc2`, `Bpc3` (C, P, S)) and / or adds a visible field (energy
+    -hc[c] . x, `hc` (C, N)). All start at zero (the unconditioned model) and are time dependent like every
+    parameter. Given the visible state and c the hidden units still factorise (exact sums).
+  - `latent_model`: the loss and the force take X = (visible states, one-hot labels); a plain array traces exactly
+    as before. `patch_terms(bp_extra=)`, `cond_patch_offsets`, `COND_KEYS`; `in_compute_dtype` casts a tuple.
+  - `train_latent`: the batch's labels from the same index draw as `sample_forward_process` (same key); validation
+    with the labels; learning rates: hc at the visible rate, Bc at the global unit's bias rate, patch offsets at
+    their units' bias rates; saved in every slice and `hidden_history.npz` after everything else; config `cond`,
+    `cond_on` (only when set; resume checks). Only with exact statistics, `--hidden-norm element`, Potts units,
+    `--step-impl default`, no harmonic modes / frozen units / CD-1.
+  - `sample_latent`: labels drawn once per sample from the cluster frequencies (`default_rng(32000)`, saved as
+    `<stem>_cond_labels.npy`, recorded in the manifest) and held through the reverse SDE and the quench (the drift's
+    args). Default SDE sampler and `--quench` only; every other caller refuses a --cond run.
+  - Backups `*_pre_cond.py`.
+  - Note: the clean-data pipeline 4272440 started (13:58) after the edits, so it runs on the new code; its path
+    (no --cond) must be unchanged, which test 4272529 checks (part 2).
+  - **Test 4272529:** (1) loss and force without labels bitwise as before; zero label parameters = no labels; label
+    bias offsets = shifted biases per label (loss and force); the visible field changes the loss by exactly
+    (-2 g.h + |h|^2) / 2T^2 and the force by -h; mixed precision with labels; the sampler drift (a constant history)
+    equals the training force per sample with its label. (2) Old vs new code without --cond, K16 + 8x8 + 16x16,
+    3 slices: bitwise. (3) `--cond 8` trains 4 slices. (4) `--cond 8` end to end: 100 short slices, 16 samples,
+    quench.
+- **Test 4272529 (21 min): parts 2-4 PASSED, part 1 stopped at a bug in the test script** (a duplicate dict key at
+  check 3, not in the code). Checks 1-2 passed: without labels the loss and the force are bitwise as before; zero
+  label parameters give the unlabelled loss (2.5e-16). (2) Old vs new code without --cond, K16 + 8x8 + 16x16,
+  3 slices: all slice arrays bitwise, so the clean-data run 4272440 (started on the new code) is valid. (3)
+  `--cond 8`: clusters of 13149-30220 images; hc trains from slice 0, Bc from slice 1, the patch offsets from the
+  switch-on (norms 0.20 / 0.0013 / 0.005 / 0.004 at slice 3). (4) End to end: 100 short slices, 16 samples (labels
+  saved, manifest records them), quench: all finite. Temporary runs and the old-code copy are deleted.
+  - Fixed test script, part 1 only: **4272680**.
+- **Submitted (14:20; after 4272680 passes):** K64 + 8x8 + 16x16, the paper's data, `--cond 32`, otherwise as the
+  K64 two-scale run (24.61 after the quench):
+  - **B1** labels on the hidden biases only (`--cond-on global,patch`; the user's idea: a clamp connecting the
+    global unit and the patches): pipeline **4272681**, quench 4272683;
+  - **B2** also a visible field (`--cond-on global,patch,visible`): pipeline **4272682**, quench 4272684;
+  - Inception **4272685**, contrast 4272686, gallery **4272687**
+    (`galleries/2026-11-18_celeba32-grey_K64+patch8x8+patch16x16_clamped-per-image-label-32-clusters_on-hidden-biases_vs_plus-visible-field_noise-start_quench1/`).
+  - The quench jobs wait for the pipelines with afterany (a failing summary step must not block them).
+- **Test 4272680 PASSED (1.5 min; CelebA-32 K784 + 8x8 + 16x16 at slice 85, 64 noised images, C = 8):**
+  (1) no labels: loss and force bitwise as before; (2) zero label parameters vs no labels: 2.5e-16; (3) label bias
+  offsets vs the shifted biases of each sample's label: loss 9.3e-16, force 1.2e-14; (4) visible field: loss change
+  vs (-2 g.h + |h|^2) / 2T^2 1.6e-14, force exactly g - h; (5) mixed precision with labels: 1.3e-8 of float64;
+  (6) the sampler drift vs the training force per sample with its label: 1.1e-15 (vs the unconditioned force:
+  0.24, so the labels act). B1 / B2 (4272681 / 4272682) released; waiting for priority at 14:25.
+- **14:55 interim: validation losses of the clamped-label runs** (lower is better; with each image's own label;
+  K64 + 8x8 + 16x16; K784 + 8x8 + 16x16 for scale):
+
+  | slice (t) | 10 (4.5) | 30 (3.5) | 50 (2.5) | 60 (2.0) | 70 (1.5) | 75 (1.2) |
+  |---|---|---|---|---|---|---|
+  | K64 (no label) | -25512.5 | -25199.9 | -23716.7 | -23921.2 | -23298.0 | -23082.9 |
+  | B1: label on hidden biases | -25540.4 | -25218.3 | -23716.1 | -23943.0 | -23316.9 | -23108.7 |
+  | B2: + visible field | -25541.6 | -25265.5 | **-23892.6** | -23947.5 | -23325.9 | -23116.6 |
+  | K784 (no label) | -25513.4 | -25240.5 | -23920.6 | -23923.6 | -23323.6 | |
+
+  - B2's field lifts the global stage: at slice 50 (t = 2.5) K64 + label field is 176 units better than K64 and
+    close to K784 (-23921). B1 (biases only) gains nothing there, but 20-26 units once the patches act.
+  - Label parameter norms at slice 75: Bc 20 / 18, Bpc 33 / 31, Bpc2 16 / 13 (B1 / B2), hc 4.2 (B2): the labels are
+    used.
+  - The conditional loss is not the unconditional FID (sampling draws the label); the FIDs decide.
+  - Clean-data run 4272440 at slice 97 (sampling next).
+- **Related work for the clamped label** (checked 2026-11-18):
+  - Bao, Li, Sun, Zhu, "Why Are Conditional Generative Models Better Than Unconditional Ones?", NeurIPS 2022
+    workshop, arXiv 2212.00362. Self-conditioned diffusion models (SCDM): k-means on self-supervised features, the
+    cluster index as the condition, labels drawn at sampling; the gain comes from partitioning the data into simpler
+    conditional distributions. ImageNet 64x64 FID 3.94 without labels.
+  - Hu, Zhang, Asano, Burghouts, Snoek, "Self-Guided Diffusion Models", CVPR 2023, arXiv 2210.06462. Self-labelled
+    guidance: k-means on self-supervised image features, used with classifier-free guidance; beats unguided models
+    and can match or beat ground-truth-label guidance.
+  - Ours differs: k-means on raw pixels (coarse brightness layout, not semantics), and the label enters as clamped
+    bias patterns of an energy model rather than a network input; no guidance (a mixture, as SCDM).
+- **(A) Clean training data: result** (pipeline 4272440, 1.5 h; quench 4272441; Inception **4272442**; contrast
+  4272443; gallery **4272444**). K64 + 8x8 + 16x16, seed 1, n = 2000, noise start; floor 6.43:
+
+  | Training data | as sampled (FID_inf) | quench 1 (FID_inf) | KID x1e3 (q1) | contrast q1 (real 0.229) | dark q1 (real 12.7%) |
+  |---|---|---|---|---|---|
+  | the paper's (1% pixel noise) | 98.0 (93.8) | 24.61 (20.82) | 17.0 | 0.193 | 6.1% |
+  | clean (`--data-noise 0`) | **85.5 (81.4)** | **23.91 (20.36)** | 16.2 | 0.191 | 6.0% |
+
+  - **Clean data help the raw samples (-12.5) but hardly the quenched ones (-0.7).** The as-sampled images stay
+    grainy (85.5; gallery: the same speckle as with noisy data), so the grain is the model's own end-of-SDE noise,
+    not the data's 1%; the quench is still needed and removes it either way.
+  - So the "reachable floor of about 11" applies to a perfect model of the noisy data, but our models are not limited
+    by it: after the quench the data noise costs only 0.7. The contrast deficit is unchanged.
+  - Gallery: quenched faces of both runs are near-identical column by column (same start and noise).
+  - Decision for the paper: either keep the paper's preprocessing (consistency) or use clean data (-0.7); minor.
+- **Theory note** (the user: "could you add the guiding to the theory note?"): `writeups/latent_physical_SGM_writeup/theory.tex`
+  has a new Section 6, "A clamped per-image label: conditioning and guidance" (backup
+  `theory_pre_cond_2026-11-18.tex.bak`; PDF rebuilt, 11 pages, compile jobs 4273223 / 4273225, no errors or warnings):
+  the label, the conditional free energy (exact sums given x and c), conditional score matching with the label-routed
+  bias rule and the field's stationarity condition E_{p_t(.|c)}[grad F] = 0, generation with a drawn and held label,
+  and guidance in three realisations (label amplification B, Bp, h -> (1+w) x: one physical knob, exact CFG for the
+  field only; exact CFG against the label mixture with calibrated normalisers log Z_t(c), C force evaluations per
+  step; label dropout with a null label, two readouts per step), plus related work (Bao et al. 2022, Hu et al. 2023,
+  Ho and Salimans 2022). `compile.sh` pointed at the folder's old location; its `cd` path is fixed.
+- **(B) Clamped label: result** (pipelines 4272681 / 4272682, 1.6 h each; quench 4272683 / 4272684; Inception
+  **4272685**; contrast 4272686; gallery **4272687**). CelebA-32, K64 + 8x8 + 16x16, the paper's data, seed 1,
+  n = 2000, noise start; floor 6.43:
+
+  | Model | couplings + label params per slice | as sampled | quench 1 (FID_inf) | KID x1e3 | contrast q1 (real 0.229) | dark q1 (real 12.7%) |
+  |---|---|---|---|---|---|---|
+  | K64 (no label) | 1.23 M | 98.0 | 24.61 (20.78) | 16.9 | 0.193 | 6.1% |
+  | **B1**: label on hidden biases (C = 32) | 1.43 M | 92.4 | **23.52 (19.96)** | 15.9 | 0.194 | 6.4% |
+  | **B2**: + visible field | 1.46 M | 92.3 | **23.42 (19.90)** | 15.9 | 0.195 | 7.0% |
+  | K784 (no label), for scale | 2.71 M | | 22.85 (19.14) | 15.2 | 0.197 | 6.8% |
+
+  - **The clamped label gains about 1.1-1.2 Inception FID** (bootstrap sd 0.3), with 16-19% more parameters; K64 +
+    label sits between K64 and K784 (half of the K784 gain at about half of its parameters).
+  - The visible field adds only 0.1 beyond the hidden-bias offsets, despite its large global-stage loss gain
+    (slice 50: -176): the conditional loss improvement does not carry over to the unconditional samples. This is
+    where conditional training differs from unconditional sampling: the label is drawn at random, and getting the
+    right images per cluster is not the same as good images overall.
+  - Contrast improves a little (dark pixels 6.1% -> 6.4% / 7.0%; real 12.7%): the label does not fix the
+    contrast deficit.
+  - Gallery: coherent faces of the same style, no artefacts; different people in many columns (the label changes
+    the trajectory).
+  - Next, cheap: guidance by label amplification (sampling only, B, Bp, h x lambda; theory note section 6), e.g.
+    lambda = 1.5 / 2 / 3; and a finer partition (C = 128, or labels from features).
+
+### Clamped label: guidance and a finer partition (2026-11-18 16:20; the user: "okay lets do both 1 and 2")
+
+- **Code: `sample_latent.py --cond-scale LAMBDA`** (a --cond run only): guidance by label amplification, every label
+  parameter (Bc, Bpc*, hc) multiplied by LAMBDA >= 0 in the drift and the quench; the same drawn labels, start and
+  noise as LAMBDA = 1, so the comparison is per sample. Samples get `_cs<LAMBDA>`; the manifest records `cond_scale`.
+  Theory note section 6 (exact classifier-free guidance for the visible field relative to the zero-offset model; a
+  tempered label prior for the hidden offsets). Backup `sample_latent_pre_condscale.py`. Default path unchanged.
+- **(1) Guidance scan:** B1 (label on hidden biases) and B2 (+ visible field), LAMBDA = 1.5 / 2 / 3: sampling and
+  quench jobs **4273311-4273313** (B1), **4273314-4273316** (B2); Inception **4273321** (with LAMBDA = 1 and K64
+  without label); contrast 4273322; gallery **4273323**
+  (`galleries/2026-11-18_celeba32-grey_K64+patch8x8+patch16x16_label32_guidance-by-label-amplification-x1-x1.5-x2-x3_noise-start_quench1/`).
+- **(2) Partition:** the B1 model with C = 8 and C = 128 clusters (32 done): pipelines **4273317** (C128),
+  **4273318** (C8); quench 4273319 / 4273320; Inception **4273324** (C 8 / 32 / 128 and no label); contrast 4273325;
+  gallery **4273326**. Label parameters per slice C x (64 + 194 x 32): C8 0.05 M, C32 0.20 M, C128 0.80 M.
+  The visible field is left out (it added 0.1 at C = 32).
+- **(1) Guidance by label amplification: result** (sampling 4273311-4273316, 31-32 min each; Inception **4273321**;
+  contrast 4273322; gallery **4273323**). Same labels, start and noise as x1 (checked: the label files are
+  identical); quench 1; floor 6.43; real: contrast 0.229, dark 12.7%, bright 3.3%, sd of image brightness 0.114:
+
+  | label settings x | B1 (hidden biases): FID (FID_inf) | contrast / dark | B2 (+ field): FID (FID_inf) | contrast / dark / bright / sd(brightness) |
+  |---|---|---|---|---|
+  | 1 | **23.52** (20.07) | 0.194 / 6.4% | **23.42** (20.13) | 0.195 / 7.0% / 1.3% / 0.111 |
+  | 1.5 | 36.33 (32.96) | 0.143 / 1.3% | 30.85 (27.31) | 0.192 / 7.9% / 2.9% / 0.139 |
+  | 2 | 49.54 (46.54) | 0.108 / 0.3% | 38.81 (35.82) | 0.195 / 9.5% / 4.3% / 0.161 |
+  | 3 | 70.86 (68.17) | 0.072 / 0.1% | 53.01 (49.44) | 0.204 / 13.0% / 6.3% / 0.187 |
+
+  - **Guidance by amplification only hurts**, at every factor tried, and steeply.
+  - **Amplifying the hidden-bias offsets collapses the images to flat grey** (B1 x3: contrast 0.072; gallery: the
+    same washed-out mean-like face in every column). A sharper label prior over the hidden states pushes each unit
+    to its most frequent, average-like templates: the opposite of what classifier-free guidance does.
+  - **Amplifying the visible field restores the dark / bright tails** (B2 x3: dark 13.0%, real 12.7%; bright 6.3%,
+    real 3.3%) but exaggerates the brightness differences between images (sd 0.187 vs 0.114: backgrounds too dark
+    or too bright; gallery: identities kept, backgrounds pushed to extremes, faces smoother).
+  - So the label amplification of the theory note (option 1) is not a usable guidance here; exact guidance (option
+    2, calibrated normalisers) or label dropout (option 3) would be the proper tests. A field-only amplification at
+    small factors (1.1-1.2) might buy contrast cheaply, but the FID trend makes a gain unlikely.
+- **(2) Partition: result** (pipelines 4273317 C128, 1.7 h, and 4273318 C8, 1.6 h; quench 4273319 / 4273320;
+  Inception **4273324**; contrast 4273325; gallery **4273326**). Label on the hidden biases (B1 type):
+
+  | clusters C | cluster sizes | label params per slice | FID (FID_inf) | KID x1e3 | contrast / dark |
+  |---|---|---|---|---|---|
+  | none | | 0 | 24.61 (20.78) | 16.9 | 0.193 / 6.1% |
+  | 8 | 13149-30220 | 0.05 M | 23.57 (20.07) | 16.1 | 0.192 / 6.1% |
+  | 32 | 2941-9373 | 0.20 M | 23.52 (19.96) | 15.9 | 0.194 / 6.4% |
+  | 128 | 303-2791 | 0.80 M | 23.64 (20.10) | 15.7 | 0.195 / 6.5% |
+
+  - **The gain does not depend on the number of clusters**: 8, 32 and 128 give the same 1.0-1.1 (within the bootstrap
+    sd 0.3). Eight clusters (0.05 M extra) already give all of it; a finer pixel-space partition adds nothing.
+  - So the label's benefit is a coarse, early decision (about the 8 broadest image types: background / lighting /
+    hair mass), not a fine partition of the data. Contrast is unchanged at every C.
+  - Gallery: the same quality for all C; different people per column.
+- **Summary of the clamped label (11-18):** a cheap, physically simple addition (C bias patterns, loaded per sample)
+  worth about 1 FID at K64 with 8 labels (0.05 M parameters); it does not fix the contrast; amplification guidance
+  hurts. Best small model so far: K64 + 8x8 + 16x16 + 8-cluster label, 1.28 M couplings per slice, 23.57.
+
+### CelebA-64: the small model with an 8-cluster label (2026-11-18 18:35; the user: "K64 + 8x8 + 16x16 with 8 labels, can you run this for the 64x64?")
+
+- The 32x32 model scaled to 64x64: K64 + **16x16 every 4 px + 32x32 every 8 px** (patch sizes doubled; 8x8 every 2 px
+  at 64x64 ran at 5 steps/s, about 3 days of training, 11-17), 32 states each, from slice 55; with and without
+  `--cond 8 --cond-on global,patch`. Reference: K1536 + 16x16 every 4 px (58.46 after the quench; floor 5.91).
+  - Couplings per slice: global 0.52 M, 16x16 set 2.77 M, 32x32 set 1.64 M; label 8 x (64 + 194 x 32) = 0.05 M.
+  - Pipelines **4274099** (no label) and **4274100** (label 8), sampling `--chunk 100`; quench 4274101 / 4274102;
+    Inception **4274103**; contrast 4274104; gallery **4274105**
+    (`galleries/2026-11-18_celeba64-grey_K64+patch16x16-every4px+patch32x32-every8px_with-and-without-8-cluster-label_vs_K1536+patch16x16_noise-start_quench1/`).
+  - Expected: about 6-8 h training (K1536 + 16x16 ran 66-69 steps/s in the patch slices), then sampling; results
+    tomorrow morning.

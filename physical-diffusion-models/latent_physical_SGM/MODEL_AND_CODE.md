@@ -1,6 +1,6 @@
 # Latent physical SGM: the model, the current recipe, and the code changes
 
-Reference for the current state of the code (written 2026-11-16). It says *what* the model is and *which* settings
+Reference for the current state of the code (written 2026-11-16, updated 2026-11-18 15:40). It says *what* the model is and *which* settings
 we use and why; the evidence is in the dated entries of `CODE_AND_PERFORMANCE.md` (the lab notebook, cited below as
 "notebook, date: heading"). Older results (14x14, Potts vs Ising, hidden-unit variants) are in `README.md`; the
 original design and derivations in `DESIGN.md`. Keep this file current when a default or the recipe changes.
@@ -74,6 +74,18 @@ Common training flags (all runs since 2026-11-13):
 | K | MNIST 6144, Fashion 1536, CelebA 1536 | MNIST gains about 3.4 FID per doubling; Fashion and CelebA saturate at 1536 (2026-11-15, 2026-11-16) |
 | start of the reverse process | `--init-dist equil:3`: the N(0, T I) states relaxed for 3 time units of Langevin dynamics under the t = 5 energy; no data needed | 2026-11-12: worth about 1.5 FID; after the quench it adds only 0-1 (CelebA, 2026-11-15) |
 | quench | `--quench 1`: after the SDE, dx/ds = -grad F(x; t = 0 params) for s = 1 (zero temperature) | 2026-11-15: the largest single gain; removes the speckle; no memorisation (nearest-neighbour check) |
+| corrector | `--corrector 2:0.16`: 2 unadjusted Langevin steps at every knot (SNR step size, Song et al.) | 2026-11-17: -1.1 Inception FID after the quench on CelebA-32 (22.64 -> 21.50), KID 14.9 -> 12.5; 4 steps no better; +4% sampling time |
+
+**On-device training** (2026-11-17/18; every hidden statistic measured from sampled hidden states, every hidden
+state on the visit-count rule). Add to the common flags:
+
+```
+--hidden-samples 64 --hidden-jackknife --hidden-norm occupancy --occ-same-draws --patch-occupancy
+```
+
+CelebA-32 K784 + 8x8 + 16x16: 23.59 Inception FID after the quench, against 22.85 with exact statistics and Adam
+(gap 0.7; bootstrap sd 0.3-0.4). Training takes about 2x longer at S = 64 (6.4 h vs 3.3 h). Without patch units
+the gap is about 3 (two seeds), and S = 256 does not reduce it.
 
 ### Best models and command lines (seed 1)
 
@@ -87,12 +99,37 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 |---|---|---|---|
 | MNIST, ten digits | K6144 + 7x7 every 3 px, equil start | 18.8 (FID_inf 15.9) | 3.87 |
 | Fashion, ten classes | K1536 + 8x8 every 2 px, equil start, 3 seeds | 25.9 +- 0.04 (21.3) | 2.71 +- 0.07 |
+| CelebA 32x32 grey | K1536 + 8x8 every 2 px + 16x16 every 4 px, noise start, `--corrector 2:0.16` (best, 2026-11-17) | 21.50 (18.0) | - |
 | CelebA 32x32 grey | K1536 + 8x8 every 2 px + 16x16 every 4 px, noise start | 22.4 (18.6) | - |
+| CelebA 32x32 grey | K784 + 8x8 every 2 px + 16x16 every 4 px, noise start, exact statistics, Adam | 22.85 (19.1) | - |
+| CelebA 32x32 grey | the same, **fully on-device training** (S = 64 sampled statistics, visit-count rule; 2026-11-18) | 23.59 (20.0) | - |
 | CelebA 32x32 grey | K784 + 8x8 every 2 px + 4x4 every 2 px + 16x16 every 4 px, noise start (ties the above with half the global states, 2026-11-17) | 22.3 (18.7) | - |
 | CelebA 64x64 grey | K1536 + 16x16 every 4 px, noise start (first run, 2026-11-17; floor 5.9) | 58.5 (55.9) | - |
+| CelebA 64x64 grey | K3072 + 16x16 every 4 px, noise start (2026-11-18): no gain over K1536 | 58.3 (55.7) | - |
+
+**Small models** (CelebA-32, 2026-11-18; exact statistics, Adam, noise start, quench 1; couplings W + Q per slice):
+
+| Model | couplings per slice | Inception FID, quench 1 (FID_inf) |
+|---|---|---|
+| K784 + 8x8 + 16x16 | 2.71 M | 22.85 (19.1) |
+| K64 + 8x8 + 16x16 | 1.23 M | 24.61 (21.0) |
+| K64 + 8x8 + 16x16, trained on clean images (`--data-noise 0`) | 1.23 M | 23.91 (20.4) |
+| K64 + 8x8 + 16x16 + clamped label on the hidden biases, 8 clusters (`--cond 8 --cond-on global,patch`) | 1.28 M | 23.57 (20.1) |
+| K64 + 8x8 + 16x16 + clamped label on the hidden biases (`--cond 32 --cond-on global,patch`) | 1.43 M | 23.52 (20.0) |
+| K64 + 8x8 + 16x16 + clamped label on the hidden biases, 128 clusters | 2.03 M | 23.64 (20.1) |
+| K64 + 8x8 + 16x16 + clamped label on the hidden biases and a visible field (`--cond 32`) | 1.46 M | 23.42 (19.9) |
+| K32 + 8x8 + 16x16 | 1.17 M | 25.36 (21.7) |
+| K784 + 8x8 | 2.30 M | 24.66 (20.8) |
+| K64 + 8x8 | 0.82 M | 26.41 (22.7) |
+
+The global unit can shrink 12-25x for about 2-2.5 FID; at small K the patch units are almost the whole budget.
 
 Floors (real held-out images at n = 2000): MNIST 3.7, Fashion 7.2, CelebA 6.4. Wang & Achour: MNIST 27.6,
-Fashion 80.8 (their n and FID code are not stated).
+Fashion 80.8 (their n and FID code are not stated). **The model's training data are not these images**: the
+paper's preprocessing adds N(0, 0.01^2) pixel noise to every training image, and 2000 such CelebA-32 training images
+score 11.07 (raw test images + 1% noise: 10.75). So a perfect model of its training data would score about 11. In
+practice this matters little after the quench: training on clean images gains only 0.7 there (and 12.5 as sampled,
+where the remaining grain is the model's own end-of-SDE noise).
 
 Sampling with the equilibrated start and the quench (default sampler):
 
@@ -114,6 +151,8 @@ sbatch --mem 64G --time 02:00:00 jobs/run_gpu_neuronic.sh sample_latent.py --run
 | `plot_inception_fid.py` | the summary figure `figures/inception_fid_mnist_fashion.{png,pdf}` (MNIST, Fashion, CelebA) | |
 | `contrast_check.py` | pixel histograms, per-image contrast and brightness, dark / bright shares, maps of the mean and the spread over images | CPU; 2026-11-17 |
 | `tol_check.py` | per-sample differences between sample files of the same trajectories (solver convergence) | CPU; 2026-11-17 |
+| `sample_latent.py --oracle-start K --quench 1` | the reverse process started at slice K from exactly noised training images, then quenched (the oracle-start scan) | GPU; sampling and quench in one job (an existing oracle file is not quenched again) |
+| `oracle_source_check.py --run R --slices ... --out DIR` | what the end of the reverse process and the quench do to real images: the oracle sets and the quenched source images against their sources (RMS change, contrast, power in three frequency bands), example and spectrum figures | GPU (the quench); 2026-11-18 |
 
 Sample specs `PATH+PATH` concatenate files; `latent_model.split_set_spec` keeps run names that contain a '+'.
 
@@ -142,6 +181,15 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 | 11-17 | `--history-dtype float32`: the parameter history on the device in float32 (half the memory; needed for CelebA-64 K3072) | `sample_latent` | vs float64, same trajectories: samples within 4.2e-4, quench within 3.7e-4 (jobs 4266800 / 4266809) |
 | 11-17 | `--force-scale LAMBDA` (sampling at T / LAMBDA) and `--corrector M:SNR` (segmented predictor-corrector sampler, unadjusted Langevin, SNR step size) | `sample_latent` | test 4266899; full scan 4267202-12 |
 | 11-17 | `--sde-tol-scale F` (solver tolerances x F) | `sample_latent` | convergence check: x0.1 moves samples by ~1e-6 of the sample spacing (jobs 4266909 / 4266910) |
+| 11-17 | sampled hidden statistics (`--hidden-samples`, `--hidden-norm occupancy`) allowed with `--precision mixed`: the draws in float32, products in float32 with TF32 off | `latent_model.loss_draw_occupation`, `train_latent` | test 4267283: mixed vs float64 over 4 slices, validation losses to the printed digits, couplings to 1e-6-2e-5 (different draws) |
+| 11-17 | sampled statistics for the patch units (`--hidden-samples` with Potts patch units; draws with key fold_in(key, 1000 + set)) | `latent_model.patch_terms(stat=)`, `make_loss_per_sample`, `train_latent` | test 4267958: unbiased loss, gradient error 1/sqrt(S) (`check_sampledpatch.py`); exact path bitwise; runs without patches bitwise |
+| 11-17 | visit-count rule for the patch states, `--patch-occupancy` (one step scale per patch unit) | `latent_model.patch_occupation`, `OccupancyTransform`, `train_latent` | test 4268021: occupations reproduce the loss's draws exactly; without the flag bitwise |
+| 11-17 | histories above 2^31 - 1 elements are interpolated in column blocks (`interpolate_history`; XLA crashed on CelebA-64 K3072 + 16x16, 2.79e9 elements) | `sample_latent` | test 4268605: 3 blocks vs the single call, 1e-16 relative; smaller histories take the old call |
+| 11-17 | gallery panel of real images named `01_real_images.png` (was `01_real_digits.png`) | `make_gallery` | |
+| 11-18 | `--data-noise SD`: the training images' pixel noise instead of the paper's 0.01 (0: clean images; same normalisation constants, so sampling and evaluation are unchanged) | `latent_model.make_problem` / `_normalise_like_paper`, `train_latent` | test 4272439: default data bitwise as before (CelebA, Fashion); 0 maps back to the raw images (6e-17) |
+| 11-18 | `--cond C --cond-on global,patch,visible`: a clamped per-image label (k-means cluster of the training image, seed 31000 + seed) that shifts the global and patch state biases (`Bc` (C, K), `Bpc*` (C, P, S)) and / or adds a visible field (`hc` (C, N)); all learned, time dependent, starting at zero. Sampling draws one label per sample from the cluster frequencies and holds it through the SDE and the quench | `latent_model` (loss / force take (X, one-hot labels)), `train_latent`, `sample_latent` | tests 4272529 / 4272680: without labels bitwise as before (loss, force, 3 training slices vs the old code); label offsets = shifted biases per label (1e-14); the field term exact; the sampler drift = the training force per sample with its label (1e-15); end to end train, sample, quench |
+| 11-18 | `oracle_source_check.py` (new tool) | | job 4272175 |
+| 11-18 | `sample_latent --cond-scale LAMBDA` (a --cond run): every label parameter x LAMBDA in the drift and the quench (guidance by label amplification); suffix `_cs<LAMBDA>` | `sample_latent` | jobs 4273311-16: the same drawn labels as x1 (label files identical) |
 
 ## 4. Known pitfalls
 
@@ -150,6 +198,10 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
   memory (MNIST K6144, CelebA K3072). `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` alone was not enough.
   CelebA-64: K1536 needs the same (12 GB per copy); K3072 (22 GB per copy) additionally needs
   `--history-dtype float32`. Quench-only no longer builds a second copy (11-17).
+- **Parameter histories above 2^31 elements.** One array of 2^31 or more elements crashes XLA with a segmentation
+  fault (CelebA-64 K3072 + 16x16: 2.79e9, job 4266810). Since 11-17 `sample_latent` interpolates such histories in
+  column blocks. Each block is a separate constant in the compiled drift, so forcing many small blocks
+  (`LATENT_INTERP_MAX_ELEMS`) costs a lot of host memory: 547 blocks of a 2.7e8 history exceeded 32 GB.
 - **Solver tolerance.** The reverse SDE is adaptive (SRA1, rtol 1e-4, atol 1e-6, steps onto the knots). It is
   converged at these values (2026-11-17): 10x tighter changes each sample by ~1e-6 of the distance between samples,
   at 3-4x the cost. Image defects are not solver artefacts.
@@ -182,9 +234,32 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 
 - 64x64 patch speed: the block unfold does not help there (see 4); try a convolution-based unfold, or choose the
   implementation per layout by measurement. (CelebA-64 with 16x16 patches turned out to train in 6.9 h anyway.)
-- Contrast: the samples regress backgrounds and hair towards mid-grey (contrast -13% at 32x32, -23% at 64x64);
-  colder sampling makes it worse. Candidate model fix: near-global factor units (large patches / a second global
-  unit). Running (2026-11-17): the CelebA-32 corrector / temperature scan; CelebA-64 K3072 and two patch scales.
+- Contrast: the samples regress backgrounds and hair towards mid-grey (contrast -13% at 32x32, -23% at 64x64).
+  - Colder sampling makes it worse; warmer restores it but costs 13 FID (11-17).
+  - Global factor units do not help (11-18): a full-image Potts unit or 24x24 patches leave the contrast at 0.197
+    (real 0.229) and the FID within 0.4.
+  - **Where it forms (oracle-start scan, 11-18):** started from real noised faces at t <= 2.22, the samples keep a
+    real-like dark-pixel share and coarse-scale power; started at t >= 2.98 or from noise, they lose them. So the
+    deficit is made in the global stage (t > 2.2), before the patches act. Above t = 3.5 nothing is lost (an oracle
+    start at t = 4 gives the normal FID); below t = 3 the FID falls steadily with later starts (21.8 at 2.98, 19.9 at
+    2.22, 17.6 at 1.46, 14.5 at 0.71, 12.6 at 0.20).
+  - The clamped per-image label (`--cond 32`, 11-18) gains 1.1-1.2 FID on K64 + 8x8 + 16x16 (24.61 -> 23.52 on the
+    hidden biases, 23.42 with the visible field; about half of K784's advantage at about half its parameters), but
+    hardly moves the contrast (dark pixels 6.1% -> 6.4% / 7.0%; real 12.7%). The field's large global-stage loss gain
+    does not carry over to the samples (label drawn at sampling). The gain is the same with 8, 32 or 128 clusters
+    (23.57 / 23.52 / 23.64): 8 clusters (0.05 M extra per slice) give all of it. Guidance by label amplification
+    (`sample_latent --cond-scale`) only hurts (x1.5: 36.3 / 30.9; amplified hidden offsets wash the images out to
+    flat grey, an amplified field pushes backgrounds to extremes). Untested: exact guidance and label dropout
+    (theory note, section 6).
+- Model size: K has saturated with patch units (CelebA-32 K784 to K3072 about 1 FID, CelebA-64 K1536 = K3072), and
+  the global unit can be cut to K64 for about 2 FID. The limit appears to be the model's form (one layer of
+  independent template units whose forces add), not its size. Next levers for a minimal model: fewer patch states,
+  no Qp, fewer time knots.
+- On-device training: the 3-point gap without patches (reproduced on seed 2, not reduced by S = 256) is unexplained;
+  with patches it is 0.7. Candidates: the float32 draws, the same-draw visit counts.
+- CelebA-64: K3072 gives 58.3, the same as K1536 (58.5), with the same contrast deficit (-23%), so K is not the
+  bottleneck at 64x64 either. Candidates: finer patches (8x8 at 64x64 needs a faster patch code) or a fix of the blur
+  and contrast.
 - Frozen vs trained (the dense-associative-memory question): done for MNIST ten digits and CelebA-32, with and
   without patches; learning the couplings is essential (CODE_AND_PERFORMANCE.md, 2026-11-16/17).
 - Seeds 2 and 3 of the best CelebA-32 model.

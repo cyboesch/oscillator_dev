@@ -293,6 +293,20 @@ def parse():
     ap.add_argument("--ising-weak-boost", type=float, default=1.0,
                     help="K Ising units (split tree): step-size factor, for one slice, for the units that are weak at "
                          "its start (1 = off)")
+    ap.add_argument("--data-noise", type=float, default=None,
+                    help="the training images' pixel-noise SD instead of the paper's 0.01 (2026-11-18; 0: clean images; "
+                         "the same global mean / std, so sampling and evaluation map back to pixels as before). "
+                         "Recorded in config.json as data_noise only when set; default: the paper's data")
+    ap.add_argument("--cond", type=int, default=0,
+                    help="a clamped per-image variable (2026-11-18): every training image gets a fixed label c, its "
+                         "k-means cluster among C (normalised training images; seed COND_SEED0 + seed), and c shifts "
+                         "hidden state biases and / or adds a visible field (--cond-on). The sampler draws c from the "
+                         "cluster frequencies and holds it fixed. Exact statistics, Adam, Potts units only. Recorded "
+                         "in config.json as cond / cond_on only when set; 0 (default): as before")
+    ap.add_argument("--cond-on", default="global,patch,visible",
+                    help="--cond: what the label couples to, a comma list of global (the global unit's state biases, "
+                         "Bc (C, K)), patch (every patch set's state biases, Bpc / Bpc2 / Bpc3 (C, P, S)) and visible "
+                         "(a field on the visible units, energy -hc[c] . x, hc (C, N))")
     ap.add_argument("--patch-occupancy", action="store_true",
                     help="with --hidden-norm occupancy and Potts patch units (2026-11-17): the visit-count rule for the "
                          "patch states too (per patch state: gradient / occupation; one step scale per patch unit; "
@@ -422,6 +436,9 @@ def parse():
                          "default_rng(1000 + seed). The default 1 is the paper's. The data, the validation batches and "
                          "the hidden learning-rate scales (always from the seed-1 reference) do not depend on it")
     return ap.parse_args()
+
+
+COND_SEED0 = 31000                # --cond: k-means seed of the labels, COND_SEED0 + --seed (2026-11-18)
 
 
 def log(path, line):
@@ -756,7 +773,7 @@ class OccupancyTransform:
 def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sextic", n_pairs=None,
                  cd1_grad=None, cd1_releases=1, loss_key=False, floor=0.0, floor_samples=0, hidden_norm="element",
                  occ_beta=0.999, occ_same_draws=False, zero_slices=(), track_best=True, theta_masks=False,
-                 chunk_batches=False, occ_dtype=None, patch_occ=False):
+                 chunk_batches=False, occ_dtype=None, patch_occ=False, cond_labels=None, n_cond=0):
     """Jitted scan of n training steps, identical in effect to the paper's training_step loop.
     track_best, theta_masks, chunk_batches (--step-impl lean; the defaults True, False, False leave every step as
     before): track_best False (lean with --select ema, whose slice result is the EMA): best_params keeps its value
@@ -788,6 +805,9 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
     for the floor). Only "occupancy" with floor_samples > 0 changes the key stream. occ_same_draws (with "occupancy"
     and sampled statistics, floor_samples = S): count the visits among the S draws the loss itself takes
     (latent_model.loss_draw_occupation with the loss key; no extra key, S reads instead of 2S).
+    cond_labels (train_latent --cond, 2026-11-18): each training image's label (n_cond values); the loss then gets
+    X = (batch, one-hot labels of the same images: the index draw of sample_forward_process repeated with its key).
+    None (default): every step as before.
     """
     value_and_grad = jax.value_and_grad(loss_fn)
     adam = optax.scale_by_adam()          # b1 0.9, b2 0.999, eps 1e-8: the direction of optax.adam
@@ -853,11 +873,14 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         idx = jr.categorical(key, A / lm.TEMP, axis=-1, shape=(floor_samples,) + A.shape[:-1])
         return jnp.bincount(idx.ravel(), length=A.shape[-1]).astype(A.dtype) / idx.size
 
-    def one_step(carry, t_curr, lrs, dt, xs=None, data=None):
+    def one_step(carry, t_curr, lrs, dt, xs=None, data=None, labels=None):
         params, adam_state, key, step, best_params, best_loss, best_epoch, ema = carry
         if xs is None:
             key, k_epoch, k_release = jr.split(key, 3)            # same split as run_optimization (third key unused there)
             X = sample_forward_process(t_curr, lm.BATCH_SIZE, lm.TEMP, lm.SIGMA_FORWARD, data, k_epoch, beta=1)
+            if labels is not None:                                # --cond: the same images' labels (the index draw of
+                idx = jr.choice(jr.split(k_epoch)[0], data.shape[0], shape=(lm.BATCH_SIZE,), replace=True)
+                X = (X, jax.nn.one_hot(labels[idx], n_cond, dtype=X.dtype))   # sample_forward_process, same key)
         else:                                                     # chunk_batches: this step's batch and third key, drawn
             X, k_release = xs                                     # before the scan (the carry's key is already advanced)
         k_floor = k_release
@@ -904,11 +927,15 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
     # every executable (host memory grew by about the data size per slice: 64 GB OOM at slice 17 on CelebA's 162,770
     # images; about 35 GB on Fashion). Same operations, same results.
     data_dev = jnp.asarray(data_train)
+    labels_dev = None if cond_labels is None else jnp.asarray(cond_labels)   # --cond: an argument too
+    if cond_labels is not None and (chunk_batches or occupancy or floor > 0 or cd1_grad is not None):
+        raise ValueError("cond_labels: not with chunk_batches, hidden_norm occupancy, floor or CD-1")
 
     @partial(jax.jit, static_argnums=3)
-    def _run(carry, t_curr, lrs, n, dt, data):
+    def _run(carry, t_curr, lrs, n, dt, data, labels):
         if not chunk_batches:
-            return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt, data=data), carry, None, length=n)
+            return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt, data=data, labels=labels), carry, None,
+                                length=n)
 
         def keys(key, _):                 # one_step's per-step split of the key chain, ahead of the scan
             key, k_epoch, k_release = jr.split(key, 3)
@@ -921,7 +948,7 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
                             (Xs, k_releases))
 
     def run(carry, t_curr, lrs, n, dt=0.0):
-        return _run(carry, t_curr, lrs, n, dt, data_dev)
+        return _run(carry, t_curr, lrs, n, dt, data_dev, labels_dev)
 
     return run, adam
 
@@ -1011,6 +1038,20 @@ def main():
                          "0 < --occ-beta < 1")
     if args.patch_occupancy and (args.hidden_norm != "occupancy" or not args.patch or args.patch_kind != "potts"):
         raise ValueError("--patch-occupancy needs --hidden-norm occupancy and Potts patch units (--patch)")
+    cond_on = ()
+    if args.cond:                                # --cond (2026-11-18): the supported path only
+        cond_on = tuple(sorted({v.strip() for v in args.cond_on.split(",") if v.strip()}))
+        if not cond_on or any(v not in ("global", "patch", "visible") for v in cond_on):
+            raise ValueError(f"--cond-on {args.cond_on!r}: a comma list of global, patch, visible")
+        if (args.cond < 2 or args.hidden != "potts" or args.K < 1 or args.hidden_samples or args.hidden_rule != "exact"
+                or args.hidden_norm != "element" or args.hidden_floor > 0 or args.harmonic or args.hidden_fixed
+                or args.step_impl != "default" or args.cls != "none" or args.patch_kind != "potts"
+                or args.split_dead or args.init_from):
+            raise ValueError("--cond C needs C >= 2, Potts units (--hidden potts, K >= 1), exact statistics, "
+                             "--hidden-norm element, no --hidden-floor / --harmonic / --hidden-fixed / --split-dead / "
+                             "--init-from, --step-impl default, --cls none and Potts patch units")
+        if "patch" in cond_on and not args.patch:
+            raise ValueError("--cond-on patch needs --patch")
     if args.occ_same_draws and (args.hidden_norm != "occupancy" or args.hidden_samples < 1):
         raise ValueError("--occ-same-draws needs --hidden-norm occupancy and --hidden-samples S > 0")
     if args.precision == "mixed" and (args.hidden_rule != "exact" or args.hidden_floor > 0):
@@ -1151,6 +1192,11 @@ def main():
         config[x["name"]] = lm.patch_spec_str(x["spec"])
     if args.patch_occupancy:                     # --patch-occupancy only: other configs as before
         config["patch_occupancy"] = True
+    if args.data_noise is not None:              # --data-noise only: other configs as before
+        config["data_noise"] = float(args.data_noise)
+    if args.cond:                                # --cond only: other configs as before
+        config["cond"] = int(args.cond)
+        config["cond_on"] = ",".join(cond_on)
     if args.patch_fixed_scale != 1.0:            # --patch-fixed-scale only: other configs as before
         if not (args.hidden_fixed and patch is not None and np.isfinite(args.patch_fixed_scale)
                 and args.patch_fixed_scale > 0.0):
@@ -1192,6 +1238,10 @@ def main():
         for kx, vx in xspec.items():             # recorded with --patch2 / --patch3 only: both directions
             if old.get(kx, "") != vx:
                 diff[kx] = (old.get(kx, ""), vx)
+        if (old.get("cond", 0), old.get("cond_on", "")) != (int(args.cond), ",".join(cond_on)):   # both directions
+            diff["cond"] = ((old.get("cond", 0), old.get("cond_on", "")), (int(args.cond), ",".join(cond_on)))
+        if old.get("data_noise") != (None if args.data_noise is None else float(args.data_noise)):   # both directions
+            diff["data_noise"] = (old.get("data_noise"), args.data_noise)
         if bool(old.get("patch_occupancy", False)) != bool(args.patch_occupancy):   # both directions
             diff["patch_occupancy"] = (old.get("patch_occupancy", False), args.patch_occupancy)
         if float(old.get("patch_fixed_scale", 1.0)) != float(args.patch_fixed_scale):   # both directions
@@ -1231,7 +1281,7 @@ def main():
                  f"scale {args.patch_lr_scale:g}" if patch is not None else ""))
 
     # ---- data -------------------------------------------------------------------------------------------------
-    prob = lm.make_problem(args.problem, args.radius, args.neighbourhood)
+    prob = lm.make_problem(args.problem, args.radius, args.neighbourhood, data_noise=args.data_noise)
     data, labels, n_vis = prob["data"], prob["labels"], prob["n"]
     if args.cls == "none":
         data_train, labels_train = data, labels
@@ -1240,6 +1290,26 @@ def main():
         data_train, labels_train = data[np.where(sel)[0]], labels[sel]
     log(logf, f"data ({args.problem}): {data.shape[0]} images of {n_vis} pixels, normalisation mean {prob['mean']:.5f} "
               f"std {prob['std']:.5f}; training on {data_train.shape[0]} (cls {args.cls}); {prob['conn'].shape[0]} pairs")
+    cond_labels = None
+    if args.cond:                                # --cond: each training image's label, its k-means cluster
+        cpath = os.path.join(out_dir, "cond_clusters.npz")
+        cseed = COND_SEED0 + args.seed
+        if os.path.exists(cpath):                # resume: the same labels
+            zc = np.load(cpath)
+            cond_labels, cond_counts = zc["labels"], zc["counts"]
+            if (cond_labels.shape != (data_train.shape[0],) or int(zc["seed"]) != cseed
+                    or zc["centres"].shape[0] != args.cond):
+                raise RuntimeError(f"{cpath} does not match this run (--cond {args.cond}, seed {cseed})")
+        else:
+            km = lm.kmeans_jax if args.ref_kmeans == "gpu" else lm.kmeans
+            centres, assign = km(np.asarray(data_train), args.cond, cseed)
+            cond_labels = np.asarray(assign, np.int32)
+            cond_counts = np.bincount(cond_labels, minlength=args.cond)
+            save_atomic(cpath, labels=cond_labels, centres=np.asarray(centres), counts=cond_counts,
+                        seed=np.int64(cseed))
+        log(logf, f"--cond {args.cond}: k-means clusters of the training images (seed {cseed}), sizes "
+                  f"{int(cond_counts.min())}-{int(cond_counts.max())} (median {int(np.median(cond_counts))}); the label "
+                  f"couples to {', '.join(cond_on)}")
 
     # ---- model ------------------------------------------------------------------------------------------------
     vis_dense = lm.DenseVisible(prob["conn"], n_vis)          # validation and the paper comparison: always dense
@@ -1282,8 +1352,8 @@ def main():
                              cd1_grad=cd1_grad, cd1_releases=args.cd1_releases, loss_key=args.hidden_samples > 0,
                              floor=args.hidden_floor, floor_samples=args.hidden_samples, hidden_norm=args.hidden_norm,
                              occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
-                             occ_dtype=cdt, patch_occ=args.patch_occupancy,
-                             **lean)
+                             occ_dtype=cdt, patch_occ=args.patch_occupancy, cond_labels=cond_labels,
+                             n_cond=args.cond, **lean)
     run_late = None
     if args.hidden_samples_late:                  # another draw count from slice --hidden-samples-switch on
         run_late, _ = build_runner(
@@ -1764,6 +1834,39 @@ def main():
         where = f"t = {taus[done]:.4f}" if done < n_slices else "all slices present; assembling"
         log(logf, f"resuming at slice {done} ({where}) from {slice_dir}")
 
+    # --cond (2026-11-18): the label parameters, zeros in a new run (and for a patch set until its switch-on), else
+    # from the slice the run resumes from
+    cond_shapes = {}
+    if args.cond:
+        if "visible" in cond_on:
+            cond_shapes["hc"] = (args.cond, n_vis)
+        if "global" in cond_on:
+            cond_shapes["Bc"] = (args.cond, K)
+        if "patch" in cond_on:
+            cond_shapes["Bpc"] = (args.cond, geom.P, patch[2])
+            for x in xsets:
+                cond_shapes[lm.COND_PATCH_KEYS[x["n"] - 1]] = (args.cond, x["geom"].P, x["spec"][2])
+    ckeys = tuple(g for g in lm.COND_KEYS if g in cond_shapes)
+
+    def with_cond(params, prev=None):
+        """params plus the label parameters that apply now (a patch set's only together with its units)."""
+        if not ckeys:
+            return params
+        params = dict(params)
+        for g in ckeys:
+            if g in lm.COND_PATCH_KEYS and lm.PATCH_SETS[lm.COND_PATCH_KEYS.index(g)][0] not in params:
+                continue
+            if prev is not None and g in prev.files:
+                if prev[g].shape != cond_shapes[g]:
+                    raise RuntimeError(f"{g} of shape {prev[g].shape} in the slice to resume from; expected "
+                                       f"{cond_shapes[g]}")
+                params[g] = jnp.asarray(prev[g])
+            elif g not in params:
+                params[g] = jnp.zeros(cond_shapes[g])
+        return params
+
+    params = with_cond(params, prev if done > 0 else None)
+
     # ---- slices -----------------------------------------------------------------------------------------------
     held = {} if args.assemble == "memory" and n_slices == lm.N_TIME_STEPS else None   # this job's slices (assembly)
     for k in range(done, n_slices):
@@ -1797,6 +1900,7 @@ def main():
             log(logf, f"slice {k}: patch units {lm.patch_spec_str(patch)} switched on at {lam_p:g} x the reference at "
                       f"t = {t_curr:.4f}" + ("; --hidden-fixed: held at the full reference from now on"
                                              if args.hidden_fixed else ""))
+            params = with_cond(params)           # --cond: the patch sets' label offsets start at zero
         if args.hidden_fixed and patch is not None and k >= K_on:   # frozen patch units (2026-11-16): every patch
             params = dict(params)                # set = this slice's closed-form k-means reference (scale 1)
             Wr, br = (a[0] for a in patch_ref(clus, [t_curr], lm.TEMP, scale=args.patch_fixed_scale))
@@ -1844,6 +1948,13 @@ def main():
             lrs[x["kb"]] = jnp.asarray(f_p * x["sb"][k][:, None] if on else np.zeros((x["geom"].P, 1)))
             if x["kq"] in params:
                 lrs[x["kq"]] = lrs[x["kw"]]
+        if "hc" in params:                       # --cond: the label field at the visible model's rate, the offsets at
+            lrs["hc"] = lrs["theta"]             # their units' bias rates (patch sets: per unit, (1, P, 1))
+        if "Bc" in params:
+            lrs["Bc"] = lrs["b"]
+        for (kw_c, kb_c, _), ck in zip(lm.PATCH_SETS, lm.COND_PATCH_KEYS):
+            if ck in params:
+                lrs[ck] = jnp.asarray(lrs[kb_c])[None]
         lrs = {g: v * args.lr_scale for g, v in lrs.items()}
         lr_log = {"W": lrs["W"], "b": lrs["b"]}       # scalars for the log (--ising-weak-boost makes lrs per unit)
         n_boost = None
@@ -1897,6 +2008,8 @@ def main():
             idx_c = np.asarray(jr.choice(kc_idx, src_c.shape[0], shape=(VAL_N,), replace=True))
             e_c = np.exp(-t_curr)
             Xc = e_c * src_c[idx_c] + np.sqrt(lm.TEMP * (1.0 - e_c * e_c)) * jr.normal(kc_noise, (VAL_N, n_vis))
+            if cond_labels is not None:          # --cond: with the images' labels
+                Xc = (Xc, np.eye(args.cond)[cond_labels[idx_c]])
             curve_steps.append(0)
             curve_ps.append(np.asarray(loss_ps(carry[4] if args.select == "best" else carry[7], Xc), np.float32))
         for i_chunk in range(n_full):
@@ -1925,7 +2038,7 @@ def main():
         e = np.exp(-t_curr)
         Xv = e * src[idx] + np.sqrt(lm.TEMP * (1.0 - e * e)) * jr.normal(kv_noise, (VAL_N, n_vis))
         yv = src_labels[idx]
-        val_ps = np.asarray(loss_ps(params, Xv))
+        val_ps = np.asarray(loss_ps(params, Xv if cond_labels is None else (Xv, np.eye(args.cond)[cond_labels[idx]])))
         val = float(np.mean(val_ps))
         rec = {"slice": k, "t": t_curr, "steps": n_steps, "lr_v": lrs["theta"], "lr_W": lr_log["W"], "lr_b": lr_log["b"],
                **({"lr_V": lrs["V"], "lr_c": lrs["c"]} if R_h else {}),
@@ -2050,6 +2163,10 @@ def main():
             else:                                # before the switch-on: zero arrays
                 extra.update({x["kw"]: np.zeros((gx.P, Sx, gx.d)), x["kb"]: np.zeros((gx.P, Sx))},
                              **({x["kq"]: np.zeros((gx.P, Sx, gx.d))} if args.quad else {}))
+        for g in ckeys:                          # --cond: the label parameters (zeros before a patch switch-on)
+            extra[g] = np.asarray(params[g]) if g in params else np.zeros(cond_shapes[g])
+        if ckeys:
+            rec["cond_norm"] = {g: float(np.linalg.norm(extra[g])) for g in ckeys}
         save_atomic(os.path.join(slice_dir, f"slice_{k:03d}.npz"),
                     theta=np.asarray(params["theta"]), W=np.asarray(params["W"]), b=np.asarray(params["b"]),
                     key=np.asarray(optimization_key), loss_trace=losses[::10].astype(np.float32),
@@ -2058,7 +2175,7 @@ def main():
         if held is not None:                     # --assemble memory: the arrays just saved, for write_history
             held[k] = {"theta": np.asarray(params["theta"]), "W": np.asarray(params["W"]),
                        "b": np.asarray(params["b"]),
-                       **{g: extra[g] for g in ("Q", "wl", "bl", "V", "c", "Wp", "bp", "Qp") + xkeys if g in extra}}
+                       **{g: extra[g] for g in ("Q", "wl", "bl", "V", "c", "Wp", "bp", "Qp") + xkeys + ckeys if g in extra}}
         with open(os.path.join(out_dir, "train_log.jsonl"), "a") as f:
             f.write(json.dumps(rec) + "\n")
         msg = (f"slice {k:3d} t {t_curr:.4f}: {n_steps} steps in {t_train:.0f} s ({rec['steps_per_s']:.0f}/s); "
@@ -2123,7 +2240,7 @@ def main():
         t_asm = time.time()
         shape = write_history(out_dir, slice_dir, n_slices, taus, args.local, args.quad and K > 0, held,
                               harmonic=bool(R_h), patch=patch is not None, patch_quad=patch is not None and args.quad,
-                              extra_keys=xkeys)
+                              extra_keys=xkeys + ckeys)
         with open(os.path.join(out_dir, "DONE"), "w") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
         log(logf, f"assembled params_history.npy {shape} and hidden_history.npz in {time.time() - t_asm:.1f} s "
@@ -2134,7 +2251,7 @@ def main():
         p2 = {}                                  # --patch2 / --patch3: their keys per slice, in xkeys order
         for k in range(n_slices):
             s = np.load(os.path.join(slice_dir, f"slice_{k:03d}.npz"))
-            for g in xkeys:
+            for g in xkeys + ckeys:
                 p2.setdefault(g, []).append(s[g])
             thetas.append(s["theta"])
             Ws.append(s["W"])

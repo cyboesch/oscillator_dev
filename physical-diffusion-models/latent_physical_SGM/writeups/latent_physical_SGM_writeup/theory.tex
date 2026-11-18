@@ -11,7 +11,7 @@
 
 \title{Physical diffusion models with fast latent units:\\ model, local training and measured statistics}
 \author{Working note, branch \texttt{latent\_physical\_SGM}}
-\date{9 November 2026}
+\date{9 November 2026; Section~\ref{sec:cond} (clamped label, guidance) added 18 November 2026}
 
 \begin{document}
 \maketitle
@@ -361,6 +361,112 @@ this is the visible model with parameters $2\theta-\theta_{\rm lin}$. With hidde
 duplicate every hidden unit (two replicas at $T$ with the trained couplings), which gives $-2T\sum_j\log Z_j$
 exactly; alternatives are the doubled energy at hidden temperature $2T$, or an amplified back-action force. In
 simulation the drift $\vx-2\grad F$ is used directly.
+
+%======================================================================================================================
+\section{A clamped per-image label: conditioning and guidance}\label{sec:cond}
+\emph{Added 18 November 2026 (code: \texttt{train\_latent.py --cond C --cond-on}).}
+
+\paragraph{The label.} Every training image $\vx_0$ carries a fixed label $c(\vx_0)\in\{1,\dots,C\}$: its
+$k$-means cluster (Euclidean distance in normalised pixel space; $C=32$ in the first runs), with frequencies
+$\pi_c$. The label is neither summed over nor resampled along a trajectory: it is \emph{clamped}, like a control
+setting, for the whole forward and reverse path of one image. It is a degree of freedom without stochasticity that
+every hidden unit sees.
+
+\paragraph{Conditional free energy.} Besides the global Potts unit, the current models have one Potts unit per
+image patch $p$ (pixels $\vx_p$, $S$ states, fields $a_{ps}(\vx)=b_{ps}+\bm W_{ps}\cdot\vx_p+\bm Q_{ps}\cdot\vx_p^2$).
+The label shifts the fields of all hidden states and adds a field on the pixels,
+\begin{equation}
+  a_m\to a_m+B_{cm},\qquad a_{ps}\to a_{ps}+B^{\rm p}_{cps},\qquad \Ev\to\Ev-\bm h_c\cdot\vx ,
+\end{equation}
+so that, with the per-pixel units summed out as before ($F_{\rm local}$, the last term of \eqref{eq:Fboth}),
+\begin{equation}
+  F_t(\vx\mid c)=\Ev(\vx)-\bm h_c\cdot\vx-T\log\sum_me^{(a_m(\vx)+B_{cm})/T}
+  -T\sum_p\log\sum_se^{(a_{ps}(\vx)+B^{\rm p}_{cps})/T}+F_{\rm local}(\vx),
+  \label{eq:Fcond}
+\end{equation}
+and $p_t(\vx\mid c)\propto e^{-F_t(\vx\mid c)/T}$. The tables $B$ ($C\times M$), $B^{\rm p}$ ($C\times P\times S$ per patch
+set) and $\bm h$ ($C\times N$) are learned, have their own value in every time slice and start at zero (the unlabelled
+model). Given $\vx$ \emph{and} $c$ the hidden units are still independent, so every sum stays exact: the occupations
+are $p_m(\vx,c)\propto e^{(a_m+B_{cm})/T}$, the mean force \eqref{eq:potts-mean-force} holds with the shifted fields,
+and the field adds $-\bm h_c$ to $\grad F$ and nothing to $\Delta F$. On a device $c$ selects one of $C$ stored bias
+patterns (and pixel fields), loaded before the sample is generated; nothing couples hidden units to each other.
+Offsets much larger than $T$ let a label switch on a subset of the global states, so label and global state act as
+a two-level hierarchy over templates shared by all labels.
+
+\paragraph{Training.} The forward process acts on $\vx_0$ only, so
+$p_t(\vx\mid c)=\int p_t(\vx\mid\vx_0)\,p_{\rm data}(\vx_0\mid c)\,d\vx_0$ and $p_t(\vx)=\sum_c\pi_cp_t(\vx\mid c)$ exactly.
+The conditional score-matching objective
+\begin{equation}
+  J_T=\sum_c\pi_c\,\E_{\vx\sim p_t(\cdot\mid c)}\Big[-\frac{\Delta F_t(\vx\mid c)}{T}+\frac{\|\grad F_t(\vx\mid c)\|^2}{2T^2}\Big]
+\end{equation}
+is minimised by $-\grad F_t(\cdot\mid c)/T=\grad\log p_t(\cdot\mid c)$ for every $c$; in practice each noised image is
+paired with its own clean image's label. The gradients are those of Section~\ref{sec:training}, routed by the label:
+\begin{equation}
+  \partial_{B_{cm}}J_T=\E\big[\mathbf 1\{c(\vx_0)=c\}\,\partial_{b_m}J_T\big],\qquad
+  \partial_{\bm h_c}J_T=-\frac{\pi_c}{T^2}\,\E_{\vx\sim p_t(\cdot\mid c)}\big[\bm\psi\big],
+\end{equation}
+with $\bm\psi=\grad F_t(\vx\mid c)$ (the patch offsets like $B$). The bias offsets follow the bias rule, evaluated with
+the label's pattern loaded and accumulated only on images that carry it. The field's stationarity condition
+\begin{equation}
+  \E_{\vx\sim p_t(\cdot\mid c)}\big[\grad F_t(\vx\mid c)\big]=0\qquad\text{for every }c
+\end{equation}
+is the identity $\E_p[\grad\log p]=0$ of an exact score, enforced cluster by cluster: on average over a cluster's
+noised images the model's force balances. Without hidden units and with a quadratic $\Ev$, the field thus places
+each cluster's mean exactly.
+
+\paragraph{Generation.} Each sample draws $c\sim\pi$ once and keeps it through the whole reverse process (and the
+zero-temperature quench), with $F_{\theta(\tau)}(\vx\mid c)$ in the drift. With exact conditional scores the samples
+are distributed as $\sum_c\pi_cp_0(\cdot\mid c)=p_{\rm data}$: the generator remains unconditional. The early, noisy
+part of the reverse process ($t\gtrsim2$), where the hidden units can hardly infer anything from $\vx$, then runs
+with a consistent decision about the image's coarse type instead of re-inferring it at every $t$.
+
+\paragraph{Guidance.} Classifier-free guidance (Ho and Salimans 2022, arXiv 2207.12598) replaces the conditional
+score by
+\begin{equation}
+  \bm s_w(\vx\mid c)=(1+w)\grad\log p_t(\vx\mid c)-w\,\grad\log p_t(\vx),\qquad w\ge0,
+\end{equation}
+the score of $p_t(\vx\mid c)^{1+w}p_t(\vx)^{-w}\propto p_t(\vx\mid c)\,p_t(c\mid\vx)^w$: it sharpens the label at the
+cost of variety. Three realisations for the energy model:
+\begin{itemize}
+\item \textbf{Label amplification} (one physical system): generate with all label settings multiplied by
+  $\lambda=1+w$, i.e.\ $B\to\lambda B$, $B^{\rm p}\to\lambda B^{\rm p}$, $\bm h\to\lambda\bm h$. For the field this is
+  exactly classifier-free guidance relative to the label-free model $F_t(\vx\mid\varnothing)$ (all offsets zero),
+  because the field enters linearly: $F_\varnothing+(1+w)(F_c-F_\varnothing)=F_\varnothing-(1+w)\bm h_c\cdot\vx$. For
+  the hidden offsets it is not: it tempers the label's prior over hidden states,
+  $p_m(\vx,c)\propto e^{(a_m+\lambda B_{cm})/T}$. Caveat: $F_\varnothing$ was never trained on its own, so it is not
+  the unconditional model. On a device this is a single knob (stronger bias patterns).
+\item \textbf{Exact guidance against the label mixture.} The unconditional model implied by the conditional ones
+  is $p_t(\vx)=\sum_c\pi_cp_t(\vx\mid c)$, so $\grad\log p_t(\vx)=\sum_cr_c(\vx)\grad\log p_t(\vx\mid c)$ with the
+  implicit classifier
+  \begin{equation}
+    r_c(\vx)=p_t(c\mid\vx)=\frac{\pi_c\,e^{-F_t(\vx\mid c)/T}/Z_t(c)}{\sum_{c'}\pi_{c'}\,e^{-F_t(\vx\mid c')/T}/Z_t(c')} ,
+    \qquad Z_t(c)=\int e^{-F_t(\vx\mid c)/T}d\vx .
+  \end{equation}
+  All $F_t(\vx\mid c)$ are exact sums, but score matching fixes each only up to a constant, so the $C$ normalisers
+  $\log Z_t(c)$ per slice are unknown. They can be calibrated on the noised training images by requiring
+  $\E_{\vx\sim p_t}[r_c(\vx)]=\pi_c$ (the mixture's self-consistency; the stationarity condition of the convex
+  function $\E_{\vx}\big[\log\sum_c\pi_ce^{-F_t(\vx\mid c)/T+\beta_c}\big]-\sum_c\pi_c\beta_c$ of $\beta_c=-\log Z_t(c)$, fixed up to a common shift). Then
+  $\bm s_w=(1+w)\bm s(\vx\mid c)-w\sum_{c'}r_{c'}(\vx)\bm s(\vx\mid c')$ is exact, at the cost of $C$ force
+  evaluations per step. Summing the label as a further fast hidden unit would give the same mixture, but that unit
+  couples to every other hidden unit's bias, so the factorisation is lost (the sum is still exact as $C$ separate
+  sums).
+\item \textbf{Label dropout.} Train with a null label $\varnothing$ (all offsets zero) on a fraction of the images; then
+  $F_t(\vx\mid\varnothing)$ is a trained unconditional model and $\bm s_w=(1+w)\bm s(\vx\mid c)-w\,\bm s(\vx\mid\varnothing)$
+  needs two force readouts per step (with and without the label loaded), combined outside the device: the guided
+  energy $(1+w)F_t(\vx\mid c)-wF_t(\vx\mid\varnothing)$ subtracts a hidden-unit free energy, so it is not the free
+  energy of the hidden-unit system with any positive Boltzmann weights, and one readout cannot produce it.
+\end{itemize}
+
+\paragraph{Related work.} Self-labels from $k$-means clusters, drawn at sampling: Bao, Li, Sun and Zhu,
+``Why are conditional generative models better than unconditional ones?'' (NeurIPS 2022 workshop, arXiv
+2212.00362; the gain comes from partitioning the data into simpler conditional distributions); with guidance: Hu,
+Zhang, Asano, Burghouts and Snoek, ``Self-guided diffusion models'' (CVPR 2023, arXiv 2210.06462). Both cluster
+self-supervised features and feed the label to a network; here the clusters are raw-pixel clusters and the label
+enters as clamped bias patterns of an energy model, keeping exact hidden sums and a local learning rule.
+
+\paragraph{Status (18 November 2026).} First runs on CelebA $32\times32$ (global Potts unit with 64 states, $8\times8$ and
+$16\times16$ patch units, $C=32$): label on the hidden offsets only, and with the pixel field. Guidance is not
+implemented yet.
 
 %======================================================================================================================
 \section{When the idealisation holds}\label{sec:physical}

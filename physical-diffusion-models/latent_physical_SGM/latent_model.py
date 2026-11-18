@@ -553,12 +553,18 @@ def problem_data_path(name):
     return DATA_PATH if m is None else os.path.join(DIGITS_DIR, f"digits_{m.group(2)}_28.npz")
 
 
-def _normalise_like_paper(raw):
-    """The paper's preprocessing: N(0, 0.01^2) pixel noise from the paper's key, then one global mean / std."""
+def _normalise_like_paper(raw, noise=None):
+    """The paper's preprocessing: N(0, 0.01^2) pixel noise from the paper's key, then one global mean / std.
+    noise (2026-11-18, train_latent --data-noise): the pixel-noise SD instead of STD_ADDED_NOISE, scaling the same draw
+    (0: the clean images). The global mean / std stay those of the paper's noisy images, so every tool maps samples
+    back to pixels as before. None or STD_ADDED_NOISE: exactly the paper's data, as before."""
     rawj = jnp.array(raw)
     _, _, image_noise_added_key = jr.split(jr.PRNGKey(KEY_SEED), 3)
     _, subkey = jr.split(image_noise_added_key)
-    data, mean, std = normalize_samples(rawj + jr.normal(subkey, rawj.shape) * STD_ADDED_NOISE)
+    eps = jr.normal(subkey, rawj.shape)
+    data, mean, std = normalize_samples(rawj + eps * STD_ADDED_NOISE)
+    if noise is not None and float(noise) != STD_ADDED_NOISE:
+        data = (rawj + eps * float(noise) - mean) / std
     return data, float(mean), float(std)
 
 
@@ -572,11 +578,13 @@ def toy_patterns(grid=8):
     return ring.ravel(), bar.ravel()
 
 
-def make_problem(name, radius=None, neighbourhood="chebyshev"):
+def make_problem(name, radius=None, neighbourhood="chebyshev", data_noise=None):
     """Returns dict(name, grid, n, radius, neighbourhood, conn, data (jnp, normalised), labels (np, 1 = class 1),
     mean, std).
     radius: Chebyshev coupling radius of the visible pairs instead of the problem's default (PROBLEM_GEOMETRY);
     grid - 1 couples all pairs. neighbourhood "von_neumann": Manhattan instead of Chebyshev distance (connectivity).
+    data_noise: the training images' pixel-noise SD instead of the paper's 0.01 (_normalise_like_paper; 0: clean
+    images; same mean / std). None (default): the paper's data. Not for mnist28 and gauss2_8 (2026-11-18).
 
     mnist28  : the paper's problem (11,846 images, radius 14).
     mnist14  : the same images, 2x2 average-pooled to 14x14 before the paper's noise and normalisation (radius 7).
@@ -587,12 +595,14 @@ def make_problem(name, radius=None, neighbourhood="chebyshev"):
     grid, r0 = problem_geometry(name)
     radius = r0 if radius is None else radius
     digits = None
+    if data_noise is not None and name in ("mnist28", "gauss2_8"):
+        raise ValueError(f"data_noise is not available for {name}")
     m = _DIGIT_PROBLEM.fullmatch(name)
     mf = _FASHION_PROBLEM.fullmatch(name)
     if _CELEBA_PROBLEM.fullmatch(name):     # CelebA 32x32 grey: one class, the digit subsets' noise and normalisation
         raw, labels = load_celeba_raw("train", celeba_grid(name))
         digits = [0]
-        data, mean, std = _normalise_like_paper(raw)
+        data, mean, std = _normalise_like_paper(raw, data_noise)
     elif mf is not None:                     # Fashion-MNIST classes: the digit subsets' noise and normalisation
         z = np.load(problem_data_path(name))
         raw, cls_labels = z["images"], z["labels"]
@@ -600,7 +610,7 @@ def make_problem(name, radius=None, neighbourhood="chebyshev"):
         if sorted(np.unique(cls_labels).tolist()) != digits:
             raise RuntimeError(f"{name}: labels {np.unique(cls_labels)} do not match the classes {digits}")
         labels = np.searchsorted(digits, cls_labels)
-        data, mean, std = _normalise_like_paper(raw)
+        data, mean, std = _normalise_like_paper(raw, data_noise)
     elif m is not None:                      # digit subset: same noise and normalisation as the paper's data
         z = np.load(os.path.join(DIGITS_DIR, f"digits_{m.group(2)}_28.npz"))
         raw, digit_labels = z["images"], z["labels"]
@@ -610,21 +620,21 @@ def make_problem(name, radius=None, neighbourhood="chebyshev"):
         labels = np.searchsorted(digits, digit_labels)          # class index 0 .. C-1 in digit order
         if m.group(1) == "14":
             raw = raw.reshape(-1, 14, 2, 14, 2).mean(axis=(2, 4)).reshape(-1, 196)
-        data, mean, std = _normalise_like_paper(raw)
+        data, mean, std = _normalise_like_paper(raw, data_noise)
     elif name == "mnist28":
         data, labels, mean, std = load_data()
     elif name == "mnist14":
         raw = np.load(DATA_PATH)
         _, labels, _, _ = load_data()
         pooled = raw.reshape(-1, 14, 2, 14, 2).mean(axis=(2, 4)).reshape(-1, 196)
-        data, mean, std = _normalise_like_paper(pooled)
+        data, mean, std = _normalise_like_paper(pooled, data_noise)
     elif name == "gauss2_8":
         ring, bar = toy_patterns(grid)
         rng = np.random.default_rng(TOY_SEED)
         labels = np.repeat([0, 1], 5000)
         rng.shuffle(labels)
         raw = np.where(labels[:, None] == 1, bar[None, :], ring[None, :]) + 0.15 * rng.standard_normal((labels.size, grid * grid))
-        data, mean, std = _normalise_like_paper(raw)
+        data, mean, std = _normalise_like_paper(raw, data_noise)
         labels = labels.astype(np.int64)
     else:
         raise ValueError(name)
@@ -1087,6 +1097,22 @@ PATCH_SETS = (PATCH_KEYS, PATCH2_KEYS, PATCH3_KEYS)   # summed in this order, af
 def patch_sets_in(params):
     """The (W, b, Q) key triples of the patch sets present in params, in PATCH_SETS order."""
     return [ks for ks in PATCH_SETS if ks[0] in params]
+
+
+# A clamped per-image variable (train_latent.py --cond C, 2026-11-18): every training image has a fixed label c (its
+# k-means cluster, C clusters); the label shifts the global unit's state biases (Bc[c], (C, K)), every patch set's
+# state biases (COND_PATCH_KEYS[i][c], (C, P, S)) and adds a field on the visible units (energy -hc[c] . x; hc
+# (C, N)). Given the visible state and c every hidden unit still factorises (exact sums as before). The loss takes
+# X = (X_visible, E) with E the one-hot labels (B, C); a plain X array leaves every path exactly as before.
+COND_PATCH_KEYS = ("Bpc", "Bpc2", "Bpc3")   # per patch set, in PATCH_SETS order
+COND_KEYS = ("hc", "Bc") + COND_PATCH_KEYS
+
+
+def cond_patch_offsets(params, E):
+    """Per patch set present in params: its label-dependent bias offsets (P, B, S) = E @ Bpc_i (None if the run has no
+    such key)."""
+    return [None if ck not in params else jnp.einsum("bc,cps->pbs", E, params[ck])
+            for ks, ck in zip(PATCH_SETS, COND_PATCH_KEYS) if ks[0] in params]
 PATCH_SEED0 = 20000              # k-means seed of patch p for --seed s: PATCH_SEED0 + 1000 (s - KEY_SEED) + p
 PATCH_KINDS = ("potts", "ising")  # train_latent.py --patch-kind: one Potts unit per patch, or STATES Ising units
 
@@ -1245,7 +1271,7 @@ def _pdot_t(p, w):
     return lax.dot_general(p, w, (((2,), (1,)), ((0,), (0,))))
 
 
-def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts", stat=None):
+def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts", stat=None, bp_extra=None):
     """Contributions of P per-patch Potts units (train_latent.py --patch) to grad F and to the Laplacian of F: the
     Potts branch of hidden_terms_quad applied to each patch. Unit p has S states with fields
       a_ps = bp_ps + Wp_ps . x_p (+ Qp_ps . x_p^2),   pi_ps = softmax_s(a_ps / T),   G_ps = Wp_ps + 2 Qp_ps * x_p,
@@ -1260,7 +1286,9 @@ def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts", stat=None):
     The Hessian is a sum of per-patch blocks, so overlapping patches add no cross terms. Wp (P, S, d), Qp (P, S, d) or
     None (no squared-pixel couplings), bp (P, S), X (B, N); the geometry follows from the shapes (patch_geometry).
     Returns (grad (B, N), lap (B,) or None if not with_lap, fields A (P, B, S), posteriors pi (P, B, S)).
-    Strided slices, pads, batched dot_generals, softmax / tanh and reductions only (no gather, no scatter)."""
+    Strided slices, pads, batched dot_generals, softmax / tanh and reductions only (no gather, no scatter).
+    bp_extra (P, B, S) (train_latent.py --cond, 2026-11-18): per-sample bias offsets added to the fields; None (default)
+    traces exactly the operations as before."""
     _check_patch_kind(kind)
     geom = patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
     Xp = geom.unfold(X)                                                   # (P, B, d)
@@ -1268,6 +1296,8 @@ def patch_terms(Wp, Qp, bp, X, T, with_lap=True, kind="potts", stat=None):
     if Qp is not None:
         X2p = Xp * Xp
         A = A + _pdot(X2p, Qp)
+    if bp_extra is not None:             # --cond: the label's bias offsets per sample
+        A = A + bp_extra
     if stat is not None:                 # measured statistics (2026-11-17): stat(A) replaces the posteriors (P, B, S)
         p = stat(A)
     else:
@@ -1312,8 +1342,9 @@ def in_compute_dtype(fn, dtype):
     parameter gradient comes back in the parameters' own dtype (float64); the result stays in `dtype`."""
     def wrapped(params, X, key=None):
         p = {k: v.astype(dtype) for k, v in params.items()}
+        Xc = tuple(a.astype(dtype) for a in X) if isinstance(X, tuple) else X.astype(dtype)   # --cond: (X, E)
         with jax.default_matmul_precision("float32"):
-            return fn(p, X.astype(dtype), key)
+            return fn(p, Xc, key)
 
     return wrapped
 
@@ -1362,16 +1393,23 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
     def loss(params, X, key=None):
         if patch_sets_in(params) and samples > 0 and patch_kind != "potts":   # trace time only
             raise ValueError("measured statistics for patch units: Potts patch units only")
+        E = None
+        if isinstance(X, tuple):                 # --cond (2026-11-18): (visible states, one-hot labels (B, C))
+            X, E = X
+            if samples > 0 or patch_kind != "potts" or "V" in params:
+                raise ValueError("--cond: exact statistics, Potts patch units and no harmonic modes only")
         gv, lapv = vis.grad_lap(params["theta"], X)
+        b_h = params["b"] if E is None or "Bc" not in params else params["b"] + E @ params["Bc"]   # (K,) or (B, K)
+        offs_p = None if E is None else cond_patch_offsets(params, E)
 
         def per_sample(st_h, st_l, st_p=None):   # summation order as before (exact path bit-identical)
             g, lap = gv, lapv
             if K > 0 and "Q" in params:
-                gh, laph, _, _ = hidden_terms_quad(params["W"], params["Q"], params["b"], X, T, hidden, stat=st_h)
+                gh, laph, _, _ = hidden_terms_quad(params["W"], params["Q"], b_h, X, T, hidden, stat=st_h)
                 g = g + gh
                 lap = lap + laph
             elif K > 0:
-                gh, laph, _, _ = terms(params["W"], params["b"], X, T, stat=st_h)
+                gh, laph, _, _ = terms(params["W"], b_h, X, T, stat=st_h)
                 g = g + gh
                 lap = lap + laph
             if local:
@@ -1382,12 +1420,17 @@ def make_loss_per_sample(vis, T, K, hidden="ising", local=False, samples=0, jack
                 gm, lapm, _ = harmonic_terms(params["V"], params["c"], X)
                 g = g + gm
                 lap = lap + lapm
+            j_p = 0                                           # --cond: index into offs_p (sets present)
             for i_p, (kw, kb, kq) in enumerate(PATCH_SETS):   # per-patch Potts (or Ising) units (--patch, --patch2,
                 if kw in params:                              # --patch3), after the modes; st_p: measured statistics
                     gp, lapp, _, _ = patch_terms(params[kw], params.get(kq), params[kb], X, T, kind=patch_kind,
-                                                 stat=None if st_p is None else st_p[i_p])
+                                                 stat=None if st_p is None else st_p[i_p],
+                                                 bp_extra=None if offs_p is None else offs_p[j_p])
+                    j_p += 1
                     g = g + gp
                     lap = lap + lapp
+            if E is not None and "hc" in params:              # --cond: the label's visible field, energy -hc[c] . x
+                g = g - E @ params["hc"]
             return -lap / T + jnp.sum(g * g, axis=1) / (2.0 * T * T)
 
         if samples == 0:
@@ -1455,18 +1498,28 @@ def make_force(vis, T, K, hidden="ising", local=False, patch_kind="potts"):
     terms = hidden_terms if hidden == "ising" else potts_terms
 
     def force(params, X):
+        E = None
+        if isinstance(X, tuple):                 # --cond (2026-11-18): (visible states, one-hot labels); as the loss
+            X, E = X
+        b_h = params["b"] if E is None or "Bc" not in params else params["b"] + E @ params["Bc"]
+        offs_p = None if E is None else cond_patch_offsets(params, E)
         g, _ = vis.grad_lap(params["theta"], X)
         if K > 0 and "Q" in params:
-            g = g + hidden_terms_quad(params["W"], params["Q"], params["b"], X, T, hidden)[0]
+            g = g + hidden_terms_quad(params["W"], params["Q"], b_h, X, T, hidden)[0]
         elif K > 0:
-            g = g + terms(params["W"], params["b"], X, T)[0]
+            g = g + terms(params["W"], b_h, X, T)[0]
         if local:
             g = g + local_terms(params["wl"], params["bl"], X, T)[0]
         if "V" in params:                        # harmonic modes (--harmonic)
             g = g + harmonic_terms(params["V"], params["c"], X)[0]
+        j_p = 0
         for kw, kb, kq in PATCH_SETS:            # per-patch Potts (or Ising) units (--patch, --patch2)
             if kw in params:
-                g = g + patch_terms(params[kw], params.get(kq), params[kb], X, T, with_lap=False, kind=patch_kind)[0]
+                g = g + patch_terms(params[kw], params.get(kq), params[kb], X, T, with_lap=False, kind=patch_kind,
+                                    bp_extra=None if offs_p is None else offs_p[j_p])[0]
+                j_p += 1
+        if E is not None and "hc" in params:     # --cond: the label's visible field
+            g = g - E @ params["hc"]
         return g
 
     return force
