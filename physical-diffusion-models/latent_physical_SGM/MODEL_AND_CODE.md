@@ -106,6 +106,7 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 | CelebA 32x32 grey | K784 + 8x8 every 2 px + 4x4 every 2 px + 16x16 every 4 px, noise start (ties the above with half the global states, 2026-11-17) | 22.3 (18.7) | - |
 | CelebA 64x64 grey | K1536 + 16x16 every 4 px, noise start (first run, 2026-11-17; floor 5.9) | 58.5 (55.9) | - |
 | CelebA 64x64 grey | K3072 + 16x16 every 4 px, noise start (2026-11-18): no gain over K1536 | 58.3 (55.7) | - |
+| CelebA 64x64 grey | **K64 + 16x16 every 4 px + 32x32 every 8 px + clamped 8-cluster label** (`--cond 8 --cond-on global,patch`; 4.98 M couplings per slice, a third of K1536 + 16x16; 2026-11-19; without the label 59.25) | **57.8 (55.0)** | - |
 
 **Small models** (CelebA-32, 2026-11-18; exact statistics, Adam, noise start, quench 1; couplings W + Q per slice):
 
@@ -148,7 +149,7 @@ sbatch --mem 64G --time 02:00:00 jobs/run_gpu_neuronic.sh sample_latent.py --run
 | `evaluate_multiclass.py` / `fid_score.py` | classifier FID, precision / recall, class shares (MNIST, Fashion) | run by the pipeline; skipped for CelebA |
 | `make_gallery.py` | side-by-side galleries with a README per folder | descriptive names, e.g. `K784+patch8x8-every2px_start-noise_quench1` |
 | `nn_check.py` | nearest training / test image distances (memorisation) | |
-| `plot_inception_fid.py` | the summary figure `figures/inception_fid_mnist_fashion.{png,pdf}` (MNIST, Fashion, CelebA) | |
+| `plot_inception_fid.py` | the summary figure `figures/inception_fid_mnist_fashion.{png,pdf}`: a 2 x 2 grid of MNIST, Fashion, CelebA 32x32, CelebA 64x64 (since 2026-11-19) | CPU job |
 | `contrast_check.py` | pixel histograms, per-image contrast and brightness, dark / bright shares, maps of the mean and the spread over images | CPU; 2026-11-17 |
 | `tol_check.py` | per-sample differences between sample files of the same trajectories (solver convergence) | CPU; 2026-11-17 |
 | `sample_latent.py --oracle-start K --quench 1` | the reverse process started at slice K from exactly noised training images, then quenched (the oracle-start scan) | GPU; sampling and quench in one job (an existing oracle file is not quenched again) |

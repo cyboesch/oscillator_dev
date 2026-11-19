@@ -5116,3 +5116,105 @@ structure.
     (`galleries/2026-11-18_celeba64-grey_K64+patch16x16-every4px+patch32x32-every8px_with-and-without-8-cluster-label_vs_K1536+patch16x16_noise-start_quench1/`).
   - Expected: about 6-8 h training (K1536 + 16x16 ran 66-69 steps/s in the patch slices), then sampling; results
     tomorrow morning.
+- **Result (2026-11-19 08:25):** training + sampling 6.9 h (no label) / 7.3 h (label 8); quench 4274101 / 4274102;
+  Inception **4274103**; contrast 4274104; gallery **4274105**. CelebA-64, n = 2000, noise start; floor 5.91;
+  real: contrast 0.234, dark 13.5%:
+
+  | Model | couplings per slice | as sampled | quench 1 (FID_inf) | KID x1e3 | contrast q1 | dark q1 |
+  |---|---|---|---|---|---|---|
+  | K1536 + 16x16 (11-17) | 15.4 M | | 58.46 (55.62) | 53.7 | 0.180 | 3.3% |
+  | K64 + 16x16 + 32x32 | 4.93 M | 130.9 | 59.25 (56.98) | 54.4 | 0.175 | 2.7% |
+  | **K64 + 16x16 + 32x32 + 8-cluster label** | 4.98 M | 127.8 | **57.77 (55.04)** | 52.8 | 0.177 | 3.2% |
+
+  - **The small model with an 8-cluster label is the best 64x64 model so far** (57.77), 0.7 better than K1536 + 16x16
+    with a third of the couplings. Without the label the small model is 0.8 worse than K1536.
+  - **The label gains 1.5 at 64x64** (59.25 -> 57.77; bootstrap sd 0.3-0.4), somewhat more than at 32x32 (1.0).
+  - Contrast stays at the 64x64 deficit (0.175-0.180 vs 0.234; dark 2.7-3.3% vs 13.5%).
+  - Gallery: all three models give the same style (smooth, mid-grey, blurry); no broken faces.
+  - Clusters: 13325-28803 images each (8 clusters, seed 31001).
+
+### Performance overview figure as a 2 x 2 grid (2026-11-19 08:45; the user: "make it 2x2 plot: MNIST, fashion MNIST, 32x32 Celeb and 64x64 celeb")
+
+- `plot_inception_fid.py` now draws MNIST, Fashion-MNIST, CelebA 32x32 and CelebA 64x64 in a 2 x 2 grid
+  (`out/latent_physical_SGM/figures/inception_fid_mnist_fashion.{png,pdf}`, same file name; backup
+  `plot_inception_fid_pre_2x2.py`; plot jobs 4280009 / 4280033 / 4280039).
+  - CelebA 32x32 updated: K784 / K3072 without patches; K784 / K1536 + 8x8; K784 / K1536 + 8x8 + 16x16; K784 +
+    8x8 + 4x4 + 16x16; K1536 + 8x8 + 16x16 with 2 corrector steps (best, 21.5); K784 + 8x8 + 16x16 fully on-device
+    (23.6); K64 + 8x8 + 16x16 (24.6) and with the 8-cluster label (23.6). Dropped: K3072 + 8x8 and K784 + 8x8 + 4x4
+    (intermediate).
+  - CelebA 64x64 (new panel): K1536 / K3072 + 16x16; K64 + 16x16 + 32x32 with and without the 8-cluster label
+    (best, 57.8).
+  - The as-sampled FID of the K64 + 8-cluster-label model at 32x32 was missing; Inception **4280007**: 93.93 as
+    sampled, 23.57 after the quench (as before).
+  - Layout: the same row spacing in both panels of a grid row (short panels keep their bars at the top), reference
+    lines over the rows only; footnote with the patch layouts, the corrector, on-device training, the label and the
+    1%-noise floor.
+
+### Where contrast is lost: earlier coarse patches, the reverse trajectory, and the forward marginal (2026-11-19 09:10; the user: "yes please. do both. but also: at 2.2 how does the distribution look?")
+
+- **Code: `train_latent.py --patch2-on-slice K2`** (with `--patch2`, K2 >= `--patch-on-slice`): the second patch set's
+  own switch-on slice (its start reference at that slice's t); default -1 = with the first set, as before.
+  Recorded in config.json as `patch2_on_slice` only when it differs; resume checks it. Backup
+  `train_latent_pre_patch2on.py`. Test **4280068**: regression without the option (old vs new code, 3 slices,
+  bitwise); 16x16 on slice 1 and 8x8 on slice 3, 5 slices with a resume in between.
+- **New tool `forward_marginal_check.py`** (CPU): Part A, the data only: the SNR of x_t per principal component,
+  the number of components still above the noise, the non-Gaussianity (excess kurtosis, KL to the moment-matched
+  Gaussian) of the leading components, and how many training faces a noised test face is still consistent with
+  (effective number of the posterior over 20000 training images); example noised faces. Part B (`--snapshots`):
+  the model's signal variance along the principal components at the snapshot times, against the forward
+  process's.
+  - Part A: job **4280069** (`galleries/2026-11-19_celeba32-grey_forward-marginal_how-much-face-is-left-at-time-t/`).
+  - Snapshots of the K784 + 8x8 + 16x16 model (n = 1000, 11 times): **4280070**; Part B: **4280071**
+    (`galleries/2026-11-19_celeba32-grey_K784+patch8x8+patch16x16_reverse-trajectory-vs-forward-marginal/`).
+- Test 1 (submitted after 4280068 passes): K64 with the 16x16 set switched on at slice 40 (t = 2.98) and the 8x8
+  set at slice 55 (t = 2.22), against K64 + 8x8 + 16x16 both at slice 55 (24.61).
+- **Test 4280068:** (1) regression without the option, old vs new code, 3 slices: all slice arrays bitwise;
+  (2) 16x16 switched on at slice 1 and 8x8 at slice 3 exactly as asked (|Wp| 0 / 0.131 / 0.131 / 0.131, |Wp2|
+  0 until slice 3, then 0.223; config `patch2_on_slice: 3`). The job is marked FAILED only because my resume step
+  changed `--max-slices` (4 -> 5), which the resume check refuses as a config change, as it should; the resume
+  path with the second set not yet switched on is therefore untested (it matters only if a run restarts before
+  its switch-on). Temporary runs deleted.
+- **Test 1 submitted (09:20):** K64 + 16x16 every 4 px from slice 40 (t = 2.98) + 8x8 every 2 px from slice 55
+  (t = 2.22): pipeline **4280302**, quench 4280303, Inception **4280304** (against both sets from t = 2.22),
+  contrast 4280305, gallery **4280306**
+  (`galleries/2026-11-19_celeba32-grey_K64+patch8x8+patch16x16_16x16-switched-on-at-t2.98-vs-t2.22_noise-start_quench1/`).
+- **Part A result: the forward marginal** (job 4280069, 22 s; report and figures in its gallery folder).
+  CelebA-32: 1024 components, total variance 874 (normalised units), leading eigenvalues 257, 88, 80, 54, 51.
+
+  | t | noise SD | SNR of PC1 | components with SNR > 1 (> 10) | their share of the face variance | training faces consistent with a noised test face (median of 20000) | PC2 excess kurtosis (clean: +0.87) |
+  |---|---|---|---|---|---|---|
+  | 0.20 | 0.081 | 26125 | 768 (264) | 99.8% | 1.0 | +0.87 |
+  | 0.71 | 0.123 | 4096 | 340 (83) | 98.5% | 1.0 | +0.87 |
+  | 1.46 | 0.138 | 733 | 125 (23) | 94.9% | 1.0 | +0.86 |
+  | **2.22** | 0.141 | **153** | **41 (7)** | **87.7%** | **1.0** (top-1 posterior 0.996) | **+0.84** |
+  | 2.98 | 0.141 | 33 | 13 (3) | 76.3% | 2.3 | +0.73 |
+  | 3.48 | 0.141 | 12 | 7 (1) | 68.1% | 14.6 | +0.56 |
+  | 3.99 | 0.141 | 4.4 | 3 (0) | 48.6% | 281 | +0.30 |
+  | 5.00 | 0.141 | 0.6 | 0 | 0% | 9050 | +0.03 |
+
+  - **At t = 2.2 the distribution is far from Gaussian.** 41 components are still above the noise and carry 88% of
+    the face variance; along the leading components the distribution is exactly as non-Gaussian as the clean
+    faces (kurtosis +0.84 vs +0.87); and a noised held-out face is still consistent with essentially one training
+    face out of 20000 (posterior 0.996 on the nearest). Only the fine detail (components beyond about 40) is
+    drowned. It becomes Gaussian-like only at t >= 4.
+  - **So when the patches switch on at 2.2, the global stage must already have produced the whole coarse face**, at
+    the level of an individual face (41 components). A mixture of K global templates (K = 64 ... 3072, against
+    162770 faces) cannot represent that: its force there is an average over templates, which shrinks towards the
+    mean. This fits the contrast loss forming at t = 3 -> 2.2, and the saturation in K.
+  - The window t = 3 -> 2.2 is exactly where the data go from "2 faces consistent" to "1" and from 13 to 41
+    components above the noise, and where the oracle starts gain their contrast (dark 8.2% -> 11.3%).
+  - Implication: something richer than global templates must act above t = 2.2: local units earlier (test 1), or
+    a structure that composes the coarse face (a hierarchy) rather than choosing one template.
+- **Switch-on sweep of the coarse set (09:35; the user: "maybe we directly run a little sweep of turn on times"):**
+  K64 + 16x16 every 4 px from slice k + 8x8 every 2 px from slice 55 (t = 2.22), seed 1, 2000 samples, quench 1:
+  - k = 10 (t = 4.49): pipeline **4280385**, quench 4280386; k = 20 (t = 3.99): **4280387** / 4280388;
+    k = 30 (t = 3.48): **4280389** / 4280390; k = 48 (t = 2.58): **4280391** / 4280392; k = 40 (t = 2.98):
+    4280302 / 4280303 (above); k = 55 (t = 2.22): the existing K64 + 8x8 + 16x16 run (24.61).
+  - Inception **4280393** (all six), contrast 4280394, gallery **4280395**
+    (`galleries/2026-11-19_celeba32-grey_K64+patch8x8-from-t2.22+patch16x16_switch-on-sweep_t4.49-to-t2.22_noise-start_quench1/`).
+  - The risk at the early end: on MNIST, patches switched on at t = 3.4 broke shapes (2026-11-13).
+- **The 8x8 set earlier too (09:45; the user: "maybe also submit two jobs where even the 8x8 turn on earlier"):** with
+  16x16 from slice 40 (t = 2.98), 8x8 from slice 48 (t = 2.58) and from slice 40 (t = 2.98, both sets together); with
+  the running 8x8-from-2.22 run a three-point scan at fixed 16x16 time. 8x8 from slice 48: pipeline **4280421**,
+  quench 4280422; from slice 40: pipeline **4280423**, quench 4280424 (Inception **4280425**, contrast 4280426, gallery **4280427**,
+  `galleries/2026-11-19_celeba32-grey_K64+patch16x16-from-t2.98+patch8x8-from-t2.22-vs-t2.58-vs-t2.98_noise-start_quench1/`).

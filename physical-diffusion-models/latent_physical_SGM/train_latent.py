@@ -403,6 +403,10 @@ def parse():
     ap.add_argument("--patch-lr-scale", type=float, default=1.0,
                     help="with --patch: multiplies the per-unit learning rates (--hidden-lr-scale x the rms of each "
                          "unit's scale-1 reference at the slice; latent_model.patch_lr_scales)")
+    ap.add_argument("--patch2-on-slice", type=int, default=-1,
+                    help="with --patch2 (2026-11-19): the second patch set's own switch-on slice, >= --patch-on-slice "
+                         "(started at --patch-init-scale x its reference at that slice's t). -1 (default): together "
+                         "with the first set, as before. Recorded in config.json as patch2_on_slice only when it differs")
     ap.add_argument("--patch-on-slice", type=int, default=0,
                     help="with --patch: 0 (default) the units take part from slice 0 (held during "
                          "--freeze-hidden-slices); K > 0: no patch units in slices 0..K-1 (exactly the plain "
@@ -1143,6 +1147,13 @@ def main():
                              f"measured safe value at slice 31, where 0.25 costs +27 loss units (job 4231616)")
     lam_p = 0.25 if args.patch_init_scale is None else float(args.patch_init_scale)   # resolved (0.25 when inactive)
     K_on = int(args.patch_on_slice)              # --patch-on-slice (0: from slice 0)
+    K_on2 = K_on if args.patch2_on_slice < 0 else int(args.patch2_on_slice)   # --patch2-on-slice (default: = K_on)
+    if K_on2 != K_on:
+        if (not args.patch2 or args.hidden_fixed or not K_on <= K_on2 <= lm.N_TIME_STEPS - 2):
+            raise ValueError(f"--patch2-on-slice {K_on2}: needs --patch2, no --hidden-fixed, and --patch-on-slice "
+                             f"{K_on} <= K <= {lm.N_TIME_STEPS - 2}")
+    for x in xsets:                              # each extra set's switch-on slice (--patch3: with the first set)
+        x["on"] = K_on2 if x["n"] == 2 else K_on
     geom = None
     if patch is not None:
         geom = lm.PatchGeometry(lm.problem_geometry(args.problem)[0], patch[0], patch[1])
@@ -1194,6 +1205,8 @@ def main():
         config["patch_occupancy"] = True
     if args.data_noise is not None:              # --data-noise only: other configs as before
         config["data_noise"] = float(args.data_noise)
+    if K_on2 != K_on:                            # --patch2-on-slice only when it differs: other configs as before
+        config["patch2_on_slice"] = K_on2
     if args.cond:                                # --cond only: other configs as before
         config["cond"] = int(args.cond)
         config["cond_on"] = ",".join(cond_on)
@@ -1238,6 +1251,8 @@ def main():
         for kx, vx in xspec.items():             # recorded with --patch2 / --patch3 only: both directions
             if old.get(kx, "") != vx:
                 diff[kx] = (old.get(kx, ""), vx)
+        if int(old.get("patch2_on_slice", old.get("patch_on_slice", 0))) != K_on2:   # both directions
+            diff["patch2_on_slice"] = (old.get("patch2_on_slice", old.get("patch_on_slice", 0)), K_on2)
         if (old.get("cond", 0), old.get("cond_on", "")) != (int(args.cond), ",".join(cond_on)):   # both directions
             diff["cond"] = ((old.get("cond", 0), old.get("cond_on", "")), (int(args.cond), ",".join(cond_on)))
         if old.get("data_noise") != (None if args.data_noise is None else float(args.data_noise)):   # both directions
@@ -1650,7 +1665,8 @@ def main():
             if not (np.all(np.isfinite(sW_x)) and np.all(sW_x > 0) and np.all(np.isfinite(sb_x)) and np.all(sb_x > 0)):
                 raise RuntimeError(f"--patch{nx} {lm.patch_spec_str(px)}: the per-patch learning-rate scales are not "
                                    f"all finite and positive")
-            W0_x, b0_x = (a[0] for a in lm.patch_reference(clus_x, taus[K_on:K_on + 1], lm.TEMP, scale=lam_p))
+            W0_x, b0_x = (a[0] for a in lm.patch_reference(clus_x, taus[x["on"]:x["on"] + 1], lm.TEMP,
+                                                           scale=lam_p))
             if not (np.all(np.isfinite(W0_x)) and np.all(np.isfinite(b0_x))):
                 raise RuntimeError(f"--patch{nx} {lm.patch_spec_str(px)}: the start templates are not finite")
             x.update(clus=clus_x, sW=sW_x, sb=sb_x, W0=W0_x, b0=b0_x)
@@ -1665,7 +1681,7 @@ def main():
                       "empty_clusters": int(np.sum(cnt_x == 0)), "clusters_below_20_images": int(np.sum(cnt_x < 20)),
                       "lr_scale_W_min_median_max": [mmm(v) for v in sW_x],
                       "lr_scale_b_min_median_max": [mmm(v) for v in sb_x],
-                      "init_scale": lam_p, "on_slice": K_on, "start_t": float(taus[K_on]),
+                      "init_scale": lam_p, "on_slice": x["on"], "start_t": float(taus[x["on"]]),
                       "start_sha256": _sha(W0_x, b0_x), "lr_scales_sha256": _sha(sW_x, sb_x),
                       "slurm_job": os.environ.get("SLURM_JOB_ID", "manual"), "created": time.strftime("%Y-%m-%d %H:%M:%S")}
             pref_x_path = os.path.join(out_dir, f"patch{nx}_reference.json")
@@ -1678,7 +1694,7 @@ def main():
                       f"explained variance median {np.median(ev_x):.3f} (min {np.min(ev_x):.3f}); empty clusters "
                       f"{pref_x['empty_clusters']}, < 20 images {pref_x['clusters_below_20_images']}; lr scales W median "
                       f"{np.median(sW_x[0]):.3g} -> {np.median(sW_x[-1]):.3g}; start {lam_p:g} x the reference at "
-                      f"slice {K_on}, |{x['kw']}| {np.linalg.norm(W0_x):.4g}")
+                      f"slice {x['on']}, |{x['kw']}| {np.linalg.norm(W0_x):.4g}")
 
         @jax.jit
         def force_rms(params, X):
@@ -1801,6 +1817,8 @@ def main():
             if args.quad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
             for x in xsets:                      # --patch2 / --patch3: after the first set (PATCH_SETS order)
+                if x["on"] > 0:                  # --patch2-on-slice: switched on later
+                    continue
                 params.update({x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
                 if args.quad:
                     params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
@@ -1823,6 +1841,8 @@ def main():
                                    f"continue from")
             params.update({g: jnp.asarray(prev[g]) for g in need})
             for x in xsets:                      # --patch2 / --patch3
+                if done - 1 < x["on"]:           # --patch2-on-slice: not switched on yet
+                    continue
                 gx, Sx = x["geom"], x["spec"][2]
                 need_x = (x["kw"], x["kb"]) + ((x["kq"],) if args.quad else ())
                 shp_x = {x["kw"]: (gx.P, Sx, gx.d), x["kb"]: (gx.P, Sx), x["kq"]: (gx.P, Sx, gx.d)}
@@ -1894,6 +1914,8 @@ def main():
             if args.quad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
             for x in xsets:                      # --patch2 / --patch3: switched on together with the first set
+                if x["on"] != K_on:              # --patch2-on-slice: later, below
+                    continue
                 params.update({x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
                 if args.quad:
                     params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
@@ -1901,6 +1923,14 @@ def main():
                       f"t = {t_curr:.4f}" + ("; --hidden-fixed: held at the full reference from now on"
                                              if args.hidden_fixed else ""))
             params = with_cond(params)           # --cond: the patch sets' label offsets start at zero
+        for x in xsets:                          # --patch2-on-slice (2026-11-19): a later switch-on of the second set
+            if x["on"] != K_on and k == x["on"]:
+                params = dict(params, **{x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
+                if args.quad:
+                    params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
+                log(logf, f"slice {k}: patch units {x['n']} {lm.patch_spec_str(x['spec'])} switched on at {lam_p:g} x "
+                          f"the reference at t = {t_curr:.4f}")
+                params = with_cond(params)
         if args.hidden_fixed and patch is not None and k >= K_on:   # frozen patch units (2026-11-16): every patch
             params = dict(params)                # set = this slice's closed-form k-means reference (scale 1)
             Wr, br = (a[0] for a in patch_ref(clus, [t_curr], lm.TEMP, scale=args.patch_fixed_scale))
@@ -1942,7 +1972,7 @@ def main():
         for x in xsets:                          # --patch2 / --patch3: the same rule with their own scales
             if x["kw"] not in params:
                 continue
-            on = k >= max(K_on, args.freeze_hidden_slices) and not args.hidden_fixed   # frozen: no steps
+            on = k >= max(x["on"], args.freeze_hidden_slices) and not args.hidden_fixed   # frozen: no steps
             f_p = args.hidden_lr_scale * args.patch_lr_scale
             lrs[x["kw"]] = jnp.asarray(f_p * x["sW"][k][:, None, None] if on else np.zeros((x["geom"].P, 1, 1)))
             lrs[x["kb"]] = jnp.asarray(f_p * x["sb"][k][:, None] if on else np.zeros((x["geom"].P, 1)))
