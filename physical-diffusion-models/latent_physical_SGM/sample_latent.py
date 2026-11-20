@@ -907,7 +907,7 @@ def main():
         raise SystemExit("--cond-scale: only for a --cond run")
     if cond_p is not None:                    # clusters' frequencies, held through the SDE and the quench
         if (args.sampler != "sde" or args.thin_knots or args.oracle_start is not None or args.fixed_langevin
-                or corr is not None or args.force_scale != 1.0 or init_kind != "set"):
+                or args.force_scale != 1.0 or init_kind != "set"):
             raise SystemExit("a --cond run: the default SDE sampler (and --quench) only")
         if args.cond_scale != 1.0:            # --cond-scale: guidance by label amplification
             if not (math.isfinite(args.cond_scale) and args.cond_scale >= 0.0):
@@ -1003,7 +1003,7 @@ def main():
         if corr is not None and corr[0] > 0:  # --corrector: grad F from the PF-ODE drift x - grad F
             grad_ode, _ = make_drift(theta_hist, W_hist, b_hist, "ode", problem, prov.get("hidden", "ising"),
                                      local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
-                                     harmonic=harm_p, patch=patch_p)
+                                     harmonic=harm_p, patch=patch_p, cond=cond_p)
         x_final = sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus, t0, x_init,
                          corr=corr, grad_ode=grad_ode)
     if quench:
@@ -1099,12 +1099,14 @@ def do_quench(x_final, drift_ode, durations, stem, args, t_start):
               f"{time.time() - t_q:.0f} s; saved {name}.npy", flush=True)
 
 
-def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, lam):
+def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, lam, es=None):
     """Predictor-corrector sampling (--corrector M:SNR, 2026-11-17) of one padded chunk: the reverse SDE solved from
     knot to knot (segments [t0, k_1], [k_1, k_2], ..., [k_last, T_FORWARD]; Brownian key fold_in(key, segment)), and
     after every segment but the last M unadjusted Langevin steps at that knot's slice, x += eps s + sqrt(2 eps) z with
     s = -lam grad F / T (grad F = x - drift_ode) and eps = 2 (SNR |z| / |s|)^2 per sample (Song et al. 2021, the SNR
-    rule); noise keys fold_in(fold_in(key, 100000 + segment), step). M = 0: the segmented sampler alone."""
+    rule); noise keys fold_in(fold_in(key, 100000 + segment), step). M = 0: the segmented sampler alone.
+    es (a --cond run, 2026-11-19): the samples' one-hot labels, held in the predictor and the corrector; None
+    (default): exactly as before."""
     seg_t = np.concatenate([[t0], np.asarray(knots, dtype=np.float64), [lm.T_FORWARD]])
     seg_t = seg_t[np.concatenate([[True], np.diff(seg_t) > 1e-12])]
 
@@ -1122,6 +1124,23 @@ def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, la
         return y + eps * s + jnp.sqrt(2.0 * eps) * z
 
     corr_fn = jax.jit(vmap(corr_step, in_axes=(0, 0, None)))
+    if es is not None:                            # a --cond run: the same steps with each sample's label held
+        def seg_solve_c(y, k, e, ta, tb):
+            sol = solve_SDE(lambda t, x, a: drift(t, x, e), diffusion, y, k, ta, tb, 2, lm.DT0,
+                            rtol=lm.RTOL_SDE * SDE_TOL_SCALE, atol=lm.ATOL_SDE * SDE_TOL_SCALE,
+                            brownian_tolerance=lm.BROWNIAN_TOL)
+            return sol.ys[-1]
+
+        def corr_step_c(y, z, e, tb):
+            s = -lam * (y - grad_ode(tb, y, e)) / lm.TEMP
+            eps = 2.0 * (snr * jnp.linalg.norm(z) / (jnp.linalg.norm(s) + 1e-300)) ** 2
+            return y + eps * s + jnp.sqrt(2.0 * eps) * z
+
+        es_d = jnp.asarray(es)
+        seg_c, corr_c = vmap(seg_solve_c, in_axes=(0, 0, 0, None, None)), jax.jit(vmap(corr_step_c,
+                                                                                      in_axes=(0, 0, 0, None)))
+        seg_fn = lambda y, ks, ta, tb: seg_c(y, ks, es_d, ta, tb)       # noqa: E731
+        corr_fn = lambda y, zs, tb: corr_c(y, zs, es_d, tb)             # noqa: E731
     y = jnp.asarray(x0)
     keys = jnp.asarray(keys)
     for j in range(seg_t.size - 1):
@@ -1173,7 +1192,7 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
         pad = np.concatenate([idx, np.repeat(idx[-1:], args.chunk - idx.size)])
         if corr is not None:                  # --corrector: segmented predictor-corrector sampler
             yc = sample_corrector(drift, diffusion, grad_ode, x0[pad], keys[pad], knots, t0, corr[0], corr[1],
-                                  float(args.force_scale))
+                                  float(args.force_scale), es=None if COND_E is None else COND_E[pad])
             x_final[idx] = np.asarray(yc)[: idx.size]
         else:
             sol = (fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad])) if COND_E is None

@@ -89,6 +89,12 @@ PANELS = [
          ("4271878", "K64+8x8+16x16_start-noise_quench1")),
         ("K64 + 8x8 + 16x16 + 8-cluster label", ("4280007", "K64+8x8+16x16+label8-on-hidden-biases_start-noise"),
          ("4280007", "K64+8x8+16x16+label8-on-hidden-biases_start-noise_quench1")),
+        # 2026-11-20: the coarse 16x16 set switched on early (t = 4.49; 8x8 at t = 2.22), with corrector / label
+        ("K64 + early 16x16 + 8x8", ("4285111", "K64+early16x16"), ("4285111", "K64+early16x16_quench1")),
+        ("K64 + early 16x16 + 8x8, 2 corrector steps", ("4285111", "K64+early16x16_corrector2"),
+         ("4285111", "K64+early16x16_corrector2_quench1")),
+        ("K784 + early 16x16 + 8x8 + label, 2 corrector steps", ("4285111", "K784+early16x16+label8_corrector2"),
+         ("4285111", "K784+early16x16+label8_corrector2_quench1")),
     ]),
     # CelebA 64x64 grey (added 2026-11-19): noise start; 8x8 patches are too slow at 64x64, so 16x16 / 32x32
     ("CelebA 64x64 grey (noise start)", "4274103", None, [
@@ -100,6 +106,12 @@ PANELS = [
          ("4274103", "K64+16x16+32x32_start-noise_quench1")),
         ("K64 + 16x16 + 32x32 + 8-cluster label", ("4274103", "K64+16x16+32x32+label8-on-hidden-biases_start-noise"),
          ("4274103", "K64+16x16+32x32+label8-on-hidden-biases_start-noise_quench1")),
+        # 2026-11-20: the coarse 32x32 set switched on early (t = 4.49; 16x16 at t = 2.22)
+        ("K64 + early 32x32 + 16x16", ("4285112", "K64+early32x32"), ("4285112", "K64+early32x32_quench1")),
+        ("K64 + early 32x32 + 16x16 + 8-cluster label", ("4285112", "K64+early32x32+label8"),
+         ("4285112", "K64+early32x32+label8_quench1")),
+        ("K64 + early 32x32 + 16x16, 2 corrector steps", ("4285144", "K64+early32x32_corrector2"),
+         ("4285144", "K64+early32x32_corrector2_quench1")),
     ]),
 ]
 _cache = {}
@@ -186,7 +198,8 @@ def main():
     h, lab = axes[0].get_legend_handles_labels()
     fig.legend(h[::-1], lab[::-1], loc="upper center", ncol=2, frameon=False, bbox_to_anchor=(0.5, 1.0))
     fig.text(0.01, 0.005, "Rows sorted by the quenched FID (best at the bottom). Seed 1 unless noted; equilibrated start for "
-             "MNIST and Fashion-MNIST, noise start for CelebA; patches switch on at t = 2.2. Error bars: bootstrap sd "
+             "MNIST and Fashion-MNIST, noise start for CelebA; patches switch on at t = 2.2 (\"early\": the coarsest set from t = 4.49).\n"
+             "Error bars: bootstrap sd "
              "over samples (sd over seeds for the 3-seed row).\n"
              "Quench: the same samples relaxed for 1 time unit at zero temperature under the t = 0 energy. CelebA: "
              "aligned faces, centre crop, grey; 8x8 patches every 2 px, 4x4 every 2 px, 16x16 every 4 px, 32x32 every 8 px "

@@ -49,8 +49,7 @@ variables in the simulation.
 | patches 16x16 every 4 px, 32 states (25 units) | - | 0.41 M |
 
 Per time slice; the sampler interpolates 100 such slices. For comparison, Wang & Achour's KuraSHIL model has 326k
-parameters in all (notebook, 2026-11-15: "Comparison: Wang & Achour"). Reducing the count is parked until the paper
-is written (notebook, 2026-11-15: "Parked: reducing the number of parameters").
+parameters in all (notebook, 2026-11-15: "Comparison: Wang & Achour"). Reducing the count: see "Parameter reduction" below (2026-11-19/20).
 
 ## 2. The current recipe
 
@@ -99,6 +98,9 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 |---|---|---|---|
 | MNIST, ten digits | K6144 + 7x7 every 3 px, equil start | 18.8 (FID_inf 15.9) | 3.87 |
 | Fashion, ten classes | K1536 + 8x8 every 2 px, equil start, 3 seeds | 25.9 +- 0.04 (21.3) | 2.71 +- 0.07 |
+| CelebA 32x32 grey | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22 + 8-cluster label** (`--patch 16:4:32 --patch-on-slice 10 --patch2 8:2:32 --patch2-on-slice 55 --cond 8 --cond-on global,patch`; 2026-11-19) | 21.06 (17.3); **with `--corrector 2:0.16`: 20.57 (16.8), best** (2026-11-20) | - |
+| CelebA 32x32 grey | K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, `--corrector 2:0.16` (1.23 M couplings per slice; 2026-11-20) | 20.73 (17.1) | - |
+| CelebA 32x32 grey | K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, 3 seeds (1.23 M couplings per slice) | 21.86 ± 0.15 | - |
 | CelebA 32x32 grey | K1536 + 8x8 every 2 px + 16x16 every 4 px, noise start, `--corrector 2:0.16` (best, 2026-11-17) | 21.50 (18.0) | - |
 | CelebA 32x32 grey | K1536 + 8x8 every 2 px + 16x16 every 4 px, noise start | 22.4 (18.6) | - |
 | CelebA 32x32 grey | K784 + 8x8 every 2 px + 16x16 every 4 px, noise start, exact statistics, Adam | 22.85 (19.1) | - |
@@ -106,7 +108,9 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 | CelebA 32x32 grey | K784 + 8x8 every 2 px + 4x4 every 2 px + 16x16 every 4 px, noise start (ties the above with half the global states, 2026-11-17) | 22.3 (18.7) | - |
 | CelebA 64x64 grey | K1536 + 16x16 every 4 px, noise start (first run, 2026-11-17; floor 5.9) | 58.5 (55.9) | - |
 | CelebA 64x64 grey | K3072 + 16x16 every 4 px, noise start (2026-11-18): no gain over K1536 | 58.3 (55.7) | - |
-| CelebA 64x64 grey | **K64 + 16x16 every 4 px + 32x32 every 8 px + clamped 8-cluster label** (`--cond 8 --cond-on global,patch`; 4.98 M couplings per slice, a third of K1536 + 16x16; 2026-11-19; without the label 59.25) | **57.8 (55.0)** | - |
+| CelebA 64x64 grey | K64 + 16x16 every 4 px + 32x32 every 8 px + clamped 8-cluster label (`--cond 8 --cond-on global,patch`; 4.98 M couplings per slice, a third of K1536 + 16x16; 2026-11-19; without the label 59.25) | 57.8 (55.0) | - |
+| CelebA 64x64 grey | **K64 + 32x32 every 8 px switched on early, at t = 4.49, + 16x16 every 4 px from t = 2.22** (`--patch 32:8:32 --patch-on-slice 10 --patch2 16:4:32 --patch2-on-slice 55`; 2026-11-20; with the 8-cluster label 49.25; history compressed to 5 / 9 / 9 knots, 42.7 M instead of 331.8 M stored: 47.99) | 49.21 (46.8) | - |
+| CelebA 64x64 grey | **the same + 2 corrector steps per slice** (`--corrector 2:0.16`; 2026-11-20) | **43.10 (40.0)** | - |
 
 **Small models** (CelebA-32, 2026-11-18; exact statistics, Adam, noise start, quench 1; couplings W + Q per slice):
 
@@ -118,12 +122,52 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 | K64 + 8x8 + 16x16 + clamped label on the hidden biases, 8 clusters (`--cond 8 --cond-on global,patch`) | 1.28 M | 23.57 (20.1) |
 | K64 + 8x8 + 16x16 + clamped label on the hidden biases (`--cond 32 --cond-on global,patch`) | 1.43 M | 23.52 (20.0) |
 | K64 + 8x8 + 16x16 + clamped label on the hidden biases, 128 clusters | 2.03 M | 23.64 (20.1) |
+| **K64 + 8x8 (from t = 2.22) + 16x16 switched on early, at t = 4.49** (`--patch 16:4:32 --patch-on-slice 10 --patch2 8:2:32 --patch2-on-slice 55`; 2026-11-19) | 1.23 M | **21.72 (17.9)** |
 | K64 + 8x8 + 16x16 + clamped label on the hidden biases and a visible field (`--cond 32`) | 1.46 M | 23.42 (19.9) |
 | K32 + 8x8 + 16x16 | 1.17 M | 25.36 (21.7) |
 | K784 + 8x8 | 2.30 M | 24.66 (20.8) |
 | K64 + 8x8 | 0.82 M | 26.41 (22.7) |
 
 The global unit can shrink 12-25x for about 2-2.5 FID; at small K the patch units are almost the whole budget.
+
+### Parameter reduction (CelebA-32, 2026-11-19/20; notebook "Overnight 2026-11-19/20" and "Time-basis compression")
+
+Starting point: K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, 1.23 M couplings per slice, 21.72. Stored over the
+100 slices: **83.2 M** (the patch sets exist only from their switch-on slice). For scale: Wang & Achour 326 k in
+all; a CIFAR-10 DDPM about 36 M.
+
+*Per slice* (retrained, seed 1, quench 1): K16 1.13 M 22.11; 16 patch states 0.68 M 25.75; no patch Q 0.68 M
+29.85; 8x8 every 4 px 0.74 M 28.89; 8 states 0.41 M 34.42; 16x16 only 0.54 M 46.69; everything reduced 0.12 M 66.1.
+The patch units carry the model and cannot shrink without loss; contrast is unchanged in all variants.
+
+*In time* (post-hoc, `compress_history.py`, no retraining): replace each parameter group's 100-slice history by a
+few kept slices ("knots") with linear interpolation in t, as the sampler already does between slices.
+
+| compression | stored | Inception FID, quench 1 |
+|---|---|---|
+| none | 83.2 M | 21.72 |
+| **even knots per set: global set 5, both patch sets 9, per-pixel units wl / bl at their time mean** | **10.7 M (7.8x less)** | **21.67** |
+| even knots 9 everywhere, wl / bl constant | 11.1 M | 22.03 |
+| even knots 7 everywhere, wl / bl constant | 8.6 M | 22.75 |
+| even knots 5 everywhere | 6.3 M | 25.03 |
+| rank-8 SVD in time per group | 11.3 M | 22.20 |
+| 16-state model (0.68 M per slice), knots 9 | 6.3 M | 25.80 (uncompressed 25.75) |
+
+Rules found (rounds 1-5, 30 variants):
+- **Move the groups of a set together.** The parameters of a slice are co-adapted (biases compensate couplings);
+  knots placed per group (by path length) give 35-73, compressing only the coupling matrices is worse than
+  compressing everything, and per-group SVD is no better than knots despite far lower reconstruction error.
+- **Even spacing in t beats path-length placement** (also when shared per set: 25.9 vs 22.35 at 9 knots): the
+  parameters move most at small t, where errors hardly matter (the quench repairs them), while faces and contrast
+  are set at t ~ 2-4.
+- **The global set needs 3-5 knots** (5 = as good as 9; a linear ramp, 2 knots, collapses to one saturated
+  silhouette: 241), and more global knots with coarse patches hurt (17 / 5 / 5: 29.8). The early 16x16 set needs the
+  most knots (at 5: +4.4; 8x8 at 5: +1.8). The per-pixel units need no time dependence.
+- The reconstruction error does not predict the FID; losses show up as lost contrast.
+**At 64x64 the same recipe, unchanged** (K64 + early 32x32 + 16x16; global 5, patch sets 9, wl / bl constant): 42.7 M
+instead of 331.8 M stored (7.8x less), FID 49.21 -> **47.99** (2026-11-20, Inception 4285410).
+Hardware reading: B coupling sets per patch set, crossfaded linearly in t. Untested: training with the knots built
+in (design in the notebook); the corrector on the compressed histories is running (2026-11-20).
 
 Floors (real held-out images at n = 2000): MNIST 3.7, Fashion 7.2, CelebA 6.4. Wang & Achour: MNIST 27.6,
 Fashion 80.8 (their n and FID code are not stated). **The model's training data are not these images**: the
@@ -154,6 +198,8 @@ sbatch --mem 64G --time 02:00:00 jobs/run_gpu_neuronic.sh sample_latent.py --run
 | `tol_check.py` | per-sample differences between sample files of the same trajectories (solver convergence) | CPU; 2026-11-17 |
 | `sample_latent.py --oracle-start K --quench 1` | the reverse process started at slice K from exactly noised training images, then quenched (the oracle-start scan) | GPU; sampling and quench in one job (an existing oracle file is not quenched again) |
 | `oracle_source_check.py --run R --slices ... --out DIR` | what the end of the reverse process and the quench do to real images: the oracle sets and the quenched source images against their sources (RMS change, contrast, power in three frequency bands), example and spectrum figures | GPU (the quench); 2026-11-18 |
+| `forward_marginal_check.py [--snapshots]` | how much of a face is left at time t (PCA SNR, kurtosis, posterior effective number of training faces; Part B: the model's reverse trajectory against the forward marginal per PC group) | CPU / GPU; 2026-11-19 |
+| `compress_history.py --run R --mode knots:B [--group-modes g=mode,...] [--knot-share group\|set\|all] [--dry-run]` | post-hoc compression of a run's 100-slice parameter history in time (knots, knotsarc, knotsopt, hat, cheb, svd:R); writes `<run>_time-<tag>` that the sampler reads unchanged, with report.txt | CPU; 2026-11-19/20; best recipe: `--mode knots:9 --group-modes theta=knots:5,W=knots:5,b=knots:5,Q=knots:5,wl=svd:0,bl=svd:0` |
 
 Sample specs `PATH+PATH` concatenate files; `latent_model.split_set_spec` keeps run names that contain a '+'.
 
@@ -191,6 +237,11 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 | 11-18 | `--cond C --cond-on global,patch,visible`: a clamped per-image label (k-means cluster of the training image, seed 31000 + seed) that shifts the global and patch state biases (`Bc` (C, K), `Bpc*` (C, P, S)) and / or adds a visible field (`hc` (C, N)); all learned, time dependent, starting at zero. Sampling draws one label per sample from the cluster frequencies and holds it through the SDE and the quench | `latent_model` (loss / force take (X, one-hot labels)), `train_latent`, `sample_latent` | tests 4272529 / 4272680: without labels bitwise as before (loss, force, 3 training slices vs the old code); label offsets = shifted biases per label (1e-14); the field term exact; the sampler drift = the training force per sample with its label (1e-15); end to end train, sample, quench |
 | 11-18 | `oracle_source_check.py` (new tool) | | job 4272175 |
 | 11-18 | `sample_latent --cond-scale LAMBDA` (a --cond run): every label parameter x LAMBDA in the drift and the quench (guidance by label amplification); suffix `_cs<LAMBDA>` | `sample_latent` | jobs 4273311-16: the same drawn labels as x1 (label files identical) |
+| 11-19 | `--patch2-on-slice K2`: the second patch set's own switch-on slice (the coarse set early, the fine set late); config `patch2_on_slice` only when set | `train_latent` | test 4280068: regression bitwise; switch-on slices as asked (resume before the second switch-on untested) |
+| 11-19 | corrector (`--corrector`) allowed for `--cond` runs (labels drawn per sample and held) | `sample_latent.sample_corrector(es=)` | test 4282746: labelled corrector runs; its unlabelled regression is not bitwise because the sampler itself is not (test 4284079, see 4) |
+| 11-19 | `--no-patch-quad`: patch units couple linearly only (no Qp); config `patch_quad: false` only when set | `train_latent` | test 4284150: regression bitwise; history without Qp, switch-on slices right |
+| 11-19/20 | `compress_history.py` (new tool; knots / svd / least-squares bases, per-group modes, `--knot-share`) | | checks 4284210, 4284925, 4285185: full count reproduces the run exactly (svd to 5e-13); default reproduces earlier outputs bitwise; shared knots identical within a set |
+| 11-19 | `plot_inception_fid.py`: 2 x 2 grid (MNIST, Fashion, CelebA-32, CelebA-64); 11-20 early-patch rows | | |
 
 ## 4. Known pitfalls
 
@@ -222,6 +273,16 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 - **Code that runs while a job is queued.** Queued jobs read the code when they start; hold them
   (`scontrol hold`) while changing the code they use.
 
+- **The GPU sampler is not bitwise reproducible run to run** (2026-11-19, test 4284079): the same command twice
+  gives samples that differ by up to about 6e-5 (rms 2e-6) against sample spacings of about 25; harmless for every
+  metric, but sampler regression tests must use a tolerance (about 1e-4), not bitwise equality. (Training is
+  bitwise reproducible: every training regression so far matched bit for bit.)
+
+- **Host memory at 64x64.** Sampling or quenching a CelebA-64 run needs 55-60 G of host memory (quench 4282764:
+  53 G peak); at 48 G it is killed within minutes (corrector 4285143, 2026-11-20). Use `--mem 96G`.
+- **Stiff quench after strong time compression.** A rank-2 SVD history (`compress_history.py --mode svd:2`) makes
+  the t = 0 quench ODE stall (2 h and 40 min timeouts, reproducible; 2026-11-20); the sampling itself finishes.
+
 ## 5. Data on disk
 
 - `data/CelebA/celeba_gray32_{train,valid,test}.npz` and `celeba_gray64_{train,valid,test}.npz` (uint8), and the
@@ -252,16 +313,23 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
     (`sample_latent --cond-scale`) only hurts (x1.5: 36.3 / 30.9; amplified hidden offsets wash the images out to
     flat grey, an amplified field pushes backgrounds to extremes). Untested: exact guidance and label dropout
     (theory note, section 6).
+  - **Early coarse patches recover about half of it (2026-11-19/20):** the coarsest patch set switched on at
+    t = 4.49 instead of 2.22: 32x32 image std 0.193 -> 0.213 (with corrector 0.217; real 0.229), dark pixels
+    6.1% -> 9.3% (9.9%; real 12.7%); 64x64 0.177 -> 0.201 (real 0.234). It saturates from t ~ 3.5; an early 8x8
+    set adds nothing. Time compression that starves t ~ 2-4 of knots loses contrast again.
 - Model size: K has saturated with patch units (CelebA-32 K784 to K3072 about 1 FID, CelebA-64 K1536 = K3072), and
   the global unit can be cut to K64 for about 2 FID. The limit appears to be the model's form (one layer of
-  independent template units whose forces add), not its size. Next levers for a minimal model: fewer patch states,
-  no Qp, fewer time knots.
+  independent template units whose forces add), not its size. Per slice, the patch units cannot shrink without loss
+  (2026-11-20: 16 states +4.0, no Qp +8.1, sparser patches +7 to +12); in time, 5 / 9 / 9 knots store 7.8x less at
+  the same FID (see 2, "Parameter reduction"). Next: train with the knots built in (design in the notebook,
+  2026-11-20), the 16-state model with knots (25.80 at 6.3 M stored), 3 knots for the global set.
 - On-device training: the 3-point gap without patches (reproduced on seed 2, not reduced by S = 256) is unexplained;
   with patches it is 0.7. Candidates: the float32 draws, the same-draw visit counts.
 - CelebA-64: K3072 gives 58.3, the same as K1536 (58.5), with the same contrast deficit (-23%), so K is not the
-  bottleneck at 64x64 either. Candidates: finer patches (8x8 at 64x64 needs a faster patch code) or a fix of the blur
-  and contrast.
+  bottleneck at 64x64 either. **Switching the 32x32 set on early (t = 4.49) gives 49.21 (2026-11-20)**, contrast
+  0.177 -> 0.201 (real 0.234); the label adds nothing on top. The corrector takes it to **43.10** (-6.1; at 32x32 only -1.0), and
+  the 5 / 9 / 9 time compression to 47.99 at 7.8x fewer stored numbers. Running: corrector + compression together. Candidates: an earlier 16x16 set, finer patches (8x8 at 64x64 needs a faster patch code).
 - Frozen vs trained (the dense-associative-memory question): done for MNIST ten digits and CelebA-32, with and
   without patches; learning the couplings is essential (CODE_AND_PERFORMANCE.md, 2026-11-16/17).
-- Seeds 2 and 3 of the best CelebA-32 model.
+- Seeds 2 and 3 of the best CelebA-32 model (done for K64 + early 16x16: 21.86 +- 0.15 over 3 seeds).
 - Metropolis-adjusted corrector (MALA): needs the free energy F in the sampler; only if the corrector helps.

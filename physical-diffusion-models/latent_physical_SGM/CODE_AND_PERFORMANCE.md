@@ -5218,3 +5218,543 @@ structure.
   the running 8x8-from-2.22 run a three-point scan at fixed 16x16 time. 8x8 from slice 48: pipeline **4280421**,
   quench 4280422; from slice 40: pipeline **4280423**, quench 4280424 (Inception **4280425**, contrast 4280426, gallery **4280427**,
   `galleries/2026-11-19_celeba32-grey_K64+patch16x16-from-t2.98+patch8x8-from-t2.22-vs-t2.58-vs-t2.98_noise-start_quench1/`).
+- **Results (2026-11-19 16:30).**
+  - **Part B, the model's trajectory** (snapshots 4280070, 26 min; analysis 4280071; K784 + 8x8 + 16x16 with
+    both sets from t = 2.22; 1000 samples). Signal variance along the principal components, model over data
+    (1 = as the forward process):
+
+    | t | PC 1 | PC 2-5 | PC 6-20 | PC 21-100 |
+    |---|---|---|---|---|
+    | 4.5 | 0.67 | 0.75 | 0.68 | 1.10 |
+    | 3.5 | 0.84 | 0.82 | 0.60 | 1.09 |
+    | 3.0 | 0.85 | 0.78 | **0.56** | 1.30 |
+    | 2.5 | 0.89 | 0.78 | **0.55** | 1.26 |
+    | 2.0 | 0.91 | 0.79 | 0.57 | 1.01 |
+    | 1.0 | 0.91 | 0.79 | 0.59 | 0.80 |
+    | 0 | 0.93 | 0.80 | **0.59** | 0.74 |
+
+    - **Components 6-20 lose about 40% of their variance between t = 4.5 and 3, and never recover** (0.59 at t = 0);
+      components 2-5 sit at about 0.8 throughout. The coarse structure the samples lack is fixed in the global stage,
+      as the oracle starts said. Components 21-100 overshoot at t = 3-2.5 and end at 0.74.
+    - Leading-component kurtosis is too low at t = 0 (PC2 +0.62 vs +0.87, PC4 +0.19 vs +0.69): too few extreme
+      images (dark backgrounds, strong lighting).
+    - (Components beyond 100 carry almost no signal above t = 2, so their ratio is a ratio of tiny numbers there and
+      not meaningful; at t = 5 every ratio is noise.)
+  - **16x16 switch-on sweep** (pipelines 4280302 / 4280385 / 4280387 / 4280389 / 4280391, 1.6 h each; Inception
+    **4280393**; contrast 4280394; gallery **4280395**). K64 + 8x8 from t = 2.22, quench 1; real: contrast 0.229, dark
+    12.7%, bright 3.3%:
+
+    | 16x16 on at t | FID (FID_inf) | KID x1e3 | contrast | dark | bright |
+    |---|---|---|---|---|---|
+    | 2.22 (baseline) | 24.61 (20.78) | 16.9 | 0.193 | 6.1% | 1.1% |
+    | 2.58 | 23.68 (20.10) | 15.8 | 0.194 | 6.4% | 1.2% |
+    | 2.98 | 22.91 (19.43) | 14.6 | 0.199 | 7.4% | 1.5% |
+    | 3.48 | 21.98 (18.44) | 13.8 | 0.207 | 8.6% | 2.1% |
+    | 3.99 | 21.89 (18.45) | 14.2 | 0.212 | 9.1% | 2.4% |
+    | **4.49** | **21.72 (17.86)** | 13.9 | **0.213** | **9.3%** | 2.4% |
+
+    - **Switching the coarse 16x16 set on earlier gains up to 2.9 FID and a large part of the contrast**: contrast
+      0.193 -> 0.213 (real 0.229), dark pixels 6.1% -> 9.3% (real 12.7%). The gain grows down to t = 3.5 and
+      saturates there (3.99 and 4.49 within the noise of 3.48).
+    - **K64 + early 16x16 (21.72) beats K1536 + 8x8 + 16x16 (22.37)** and comes within 0.2 of the best so far
+      (K1536 + 8x8 + 16x16 with the corrector, 21.50), with 1.23 M couplings per slice.
+    - Gallery: coherent faces, no broken shapes (unlike MNIST at t = 3.4); darker hair and backgrounds, more
+      lighting contrast; the same people in most columns.
+  - **8x8 earlier as well** (pipelines 4280421 / 4280423; Inception **4280425**; contrast 4280426; gallery 4280427),
+    16x16 from t = 2.98: 8x8 from t = 2.22 / 2.58 / 2.98 -> 22.91 / 23.08 / 23.10 (contrast 0.199 / 0.200 / 0.199):
+    **no gain** from early fine patches. Only the coarse set matters early, as the forward marginal suggests (early,
+    only coarse components carry signal).
+  - **Conclusion:** the contrast and coarse-structure deficit is a capacity gap of the global stage (t > 2.2), and
+    local coarse units acting there close much of it. Next: combine (early 16x16 + 8-cluster label + corrector),
+    seeds, snapshots of the early model (does PC 6-20 recover?), and the 64x64 version (32x32 set early).
+
+### Next steps after the early-coarse-patch result (2026-11-19 16:50; the user: "yes please do all of the next steps. in particular combining the gains")
+
+- **Code: the corrector with labels.** `sample_latent.sample_corrector(..., es=)` holds each sample's one-hot label in
+  the predictor segments and the corrector steps; the sampler no longer refuses `--corrector` for a --cond run, and
+  the corrector's grad_ode gets the label parameters. Unlabelled runs keep the exact code path. Backup
+  `sample_latent_pre_condcorr.py`. Test **4282746**: (1) corrector without labels, old vs new code, 16 samples,
+  bitwise; (2) corrector with labels, 16 samples + quench: finite, the same labels as the plain sampler. The
+  corrector jobs below start only after it passes.
+- **(A) Combining the gains**, CelebA-32, 16x16 from slice 10 (t = 4.49), 8x8 from slice 55, seed 1:
+  - K64 + 8-cluster label: pipeline **4282748**, quench 4282749, corrector + quench **4282750**;
+  - K784 + 8-cluster label: pipeline **4282751**, quench 4282752, corrector + quench **4282753**;
+  - K64 without label (the 21.72 run): corrector + quench **4282754**;
+  - Inception **4282767** (with K64 all-from-2.22 and the previous best, K1536 + 8x8 + 16x16 + corrector 21.50),
+    contrast 4282768, gallery **4282769**
+    (`galleries/2026-11-19_celeba32-grey_combined-gains_early16x16-from-t4.49_8-cluster-label_corrector_K64-and-K784_noise-start_quench1/`).
+- **(B) Seeds 2 and 3** of K64 + early 16x16: pipelines **4282755** / **4282757**, quench 4282756 / 4282758; Inception
+  of seeds 1-3 **4282770**.
+- **(C) Snapshots** (1000 samples, 11 times) and the trajectory analysis for K64 with 16x16 from t = 2.22 (sampling
+  4282759, analysis 4282760) and from t = 4.49 (4282761 / 4282762): do components 6-20 recover with early coarse
+  patches?
+- **(D) CelebA-64:** K64 + 32x32 every 8 px from slice 10 + 16x16 every 4 px from slice 55, without (pipeline
+  **4282763**, quench 4282764) and with the 8-cluster label (**4282765** / 4282766); Inception **4282771** (with K1536 +
+  16x16 58.46 and K64 + 16x16 + 32x32 + label from t = 2.22, 57.77), contrast 4282772, gallery **4282773**. About 7 h.
+- 27 jobs in the queue at 16:50; disk 67%.
+- **Interim results (2026-11-19 22:10).**
+  - **Corrector-with-labels test 4282746 FAILED its regression check only:** the unlabelled corrector gave non-bitwise
+    samples old vs new code (size not recorded; the test deleted its files). The unlabelled path is the same code
+    in both versions (the new branch runs only with labels), so the likely cause is run-to-run nondeterminism of the
+    GPU sampler (XLA's per-process GEMM algorithm choice, amplified by the adaptive solver). The labelled corrector
+    worked (finite, same labels as the plain sampler, rms 0.88 from the plain trajectories). The blocked corrector
+    jobs 4282750 / 4282753 / 4282754 were released by hand (22:00). **Reproducibility test 4284079:** the same
+    command twice, plain and corrector, 16 samples, with the size of the difference.
+  - **Seeds** (Inception **4282770**), K64 + 16x16 from t = 4.49: seed 1 / 2 / 3 = 21.72 / 22.07 / 21.80, **mean 21.86 ±
+    0.15** (sd over seeds), against 24.61 with both sets from t = 2.22 (seed 1). The gain (about 2.8) is robust.
+  - **Trajectories with early coarse patches** (snapshots 4282759 / 4282761, analyses 4282760 / 4282762; K64; signal
+    variance over data):
+
+    | t | PC 2-5: 16x16 from 2.22 / from 4.49 | PC 6-20: from 2.22 / from 4.49 | PC 21-100: from 2.22 / from 4.49 |
+    |---|---|---|---|
+    | 4.0 | 0.80 / 0.90 | 0.51 / 0.88 | 1.09 / 0.65 |
+    | 3.0 | 0.74 / 0.95 | **0.44 / 0.97** | 1.50 / 1.01 |
+    | 2.0 | 0.72 / 0.94 | 0.47 / 0.92 | 1.13 / 0.91 |
+    | 0 | **0.72 / 0.95** | **0.51 / 0.89** | 0.80 / 0.81 |
+
+    - **Early coarse patches restore the coarse structure almost fully**: components 6-20 end at 0.89 of the data's
+      variance instead of 0.51, components 2-5 at 0.95 instead of 0.72. The trajectory confirms the mechanism.
+    - Remaining: the leading components are still too light-tailed (PC2 kurtosis +0.35 vs +0.87, PC4 +0.26 vs +0.69):
+      too few extreme images; and components 21-100 end at 0.81 in both.
+  - **Combined, plain sampler** (interim Inception **4284080**; quench 1):
+
+    | Model | as sampled | quench 1 (FID_inf) |
+    |---|---|---|
+    | K64 + early 16x16 | | 21.72 (17.95) |
+    | K64 + early 16x16 + 8-cluster label | 85.4 | 21.35 (17.93) |
+    | **K784 + early 16x16 + 8-cluster label** | 83.6 | **21.06 (17.31)** |
+
+    - **K784 + early 16x16 + label (21.06) is the new best without a corrector**, below the previous best with one
+      (K1536 + 8x8 + 16x16 + corrector, 21.50). The label adds only 0.4 on top of early patches (1.0 without
+      them): both act on the global stage, so their gains overlap. K784 adds 0.3 over K64.
+    - The corrector versions (4282750 / 4282753 / 4282754) and the full comparison 4282767 follow.
+  - CelebA-64 pipelines 4282763 / 4282765 running (4.6 h / 2.9 h at 22:00).
+- **Reproducibility test 4284079 (4 min):** the same `sample_latent.py` command twice on the same node (K64 + early
+  16x16, 16 samples): **neither the plain sampler nor the corrector is bitwise reproducible run to run**, but the
+  differences are rounding-sized: max |diff| per sample median 6.0e-6 (plain) / 1.1e-5 (corrector), largest 6.5e-5 /
+  4.1e-5, rms 2e-6, against a median nearest-neighbour distance between samples of 27 / 24 (relative 2e-6, the same
+  size as the 11-17 solver-tolerance check). So the failed regression of 4282746 was this nondeterminism, not the
+  code change; the corrector-with-labels code stands. Regression tests of the sampler must compare with a tolerance
+  (about 1e-4 absolute), not bitwise.
+
+### Overnight 2026-11-19/20: how simple can the model be? (submitted 22:40; the user: "I would like to see how much simpler we can make those models and still perform similarly. to reduce the number of parameters")
+
+- Starting point: the best small recipe, K64 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22, 32 states
+  per patch unit, patch Q on: **1.23 M couplings per slice** (global 0.13 M, 8x8 set 0.69 M, 16x16 set 0.41 M);
+  21.72 (seed 1), 21.86 ± 0.15 over 3 seeds.
+- **Code: `train_latent.py --no-patch-quad`** (with --quad and --patch): the patch units couple to the pixels
+  linearly only (no Qp, half the patch couplings); the global unit keeps Q. Config `patch_quad: false` only when set;
+  resume checks it. Backup `train_latent_pre_nopatchquad.py`. Test **4284150**: regression without the flag (old vs
+  new, 3 slices, bitwise); 100 short slices with the flag (no Qp in the history, switch-on slices right), 16 samples
+  and a quench.
+- **Sweep** (seed 1, noise start, quench 1; couplings per slice):
+
+  | variant | couplings | pipeline / quench |
+  |---|---|---|
+  | 16 states per patch unit | 0.68 M | 4284152 / 4284153 |
+  | 8 states per patch unit | 0.41 M | 4284154 / 4284155 |
+  | 8x8 every 4 px (49 instead of 169 units) | 0.74 M | 4284156 / 4284157 |
+  | 8x8 every 4 px + 16x16 every 8 px (9 units) | 0.48 M | 4284158 / 4284159 |
+  | early 16x16 only, no 8x8 set | 0.54 M | 4284160 / 4284161 |
+  | K16 global states | 1.13 M | 4284162 / 4284163 |
+  | no patch Q (after the test) | 0.68 M | 4284164 / 4284165 |
+  | K16 + 8x8 every 4 px + 16x16 every 8 px, 16 states, no patch Q (after the test) | **0.12 M** | 4284166 / 4284167 |
+
+  - Inception **4284168** (with the 1.23 M baseline), contrast 4284169, gallery **4284170**
+    (`galleries/2026-11-19_celeba32-grey_parameter-reduction-sweep_from-K64+early16x16+8x8_1.23M-down-to-0.12M_noise-start_quench1/`).
+- Still running from before: the corrector samplings 4282750 / 4282753 / 4282754 (combined comparison 4282767) and
+  CelebA-64 with early 32x32 (4282763 / 4282765; Inception 4282771).
+- **Time-basis compression (23:00; the user: "can we implement the time basis functions to reduce parameters?").**
+  Context: our models store one parameter set per slice (100), so the stored total is 100 x the per-slice count
+  (1.23 M -> 123 M for the K64 recipe; a CIFAR-scale DDPM has about 36 M; Wang & Achour 326k).
+  - **New tool `compress_history.py`** (CPU): replaces each parameter group's history (over its active slices; patch
+    sets stay zero before their switch-on) by `knots:B` (B kept slices, linear interpolation in t; stored B x P) or
+    `svd:R` (mean + rank-R expansion sum_r a_r(t) V_r: R coupling patterns driven by R scalar control signals; stored
+    (R + 1) x P + R x slices), and writes a new run directory that the sampler reads unchanged
+    (`<run>_time-<mode>`, config `time_compression`, report.txt with per-group errors and stored counts). Post-hoc,
+    no retraining; training with the basis built in comes only if this shows how far one can go.
+  - Job **4284210**: check (knots:all reproduces the history exactly, svd:full to rounding), then knots 34 / 17 / 9 /
+    5 and svd 16 / 8 / 4 / 2 / 1 of the K64 + early 16x16 run (21.72). Sampling + quench **4284211-4284219**;
+    Inception **4284220**; gallery **4284221**
+    (`galleries/2026-11-19_celeba32-grey_K64+early16x16_time-basis-compression_knots-and-low-rank_noise-start_quench1/`).
+- **Compression job 4284210 done (3 min):** check PASSED (knots:all reproduces the history exactly; svd:full to 4.9e-13).
+  The stored total of the original is **83.2 M** (not 123 M: the 16x16 set exists for 90 slices, the 8x8 set for 45);
+  1.26 M per slice. Stored after compression: knots 34 / 17 / 9 / 5 -> 42.7 / 21.4 / 11.3 / 6.3 M; rank 16 / 8 / 4 / 2
+  / 1 -> 21.4 / 11.3 / 6.3 / 3.8 / 2.5 M.
+  - Reconstruction errors (relative, per group): with knots the per-pixel units (wl, bl) are not representable
+    (error > 1 at 9 knots: their histories jump from slice to slice); the couplings lose 6-20% at 9 knots (W 10%, Q
+    20%, Wp 11%, Qp 19%, Wp2 6%). Rank 4 does better at the same storage for wl / bl (13%) and theta (2%), similar
+    for the couplings (W 12%, Q 21%, Wp 12%, Qp 19%, Wp2 8%).
+  - Sampling of the 9 compressed runs (4284211-4284219) and Inception 4284220 running.
+- **compress_history.py extended (23:05; backup `compress_history_v1.py`):** `knotsopt:B` (B kept slices chosen
+  greedily where the interpolation error is largest), `hat:B` / `cheb:B` (least-squares fits with B piecewise-linear
+  hats on uniform knots in t, or B Chebyshev polynomials; least squares also averages slice-to-slice jitter),
+  `--group-modes` (per-group overrides, e.g. `wl=svd:4,bl=svd:4`), `--dry-run` (error report only). Dry-run
+  comparison of all bases at 5 / 9 / 17 stored sets: **4284247**.
+- **Test 4284150 PASSED (22 min):** `--no-patch-quad` - regression without the flag (old vs new code, 3 slices):
+  all slice arrays bitwise; with the flag, 100 short slices: config `patch_quad: false`, history members without Qp /
+  Qp2 (the global Q kept), 16x16 zero before slice 10 and 8x8 zero before slice 55, 16 samples and quench finite.
+  Temporary runs deleted. The two sweep runs that use the flag (4284164, 4284166) are released (waiting for
+  priority at 23:10).
+- **Dry-run comparison 4284247** (relative reconstruction error per group at equal storage: 5 / 9 / 17 stored sets;
+  svd:R stores R + 1 sets):
+
+  | basis (9 sets) | theta | W | Q | wl | bl | Wp | Qp | Wp2 | Qp2 |
+  |---|---|---|---|---|---|---|---|---|---|
+  | knots:9 (even) | 0.062 | 0.099 | 0.201 | 1.210 | 1.180 | 0.110 | 0.187 | 0.061 | 0.099 |
+  | knotsopt:9 (greedy) | 0.041 | 0.105 | 0.193 | 0.121 | 0.101 | 0.097 | 0.171 | 0.062 | 0.099 |
+  | hat:9 (least squares) | 0.036 | 0.073 | 0.156 | 0.646 | 0.611 | 0.082 | 0.138 | 0.042 | 0.072 |
+  | cheb:9 (least squares) | 0.034 | 0.079 | 0.150 | 0.369 | 0.355 | 0.098 | 0.165 | 0.038 | 0.071 |
+  | **svd:8** | **0.012** | **0.061** | **0.111** | **0.044** | **0.038** | **0.060** | **0.106** | **0.036** | **0.062** |
+
+  - **Low rank in time is the best basis at equal storage for every group**, at 5, 9 and 17 sets alike. Least-squares
+    fits beat interpolation for the couplings; greedy knots fix the per-pixel units but not the couplings.
+  - The per-pixel units (wl, bl) are noise-like in time: from t ~ 4 on about half of the 1024 pixels' wl change sign
+    from one slice to the next (30266 sign flips over 101376 steps; relative slice-to-slice change 0.52, the same
+    after a joint sign fix of (w, c), so not a gauge flip but w wandering around 0). Smooth bases cannot follow that;
+    the rank expansion averages it.
+  - Next (after the FIDs of round 1): per-group ranks (cheap groups at higher rank, the big coupling groups at the
+    lowest rank that keeps the FID).
+- **Sweep results (2026-11-20 00:40; Inception 4284168, contrast 4284169, gallery 4284170; all 8 pipelines done
+  without errors, 37-96 min each):**
+
+  | variant | couplings per slice | Inception FID (quench 1) | change |
+  |---|---|---|---|
+  | baseline K64 + early 16x16 + 8x8, 32 states, patch Q | 1.23 M | **21.72** | |
+  | K16 global states | 1.13 M | **22.11** | +0.4 |
+  | 16 states per patch unit | 0.68 M | 25.75 | +4.0 |
+  | 8x8 every 4 px | 0.74 M | 28.89 | +7.2 |
+  | no patch Q | 0.68 M | 29.85 | +8.1 |
+  | 8x8 every 4 px + 16x16 every 8 px | 0.48 M | 33.44 | +11.7 |
+  | 8 states per patch unit | 0.41 M | 34.42 | +12.7 |
+  | early 16x16 only, no 8x8 set | 0.54 M | 46.69 | +25.0 |
+  | K16 + sparse patches + 16 states + no patch Q | 0.12 M | 66.10 | +44.4 |
+
+  - **The global unit can shrink (K64 -> K16 costs 0.4), the patch units cannot.** But the global unit holds only
+    0.13 M of the 1.23 M, so K16 saves little. Every cut of the patch couplings costs at least 4 FID; at equal size
+    (0.68 M) halving the states (25.75) is much better than dropping the patch Q (29.85). The 8x8 set is essential
+    (without it 46.69).
+  - **Contrast is unchanged in every variant** (image std 0.212-0.214, dark pixels 8.4-9.4%, as the baseline): the
+    early 16x16 set fixes contrast at any size; the cuts cost local detail.
+  - Gallery (same noise per column): every variant draws the same face per column (pose, hair, lighting set early).
+    With 8 states or sparse patches the texture turns blotchy and blocky (patch-sized tiles, smeared eyes and mouths);
+    0.12 M gives grainy, softer faces that are still faces.
+  - So per slice the 32x32 recipe needs about 0.7-1.2 M couplings. The larger saving should come from time (100
+    stored slices): see the time-basis compression below.
+
+### Combined gains on CelebA-32: early 16x16 + label + corrector (results 2026-11-20 01:25)
+
+Corrector samplings 4282750 (K64 + label8), 4282753 (K784 + label8), 4282754 (K64, no label); Inception
+**4282767**, contrast 4282768, gallery **4282769**
+(`galleries/2026-11-19_celeba32-grey_combined-gains_early16x16-from-t4.49_8-cluster-label_corrector_K64-and-K784_noise-start_quench1/`).
+All with 16x16 patches from t = 4.49 and 8x8 from t = 2.22; 2 corrector steps per slice where marked; quench 1.
+
+| model | plain | 2 corrector steps |
+|---|---|---|
+| K64, both patch sets from t = 2.22 (reference) | 24.61 | |
+| K64 + early 16x16 | 21.72 | **20.73** |
+| K64 + early 16x16 + label8 | 21.35 | **20.71** |
+| K784 + early 16x16 + label8 | 21.06 | **20.57** (new best at 32x32) |
+| K1536 + 8x8 + 16x16 (previous best, patches from t = 2.22) | | 21.50 |
+
+- **The gains do not add up fully.** The corrector gives -1.0 on K64 + early 16x16, but on top of it the label adds
+  nothing (20.73 -> 20.71) and K784 instead of K64 only -0.14 (within the spread of 0.2-0.5). The early 16x16 set,
+  the label and the corrector all fix partly the same thing: the contrast loss during the global stage.
+- **The small K64 model with corrector (20.73, 1.23 M couplings per slice) beats the previous best K1536 with
+  corrector (21.50).**
+- Contrast: corrector + early 16x16 reach image std 0.216-0.217 and 9.7-9.9% dark pixels (real 0.229 / 12.7%;
+  previous best 0.200 / 7.5%).
+- Gallery: the corrector rows draw different faces (the corrector uses its own noise), clean and well lit, fewer
+  sunglasses-like dark blotches than the plain rows; K64 and K784 with corrector look alike.
+
+### Time-basis compression, round 1: FIDs (2026-11-20 02:15; the user: "explore different time knotting methods")
+
+- The first Inception job 4284220 never ran: the rank-2 sampling 4284218 saved its samples (1464 s) but its quench
+  ran into the 2 h limit (the other quenches take 24-29 s). A quench-only retry (**4284715**, 40 min) hung the same
+  way, so it is reproducible: the rank-2 t = 0 energy makes the quench ODE stiff (the adaptive solver stalls). Not
+  chased; rank 2 is scored without quench. Inception redone without it: **4284716**, gallery **4284717** (same
+  folder as above).
+
+| compression | stored parameters (original 83.2 M) | Inception FID (quench 1) |
+|---|---|---|
+| none: 100 slices | 83.2 M | **21.72** |
+| knots 34 (every 3rd slice) | 42.7 M | **21.71** |
+| knots 17 | 21.4 M | 21.87 |
+| knots 9 | 11.3 M | **22.35** |
+| knots 5 | 6.3 M | 25.03 |
+| rank 16 | 21.4 M | 21.87 |
+| rank 8 | 11.3 M | **22.20** |
+| rank 4 | 6.3 M | 26.08 |
+| rank 2 | 3.8 M | (quench hangs; 100.2 without quench) |
+| rank 1 | 2.5 M | 67.78 |
+
+- **The time dependence compresses about 7x at almost no cost:** 9 stored sets (knots 9 or rank 8, 11.3 M stored)
+  cost 0.5-0.6 FID; 17 sets cost 0.15; 34 sets nothing. Below 9 sets the FID rises fast (5 sets +3.3 to +4.4).
+- **Knots do as well as low rank in FID, although their reconstruction error is far larger** (wl / bl errors > 1
+  with knots; see the dry run). At 5 sets knots are better (25.03 vs 26.08). The reconstruction error is not the
+  right measure: the per-pixel units' slice-to-slice jitter does not matter for the samples. For hardware, knots are
+  simpler (B coupling sets switched in turn with linear crossfades, no control signals).
+- Gallery: knots 34 / 17 / 9 and rank 16 / 8 are hard to tell from the original (same face per column, same
+  detail); knots 5 softer and a little blotchy; rank 4 grainy; rank 1 changes the faces (darker, grainy, other
+  identities); rank 2 unquenched shows the usual pixel speckle over intact faces.
+- Next, round 2 (submitted 02:35): where to put the knots (equal steps of the parameters' path length instead of
+  even in t), whether only the coupling matrices need few knots, whether the per-pixel units need time at all, and
+  knots 9 on the smaller K16 and 16-state models.
+
+#### Design proposal (not implemented, not run): training with the knots built in (2026-11-20 02:50)
+
+Post-hoc knots lose 0.6 FID at 9 knots and 3.3 at 5 because the kept slices were trained to be good at their own t,
+not to be good as the end points of a crossfade. Training the knots directly should recover most of that.
+- **Parametrisation.** Knot times t_0 = 5 > t_1 > ... > t_B = 0, one parameter set theta_j per knot; on the slice
+  grid theta(t_k) = (1 - w_k) theta_j + w_k theta_{j+1} for t_j >= t_k >= t_{j+1} (exactly what the sampler sees
+  after compress_history.py). Patch sets keep their own switch-on slice as their first knot.
+- **Sequential training, as now.** Training already runs t = 5 -> 0 with every slice warm-started from the previous
+  one. With knots: when the walk enters the interval (t_j, t_{j+1}], theta_j is frozen (already trained) and only
+  theta_{j+1} is trained, on the sum of the per-slice ISM losses of all slices in the interval at their interpolated
+  parameters: grad theta_{j+1} = sum_k w_k grad L_k(theta(t_k)). Same number of slice visits and noise draws as now;
+  only B + 1 parameter sets are kept.
+- **On device:** the slice statistics are already accumulated per slice; with knots each slice's update is scaled by
+  w_k and applied to the next knot's couplings, i.e. the hardware holds two coupling sets and crossfades between them.
+- **Cheaper test first:** fine-tune after compression (start from the post-hoc knots and run the knot training above
+  for a fraction of the steps). If that brings 5 knots to <= 22.4, the full version is worth implementing.
+- Per-slice size and time compression multiply: K16 (1.13 M per slice) with 9 knots stores about 10 M, the 16-state
+  model (0.68 M) about 6 M (both in round 2).
+
+### CelebA-64: early 32x32 patches (results 2026-11-20 03:10)
+
+Pipelines 4282763 (no label, 7.5 h) and 4282765 (label8, 7.8 h); quench 4282764 / 4282766; Inception **4282771**,
+contrast 4282772, gallery **4282773**
+(`galleries/2026-11-19_celeba64-grey_K64+patch32x32-from-t4.49+patch16x16-from-t2.22_with-and-without-label8_noise-start_quench1/`).
+K64 + 32x32 patches every 8 px from t = 4.49 + 16x16 every 4 px from t = 2.22 (the 32x32 recipe scaled by 2).
+
+| model (64x64, quench 1) | Inception FID | image std | dark pixels |
+|---|---|---|---|
+| real test images (floor 5.91) | | 0.234 | 13.5% |
+| K1536 + 16x16 | 58.46 | 0.180 | 3.3% |
+| K64 + 16x16 + 32x32 from t = 2.22 + label8 (previous best) | 57.77 | 0.177 | 3.2% |
+| **K64 + 32x32 from t = 4.49 + 16x16 from t = 2.22** | **49.21** | **0.201** | **6.5%** |
+| same + label8 | 49.25 | 0.200 | 6.7% |
+
+- **Switching the coarse patches on early gives -8.6 FID at 64x64** (-2.9 at 32x32): the biggest single gain at
+  64x64 so far, and with the small K64 global unit. Contrast recovers about half the gap (std 0.177 -> 0.201 of
+  0.234; dark pixels 3.2% -> 6.5% of 13.5%).
+- **The label adds nothing on top** (49.25 vs 49.21), as at 32x32 (where it added 0.4 without corrector, 0 with).
+- Gallery: crisper faces with darker hair and backgrounds, more varied lighting, fewer washed-out grey faces than the
+  previous best; some faces still distorted (eyes, mouths).
+- Next candidates at 64x64: the corrector on this model (at 32x32 -1.0), and switching the 16x16 set on earlier too.
+- **Submitted 03:25:** corrector (2 steps, snr 0.16) on K64 + early 32x32 at 64x64: sampling + quench **4285143**,
+  Inception **4285144** (about 2.6 h + 10 min).
+- **Overview figure update (03:20):** `plot_inception_fid.py` gets the early-patch rows (32x32: K64 + early 16x16,
+  with corrector, K784 + label + corrector; 64x64: K64 + early 32x32, with label). Their as-sampled FIDs were never
+  scored, so Inception **4285111** (32x32) and **4285112** (64x64) score raw and quenched sets; plot **4285132**
+  after them. Footnote: "early" = coarsest set from t = 4.49. Backup `plot_inception_fid_pre_early.py`.
+
+### Time-basis compression, round 2 (results 2026-11-20 03:20)
+
+Compression + tests **4284925** (2 min; PASSED: new mode `knotsarc:B` reproduces the run exactly at B = all slices,
+puts knots where a synthetic history moves, keeps a switched-on set zero before its switch-on; `svd:0` = time mean;
+`knots:all` unchanged). Sampling 4284926-4284933; Inception **4284934**; gallery **4284935**
+(`galleries/2026-11-20_celeba32-grey_K64+early16x16_time-basis-round2_even-vs-arclength-knots_small-models_noise-start_quench1/`).
+
+| variant (K64 + early 16x16 unless noted) | stored | Inception FID (quench 1) |
+|---|---|---|
+| original, 100 slices | 83.2 M | 21.72 |
+| knots 9, even in t | 11.3 M | 22.35 |
+| knots 7, even | 8.8 M | 23.31 |
+| knots 5, even | 6.3 M | 25.03 |
+| knots 9 at equal path length (per group) | 11.3 M | **35.54** |
+| knots 5 at equal path length (per group) | 6.3 M | **73.44** |
+| knots 3 at equal path length (per group) | 3.8 M | 46.39 |
+| knots 5 for the six coupling matrices only, the rest (theta, b, wl, bl, bp, bp2) at all 100 slices | 8.8 M | **28.37** |
+| knots 9, per-pixel units (wl, bl) constant at their time mean | 11.1 M | **22.03** |
+| K16, 100 slices | 74.6 M | 22.11 |
+| K16, knots 9 | 10.3 M | 23.09 |
+| 16 states per patch unit, 100 slices | 46.3 M | 25.75 |
+| 16 states, knots 9 | 6.3 M | **25.80** |
+
+- **Placing the knots by path length per group fails badly** (35.5 / 73.4 / 46.4; not even monotone in B), although
+  its reconstruction errors are lower than with even knots. Gallery: grey, low-contrast faces with blotchy
+  patch-sized tiles. With per-group path lengths each group gets its own knot times (e.g. at 5 knots W at t = 3.64
+  / 2.68 / 1.52, b at 2.22 / 0.96 / 0.30, wl at 2.63 / 0.20 / 0.05), so at most t the sampler combines couplings
+  interpolated between one pair of slices with biases interpolated between another.
+- **The same with exact biases:** compressing only the coupling matrices (5 knots) and keeping theta, b, wl, bl, bp,
+  bp2 exact is worse (28.37) than compressing everything at the same 5 knots (25.03).
+- **Reading: the parameters of a slice are co-adapted** (e.g. the biases compensate the couplings' mean field); a
+  compression must move all groups of a set together. Even knots did that by accident (every group of a set has the
+  same active range, hence the same knots). This also explains why per-group low rank (independent errors per
+  group) was no better than knots although its reconstruction errors were much lower.
+- **The per-pixel units need no time dependence:** wl, bl fixed at their time mean improve knots 9 (22.35 -> 22.03).
+  Their slice-to-slice jitter (half the pixels flip sign per slice) is noise that averaging removes.
+- **The 16-state model compresses without loss** (25.75 -> 25.80 at 9 knots, 6.3 M stored): about the same as
+  the 32-state model at 5 knots (25.03 at 6.3 M). K16 gains nothing over K64 when compressed (23.09 vs 22.35).
+- Next (round 3): knots shared within each set (global / 16x16 / 8x8) placed by the set's joint path length, and
+  one knot schedule for all sets; even knots with constant wl, bl at 5 and 7.
+- **Overview figure updated (03:35; `out/latent_physical_SGM/figures/inception_fid_mnist_fashion.png/.pdf`, plot
+  4285132, footnote line split in 4285195).** As sampled -> quenched (Inception 4285111 / 4285112): 32x32 K64 +
+  early 16x16 86.3 -> 21.72; with 2 corrector steps 72.3 -> 20.73; K784 + early 16x16 + label + corrector 69.8 ->
+  **20.57** (bottom row of the CelebA-32 panel); 64x64 K64 + early 32x32 120.0 -> **49.21**, with label 116.1 ->
+  49.25 (bottom two rows of the CelebA-64 panel, 8-9 below the previous rows).
+
+### Time-basis compression, round 3: one knot schedule per set (submitted 03:30)
+
+- **Code: `compress_history.py --knot-share {group,set,all}`** (backup `compress_history_v3.py`): `set` chooses the
+  kept slices once per parameter set (global = theta, W, b, wl, bl, Q, [Bc, hc]; each patch set = Wp / bp / Qp /
+  Bpc with its suffix), for `knotsarc` from the set's joint path length (sum over its groups of the squared step
+  lengths, switch-on steps excluded); `all` one schedule for every group (each patch set keeps its switch-on slice
+  plus the schedule's later knots). Groups with a `--group-modes` override keep their own mode. Default `group` =
+  round 1-2 behaviour.
+- Job **4285185**: tests (default reproduces round-2 knotsarc:5 and knots:5 bitwise; set / all at full count
+  reproduce the run exactly; within each set all groups get the same knot times) and 7 variants of the K64 run:
+  knotsarc 5 / 9 shared per set, even knots 5 / 9 with one schedule for all, even knots 5 / 7 with wl, bl constant,
+  knotsarc 5 shared per set with wl, bl constant. Sampling 4285186-4285192, Inception **4285193**, gallery
+  **4285194**. 24 compressed variants on disk after this round (limit 30; disk 71%).
+- **Round 3 results (04:15; tests PASSED in 4285185; Inception 4285193, gallery 4285194
+  `galleries/2026-11-20_celeba32-grey_K64+early16x16_time-basis-round3_knots-shared-per-set-or-for-all_per-pixel-units-constant_noise-start_quench1/`):**
+
+  | variant | stored | Inception FID (quench 1) |
+  |---|---|---|
+  | original, 100 slices | 83.2 M | 21.72 |
+  | even knots per set 9 / 5 (rounds 1-2) | 11.3 / 6.3 M | 22.35 / 25.03 |
+  | path-length knots per group 9 / 5 (round 2) | 11.3 / 6.3 M | 35.54 / 73.44 |
+  | **path-length knots shared per set** 9 / 5 | 11.3 / 6.3 M | 25.88 / 31.70 |
+  | path-length knots shared per set 5, wl / bl constant | 6.1 M | 31.93 |
+  | even knots, one schedule for all sets 9 / 5 (8x8 set gets only 5 / 3 knots) | 8.5 / 4.9 M | 25.45 / 32.04 |
+  | **even knots, wl / bl constant** 9 / 7 / 5 | 11.1 / 8.6 / 6.1 M | **22.03 / 22.75** / 25.51 |
+
+  - **Sharing the knots within a set rescues the path-length placement** (35.5 -> 25.9 at 9, 73.4 -> 31.7 at 5):
+    the co-adaptation reading holds. But it is still worse than even knots by 3.5-6.7.
+  - **Why even beats path length:** the joint path length puts the knots at the switch-on slices (the global set
+    gets knots at t = 4.49 and 2.22: it jumps when a patch set switches on) and densely at small t (patch sets:
+    0.35 / 0.15 / 0.05), leaving t ~ 1-3.5 with few knots. The parameters move most at small t, but there the
+    errors hardly matter (the quench at the end relaxes the sample under the t = 0 energy anyway), while the face is
+    shaped at t ~ 2-4 (the global stage and the early 16x16 set). Knots belong where errors cost samples, not where
+    parameters move.
+  - One schedule for all sets is worse, but confounded: it gives the 8x8 set fewer knots (and wastes one in the
+    16x16 set: knots at 4.49 and 4.39).
+  - Constant wl / bl: 9 knots 22.35 -> 22.03, 7 knots 23.31 -> 22.75, 5 knots 25.03 -> 25.51 (spread 0.2-0.4): no
+    loss at 7-9 knots; keep them constant (one fewer time-dependent group, 2 k numbers instead of 2 k per knot).
+  - **Best so far: even knots per set with wl / bl constant: 9 knots 22.03 (11.1 M stored, 7.5x smaller), 7 knots
+    22.75 (8.6 M, 9.7x).**
+- Next (round 4, 04:20): unequal knot budgets per set (the global set is cheap: 0.15 M per knot; 16x16: 0.41 M;
+  8x8: 0.70 M): global 17 + patches 5; global 5 + patches 9; 16x16 9 + 8x8 5; 16x16 5 + 8x8 9 (wl / bl constant).
+  - Gallery round 3: the worse variants (one schedule for all, path length per set) are visibly greyer, lower in
+    contrast, with the same faces per column; even knots with wl / bl constant at 9 and 7 keep the original's
+    contrast. So too few knots at t ~ 2-4 cost contrast, the same deficit the early 16x16 set had fixed.
+- Round 4 submitted 04:25: compression **4285308**, sampling 4285309-4285312, Inception **4285313**, gallery
+  **4285314** (`galleries/2026-11-20_celeba32-grey_K64+early16x16_time-basis-round4_unequal-knot-budgets-per-set_per-pixel-units-constant_noise-start_quench1/`).
+  28 compressed variants after this round (limit 30).
+- **Round 4 results (05:10; Inception 4285313, gallery 4285314):** even knots, wl / bl constant, knots per set
+  (global = theta, W, b, Q / 16x16 set / 8x8 set):
+
+  | knots global / 16x16 / 8x8 | stored | Inception FID (quench 1) |
+  |---|---|---|
+  | 100 slices (original) | 83.2 M | 21.72 |
+  | 9 / 9 / 9 | 11.1 M | 22.03 |
+  | **5 / 9 / 9** | **10.7 M** | **21.67** |
+  | 7 / 7 / 7 | 8.6 M | 22.75 |
+  | 9 / 9 / 5 | 8.5 M | 23.83 |
+  | 9 / 5 / 9 | 9.7 M | 26.41 |
+  | 5 / 5 / 5 | 6.1 M | 25.51 |
+  | 17 / 5 / 5 | 8.0 M | **29.77** |
+
+  - **The global set needs only 5 knots:** 5 / 9 / 9 equals the original (21.67 vs 21.72) at 7.8x fewer stored
+    numbers. More global knots do not help and can hurt: 17 / 5 / 5 is far worse than 5 / 5 / 5 (29.77 vs 25.51).
+    The global set's fine time structure is co-adapted with the patch sets' fine structure; once the patches are
+    smoothed, a detailed global history no longer matches them. Matched (or coarser) resolution is better.
+  - **Of the patch sets, the early 16x16 set needs the knots:** 16x16 at 5 costs +4.4 (26.41), 8x8 at 5 +1.8
+    (23.83). The 16x16 set acts at t = 4.49-2.2, where the faces are shaped.
+- **Round 5 submitted 05:15** (last 2 variants; 30 in total): (a) the global set as a linear ramp (2 knots: t = 5
+  and 0) with patches at 9, 32x32; (b) the 5 / 9 / 9 recipe unchanged on the 64x64 early-32x32 model (49.21).
+  Compression **4285406**; sampling 4285407 (32x32) / 4285408 (64x64, ~2.5 h); Inception **4285409** / **4285410**;
+  galleries 4285411 / 4285412.
+  - Gallery round 4: 5 / 9 / 9 cannot be told from the original (same faces, same contrast); 17 / 5 / 5 and
+    9 / 5 / 9 are greyer and flatter, 9 / 9 / 5 in between. Again, the losses show as lost contrast.
+- **64x64 corrector 4285143 failed (03:20):** out of host memory at 48 G after 3 min (64x64 sampling and quench need
+  ~55-60 G: the quench-only job 4282764 peaked at 53 G of 96 G). Resubmitted with 96 G: **4285413**; Inception
+  4285144 now waits on it. The compressed 64x64 sampling 4285408 raised to 96 G before it started.
+- **Round 5, 32x32 (06:00; Inception 4285409, gallery 4285411
+  `galleries/2026-11-20_celeba32-grey_K64+early16x16_time-basis-round5_global-set-5-or-2-knots_patch-sets-9_noise-start_quench1/`):**
+  the global set as a linear ramp (2 knots, t = 5 and 0; patches 9; 10.3 M stored) fails completely: **241.2**
+  (5 knots: 21.67). Gallery: every sample is the same saturated black-and-white face silhouette (white face, black
+  hair outline), the template without contrast control. The global set's history is strongly nonlinear in t; it
+  needs 3-5 knots (3 not tested), 5 suffice.
+- **Round 5, 64x64, and the 64x64 corrector (07:50; Inception 4285410 and 4285144):** both on CelebA-64 K64 +
+  32x32 from t = 4.49 + 16x16 from t = 2.22 (100 slices: 49.21).
+
+  | 64x64 variant | stored | Inception FID train (sd) | FID test | KID x1e3 |
+  |---|---|---|---|---|
+  | 100 slices, quench 1 | 331.8 M (3.32 M / slice) | 49.21 (0.61) | 48.10 | 42.8 |
+  | **knots 5 / 9 / 9, wl / bl constant, quench 1** | **42.7 M** (0.129) | **47.99** (0.42) | 47.21 | 41.8 |
+  | 100 slices, 2 corrector steps (snr 0.16), no quench | 331.8 M | 98.88 (0.79) | 100.03 | 127.6 |
+  | **100 slices, 2 corrector steps, quench 1** | 331.8 M | **43.10** (0.33) | 41.95 | 32.8 |
+
+  - **The 32x32 compression recipe carries over to 64x64 unchanged and even helps:** 7.8x fewer stored numbers,
+    FID 49.21 -> 47.99 (2 sd). Knots: global set at t = 5.00 / 3.74 / 2.47 / 1.26 / 0; 32x32 set at 9 even
+    knots from t = 4.49; 16x16 set at 9 from t = 2.22. Relative reconstruction errors are larger than at 32x32
+    (W 0.22, Q 0.27) and still cost nothing, so the slice-to-slice detail of the global set is noise from training.
+  - **The corrector gives -6.1 at 64x64** (49.21 -> 43.10, new best at 64x64); at 32x32 it gave -1.0
+    (21.72 -> 20.73). Without the quench it doubles the FID (the Langevin noise of the last step stays in the
+    image); the quench removes it.
+  - Not yet run: corrector on the compressed 64x64 history (expected ~42-43, at 42.7 M stored).
+  - The gallery 4285412 ran out of memory at 16 G (CPU wrapper default). Resubmitted with 48 G as **4285857**,
+    with the two corrector rows added:
+    `galleries/2026-11-20_celeba64-grey_K64+early32x32_time-basis-5-9-9-knots_and_2-corrector-steps_noise-start_quench1/`.
+- **Submitted 07:55: corrector on the compressed 5 / 9 / 9 histories** (both gains together, no new compressed
+  variant): sampling 32x32 **4285859**, 64x64 **4285860** (96 G, ~2.7 h); Inception **4285861** / **4285862**
+  (100 slices vs knots, each with and without corrector); galleries **4285863** / **4285864**
+  (`galleries/2026-11-20_celeba{32,64}-grey_..._time-basis-5-9-9-knots_with-and-without-2-corrector-steps_noise-start_quench1/`).
+- **Overview figure (08:11, job 4285865):** the 64x64 panel gets "K64 + early 32x32 + 16x16, 2 corrector steps"
+  (98.9 -> 43.1, best at 64x64). `out/latent_physical_SGM/figures/inception_fid_mnist_fashion.png/.pdf`, checked.
+- **Gallery 4285857 (08:20, 22 G peak;
+  `galleries/2026-11-20_celeba64-grey_K64+early32x32_time-basis-5-9-9-knots_and_2-corrector-steps_noise-start_quench1/`):**
+  the compressed 5 / 9 / 9 row shows the same faces as the 100-slice row, column by column, at the same contrast.
+  Both are mostly bright, smiling, light-haired faces on light backgrounds. The corrector changes the population:
+  after the quench there are many more men, dark hair, dark backgrounds, sunglasses, so the spread of brightness is
+  much closer to the real row (that is where its -6 FID comes from); some faces are distorted. Without the quench
+  the corrector rows carry visible grain and are darker. (The gallery title is cut at the left edge; the full text
+  is in README.txt.)
+
+### Morning summary, 2026-11-20 (overnight 2026-11-19/20)
+
+All CelebA numbers: Inception FID vs train, n = 2000, quench 1 (floor 6.43 at 32x32, 5.91 at 64x64).
+
+**1. Best models now**
+
+| | model | FID | was (evening 11-19) |
+|---|---|---|---|
+| CelebA-32 | K784 + 16x16 from t = 4.49 + 8x8 from t = 2.22 + 8-cluster label, 2 corrector steps | **20.57** | 21.50 (K1536 + corrector) |
+| CelebA-32 | K64 + early 16x16 + 8x8, 2 corrector steps (1.23 M couplings per slice) | 20.73 | |
+| CelebA-64 | **K64 + 32x32 from t = 4.49 + 16x16 from t = 2.22, 2 corrector steps** | **43.10** | 57.8 |
+| CelebA-64 | the same without corrector | 49.21 | |
+
+The early coarse set is the big step at 64x64 (57.8 -> 49.2; contrast 0.177 -> 0.201, real 0.234), and the
+corrector adds much more there than at 32x32 (-6.1 vs -1.0): its samples are far more varied (men, dark hair, dark
+backgrounds), closer to the real brightness spread. The 8-cluster label adds nothing once the coarse set is
+early. The overview figure has all of these.
+
+**2. Fewer parameters per slice: no free lunch.** Retrained variants of K64 + early 16x16 (21.72): only the global
+unit shrinks cheaply (K16: 22.11). Every cut in the patch units costs 4-25 FID (16 states 25.75, no patch Q 29.85,
+sparser patches 28.9-33.4, everything reduced 66). The patch units are the model.
+
+**3. Fewer parameters in time: 7.8x for free.** `compress_history.py` (post-hoc, no retraining; 30 variants in 5
+rounds) keeps a few slices per parameter set ("knots") and interpolates linearly in t, as the sampler already does.
+- Recipe: even knots in t, **global set (theta, W, b, Q) 5 knots, each patch set 9, per-pixel units wl / bl
+  constant** (`--mode knots:9 --group-modes theta=knots:5,W=knots:5,b=knots:5,Q=knots:5,wl=svd:0,bl=svd:0`).
+- CelebA-32: 83.2 M -> **10.7 M stored, 21.72 -> 21.67**. CelebA-64, recipe unchanged: 331.8 M -> **42.7 M,
+  49.21 -> 47.99**. The galleries cannot tell the compressed models from the originals.
+- Rules: (a) the groups of a set must share their knots (the parameters of a slice are co-adapted; per-group
+  placement gives 35-73); (b) even spacing in t beats placement by path length (the parameters move most at small
+  t, where the quench repairs errors; faces and contrast form at t ~ 2-4); (c) the global set needs 3-5 knots, 2
+  (a linear ramp) collapses (241), more global knots with coarse patches hurt; (d) the early coarse set needs the most
+  knots; (e) the reconstruction error does not predict the FID: losses show up as lost contrast.
+- Hardware reading: per patch set a handful of coupling sets crossfaded linearly in t; the per-pixel units fixed.
+
+**4. Running** (submitted 07:55): the corrector on the compressed 5 / 9 / 9 models, 32x32 (4285859 -> Inception
+4285861) and 64x64 (4285860 -> 4285862, ~2.7 h, ready ~11:00). If it holds, the best 64x64 model stores 42.7 M.
+
+**5. Suggested next steps**
+- Train with the knots built in (design: "Time-basis compression, round 1"): the slices between knots share
+  parameters during training, so the knots are fitted rather than picked; this could also allow fewer knots.
+- The global set at 3 knots (not tested; 5 is safe, 2 fails).
+- At 64x64: an earlier 16x16 set (the coarsest set early was the big gain twice).
+- Not pursued: shrinking the patch units per slice (every cut tested costs >= 4 FID).

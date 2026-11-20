@@ -190,6 +190,10 @@ def parse():
                          "see --proto-init); potts: one unit with K states (K even)")
     ap.add_argument("--quad", action="store_true",
                     help="hidden units also couple to the squared pixels, a_j = b_j + W_j.x + Q_j.x^2 (Q starts at 0)")
+    ap.add_argument("--no-patch-quad", action="store_true",
+                    help="with --quad and --patch (2026-11-19): the patch units couple to the pixels linearly only (no Qp, "
+                         "half the patch couplings); the global unit keeps Q. Recorded in config.json as patch_quad: false "
+                         "only when set")
     ap.add_argument("--local", action="store_true",
                     help="add one Ising hidden unit per pixel, coupled only to that pixel (params wl, bl)")
     ap.add_argument("--visible", choices=["sextic", "quartic"], default="sextic",
@@ -963,6 +967,9 @@ def init_carry(params, adam, key):
 
 def main():
     args = parse()
+    pquad = args.quad and not args.no_patch_quad   # the patch units' squared-pixel couplings (--no-patch-quad: none)
+    if args.no_patch_quad and not (args.quad and args.patch):
+        raise ValueError("--no-patch-quad needs --quad and --patch")
     if args.proto_init is None:              # resolved here, so that every invocation from before keeps its value
         args.proto_init = "pooled" if args.hidden == "ising" and args.K > 1 else "perclass"
     fisher = args.hidden == "ising" and args.K == 1 and args.proto_init == "perclass"   # the original K = 1 path
@@ -1122,7 +1129,7 @@ def main():
         kw, kb, kq = lm.PATCH_SETS[nx - 1]
         xsets.append({"n": nx, "spec": px, "kw": kw, "kb": kb, "kq": kq, "name": f"patch{nx}",
                       "geom": lm.PatchGeometry(lm.problem_geometry(args.problem)[0], px[0], px[1])})
-    xkeys = tuple(g for x in xsets for g in (x["kw"], x["kb"]) + ((x["kq"],) if args.quad else ()))
+    xkeys = tuple(g for x in xsets for g in (x["kw"], x["kb"]) + ((x["kq"],) if pquad else ()))
     if patch is not None:
         if (args.hidden_rule != "exact" or args.hidden_norm not in ("element", "occupancy")
                 or args.cls != "none"):
@@ -1205,6 +1212,8 @@ def main():
         config["patch_occupancy"] = True
     if args.data_noise is not None:              # --data-noise only: other configs as before
         config["data_noise"] = float(args.data_noise)
+    if args.no_patch_quad:                       # --no-patch-quad only: other configs as before
+        config["patch_quad"] = False
     if K_on2 != K_on:                            # --patch2-on-slice only when it differs: other configs as before
         config["patch2_on_slice"] = K_on2
     if args.cond:                                # --cond only: other configs as before
@@ -1255,6 +1264,8 @@ def main():
             diff["patch2_on_slice"] = (old.get("patch2_on_slice", old.get("patch_on_slice", 0)), K_on2)
         if (old.get("cond", 0), old.get("cond_on", "")) != (int(args.cond), ",".join(cond_on)):   # both directions
             diff["cond"] = ((old.get("cond", 0), old.get("cond_on", "")), (int(args.cond), ",".join(cond_on)))
+        if bool(old.get("patch_quad", True)) != (not args.no_patch_quad):   # both directions
+            diff["patch_quad"] = (old.get("patch_quad", True), not args.no_patch_quad)
         if old.get("data_noise") != (None if args.data_noise is None else float(args.data_noise)):   # both directions
             diff["data_noise"] = (old.get("data_noise"), args.data_noise)
         if bool(old.get("patch_occupancy", False)) != bool(args.patch_occupancy):   # both directions
@@ -1292,7 +1303,7 @@ def main():
                     else "") if args.harmonic else "")
               + (f"; patch units {lm.patch_spec_str(patch)}: P {geom.P}, d {geom.d}, S {patch[2]}, coverage "
                  f"{int(geom.coverage.min())}-{int(geom.coverage.max())} (mean {geom.coverage.mean():.2f}), W+Q couplings "
-                 f"{geom.P * patch[2] * geom.d * (2 if args.quad else 1):,}, initial scale {lam_p:g}, on slice {K_on}, lr "
+                 f"{geom.P * patch[2] * geom.d * (2 if pquad else 1):,}, initial scale {lam_p:g}, on slice {K_on}, lr "
                  f"scale {args.patch_lr_scale:g}" if patch is not None else ""))
 
     # ---- data -------------------------------------------------------------------------------------------------
@@ -1814,13 +1825,13 @@ def main():
             params.update(V=jnp.asarray(V0), c=jnp.asarray(c0))
         if patch is not None and K_on == 0:      # patch units: LAM x the reference at slice 0's t
             params.update(Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
-            if args.quad:
+            if pquad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
             for x in xsets:                      # --patch2 / --patch3: after the first set (PATCH_SETS order)
                 if x["on"] > 0:                  # --patch2-on-slice: switched on later
                     continue
                 params.update({x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
-                if args.quad:
+                if pquad:
                     params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
     else:
         prev = np.load(os.path.join(slice_dir, f"slice_{done - 1:03d}.npz"))
@@ -1834,7 +1845,7 @@ def main():
                 raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {R_h} harmonic modes to continue from")
             params.update(V=jnp.asarray(prev["V"]), c=jnp.asarray(prev["c"]))
         if patch is not None and done - 1 >= K_on:   # patch units trained up to slice done - 1 (before K_on: none)
-            need = ("Wp", "bp") + (("Qp",) if args.quad else ())
+            need = ("Wp", "bp") + (("Qp",) if pquad else ())
             shp = {"Wp": (geom.P, patch[2], geom.d), "bp": (geom.P, patch[2]), "Qp": (geom.P, patch[2], geom.d)}
             if any(g not in prev.files or prev[g].shape != shp[g] for g in need):
                 raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {lm.patch_spec_str(patch)} patch units to "
@@ -1844,7 +1855,7 @@ def main():
                 if done - 1 < x["on"]:           # --patch2-on-slice: not switched on yet
                     continue
                 gx, Sx = x["geom"], x["spec"][2]
-                need_x = (x["kw"], x["kb"]) + ((x["kq"],) if args.quad else ())
+                need_x = (x["kw"], x["kb"]) + ((x["kq"],) if pquad else ())
                 shp_x = {x["kw"]: (gx.P, Sx, gx.d), x["kb"]: (gx.P, Sx), x["kq"]: (gx.P, Sx, gx.d)}
                 if any(g not in prev.files or prev[g].shape != shp_x[g] for g in need_x):
                     raise RuntimeError(f"slice {done - 1} of {slice_dir} has no {lm.patch_spec_str(x['spec'])} "
@@ -1911,13 +1922,13 @@ def main():
                 params["V"], params["c"] = jnp.asarray(V_rk), jnp.asarray(c_rk)
         if patch is not None and K_on > 0 and k == K_on:   # --patch-on-slice: switched on at LAM x the reference at t_K
             params = dict(params, Wp=jnp.asarray(Wp0), bp=jnp.asarray(bp0))
-            if args.quad:
+            if pquad:
                 params["Qp"] = jnp.zeros_like(params["Wp"])
             for x in xsets:                      # --patch2 / --patch3: switched on together with the first set
                 if x["on"] != K_on:              # --patch2-on-slice: later, below
                     continue
                 params.update({x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
-                if args.quad:
+                if pquad:
                     params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
             log(logf, f"slice {k}: patch units {lm.patch_spec_str(patch)} switched on at {lam_p:g} x the reference at "
                       f"t = {t_curr:.4f}" + ("; --hidden-fixed: held at the full reference from now on"
@@ -1926,7 +1937,7 @@ def main():
         for x in xsets:                          # --patch2-on-slice (2026-11-19): a later switch-on of the second set
             if x["on"] != K_on and k == x["on"]:
                 params = dict(params, **{x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])})
-                if args.quad:
+                if pquad:
                     params[x["kq"]] = jnp.zeros_like(params[x["kw"]])
                 log(logf, f"slice {k}: patch units {x['n']} {lm.patch_spec_str(x['spec'])} switched on at {lam_p:g} x "
                           f"the reference at t = {t_curr:.4f}")
@@ -2178,7 +2189,7 @@ def main():
             extra.update(Wp=Wpn, bp=bpn, **({"Qp": Qpn} if Qpn is not None else {}), **arr_p)
         elif patch is not None:                  # --patch-on-slice, before the switch-on: zero arrays, no record keys
             extra.update(Wp=np.zeros((geom.P, patch[2], geom.d)), bp=np.zeros((geom.P, patch[2])),
-                         **({"Qp": np.zeros((geom.P, patch[2], geom.d))} if args.quad else {}))
+                         **({"Qp": np.zeros((geom.P, patch[2], geom.d))} if pquad else {}))
         for x in xsets:                          # --patch2 / --patch3: the same diagnostics, record keys patch<n>_*
             gx, Sx, pre = x["geom"], x["spec"][2], x["name"] + "_"
             ren = lambda q: pre + q[len("patch_"):] if q.startswith("patch_") else pre + q     # noqa: E731
@@ -2192,7 +2203,7 @@ def main():
                              **{ren(q): v for q, v in arr_x.items()})
             else:                                # before the switch-on: zero arrays
                 extra.update({x["kw"]: np.zeros((gx.P, Sx, gx.d)), x["kb"]: np.zeros((gx.P, Sx))},
-                             **({x["kq"]: np.zeros((gx.P, Sx, gx.d))} if args.quad else {}))
+                             **({x["kq"]: np.zeros((gx.P, Sx, gx.d))} if pquad else {}))
         for g in ckeys:                          # --cond: the label parameters (zeros before a patch switch-on)
             extra[g] = np.asarray(params[g]) if g in params else np.zeros(cond_shapes[g])
         if ckeys:
@@ -2269,7 +2280,7 @@ def main():
     if n_slices == lm.N_TIME_STEPS and held is not None:      # --assemble memory: the same files (write_history)
         t_asm = time.time()
         shape = write_history(out_dir, slice_dir, n_slices, taus, args.local, args.quad and K > 0, held,
-                              harmonic=bool(R_h), patch=patch is not None, patch_quad=patch is not None and args.quad,
+                              harmonic=bool(R_h), patch=patch is not None, patch_quad=patch is not None and pquad,
                               extra_keys=xkeys + ckeys)
         with open(os.path.join(out_dir, "DONE"), "w") as f:
             f.write(time.strftime("%Y-%m-%d %H:%M:%S") + "\n")
@@ -2297,7 +2308,7 @@ def main():
             if patch is not None:
                 Wps.append(s["Wp"])
                 bps.append(s["bp"])
-                if args.quad:
+                if pquad:
                     Qps.append(s["Qp"])
         tmp = os.path.join(out_dir, "params_history.tmp.npy")
         np.save(tmp, np.stack(thetas))
@@ -2310,7 +2321,7 @@ def main():
             loc.update(V=np.stack(Vs), c=np.stack(cs))
         if patch is not None:                    # patch units: after every other member (write_history)
             loc.update(Wp=np.stack(Wps), bp=np.stack(bps))
-            if args.quad:
+            if pquad:
                 loc["Qp"] = np.stack(Qps)
         loc.update({g: np.stack(v) for g, v in p2.items()})   # --patch2 / --patch3: last (write_history)
         np.savez(tmp, W=np.stack(Ws), b=np.stack(bs), t=taus, **loc)
