@@ -5758,3 +5758,43 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
 - The global set at 3 knots (not tested; 5 is safe, 2 fails).
 - At 64x64: an earlier 16x16 set (the coarsest set early was the big gain twice).
 - Not pursued: shrinking the patch units per slice (every cut tested costs >= 4 FID).
+
+### Training directly at a few time knots (submitted 2026-11-20 ~09:00; the user: "just directly train at the fewer time steps")
+
+- **Code:** `train_latent.py --time-knots B|list`, backup `../latent_physical_SGM_pre_ising_patch/train_latent_pre_knots.py`.
+  - Only the knots' parameters exist; slice k between knots uses the linear crossfade, which is the sampler's own
+    interpolation.
+  - Slice 0 trains as before.
+  - Each interval (k_j, k_j+1]: P_j frozen; P_j+1 (all sets, started from P_j) trained jointly on the interval's slices.
+    100-step chunks at one slice each, shuffled cycles, the slice's learning rates, gradient through the crossfade;
+    total steps = the slices' usual sum; lr decay stretched over the interval; result = EMA.
+  - At a switch-on knot (10, 55) only the new patch set trains, alone.
+  - Slices saved as usual, so sampling and evaluation are unchanged. Resume restarts at the last knot.
+  - `compress_history.py --knot-slices` (backup `compress_history_v4.py`): the post-hoc counterpart at the same knots.
+- **Test job 4285924** must pass before anything trains:
+  - (0) knot placement;
+  - (1) old vs new code without the option, bitwise;
+  - (2) 100-slice knot run: slices = exact crossfades, switch-on knots;
+  - (3) killed-and-resumed run = uninterrupted, bitwise;
+  - (4) sampling.
+
+  The trainings wait on it with afterok: **if 4285924 failed, cancel 4285927 / 4285929 / 4285931**.
+- **Knots** (slice indices; 0 = t 5, 99 = t 0; switch-on slices fixed, the rest spread to minimise the largest gap):
+
+  | knots | slices | stored (approx.) |
+  |---|---|---|
+  | 9 | 0,10,21,32,44,55,70,84,99 | ~7.4 M |
+  | 6 | 0,10,32,55,77,99 | ~5.0 M |
+  | 5 | 0,10,32,55,99 | ~3.8 M; the 8x8 set a single linear ramp |
+
+  Stored for the 100-slice model: 83.2 M (21.72); post-hoc 5 / 9 / 9 recipe: 10.7 M (21.67).
+- **Jobs:**
+  - pipelines (train + 2000 samples + quench 1) **4285927** (9), **4285929** (6), **4285931** (5);
+  - post-hoc counterparts: compression **4285926** (tests itself first), sampling 4285928 / 4285930 / 4285932;
+  - Inception **4285934** and gallery **4285935** over whatever exists
+    (`galleries/2026-11-20_celeba32-grey_K64+early16x16_trained-at-time-knots-9-6-5_vs_posthoc-at-same-knots_noise-start_quench1/`).
+  - Run names: `celeba32g_K64_ema_..._patch16s4S32on10+patch8s2S32on55_knots{9,6,5}_seed1` and
+    `<100-slice run>_time-posthoc-knots_<slices>`.
+  - Scripts: scratchpad `compress_knots_counterpart.sh`, `eval_knots.sh`, `test_knots.sh`.
+- **Also still running:** the corrector on the compressed 5 / 9 / 9 models; Inception **4285861** (32x32) and
+  **4285862** (64x64, ~11:00).

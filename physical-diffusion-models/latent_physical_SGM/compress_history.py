@@ -156,6 +156,11 @@ def main():
                     help="(2026-11-20; knots:B / knotsarc:B) choose the kept slices per group (default, as before), "
                          "once per parameter set (global / patch sets; knotsarc on the set's joint path length), or "
                          "once for all groups; groups with a --group-modes override keep their own mode")
+    ap.add_argument("--knot-slices", default="",
+                    help="(2026-11-20) explicit kept slices for all groups, e.g. '0,10,21,32,44,55,70,84,99' (the "
+                         "knots of a train_latent --time-knots run, for the post-hoc counterpart); needs --mode "
+                         "knots:B (B unused); each group keeps those inside its active range plus its first and last "
+                         "active slice; groups with a --group-modes override keep their own mode")
     args = ap.parse_args()
     t0 = time.time()
     src = os.path.join(lm.OUT_ROOT, args.run)
@@ -165,9 +170,13 @@ def main():
     mkind, _, marg = args.mode.partition(":")
     if args.knot_share != "group" and (mkind not in ("knots", "knotsarc") or not marg.isdigit()):
         raise SystemExit("--knot-share set / all needs --mode knots:B or knotsarc:B")
+    if args.knot_slices and (mkind != "knots" or args.knot_share != "group"):
+        raise SystemExit("--knot-slices needs --mode knots:B and no --knot-share")
     tag = args.mode.replace(":", "") + "".join(f"_{g}-{m.replace(':', '')}" for g, m in sorted(gmodes.items()))
     if args.knot_share != "group":
         tag += f"_share-{args.knot_share}"
+    if args.knot_slices:
+        tag = "knotslices" + args.knot_slices.replace(",", "-") + tag[len(args.mode.replace(":", "")):]
     name = args.out_name or f"{args.run}_time-{tag}"
     dst = os.path.join(lm.OUT_ROOT, name)
     if not args.dry_run and os.path.exists(os.path.join(dst, "DONE")):
@@ -184,6 +193,10 @@ def main():
     arrays = {}
     groups = [("theta", th)] + [(g, hid[g]) for g in hid.files if g != "t"]
     shared = {}                                       # set -> kept absolute slice indices (--knot-share set / all)
+    if args.knot_slices:                              # --knot-slices: one explicit list for all groups
+        shared["all"] = np.array(sorted({int(v) for v in args.knot_slices.split(",")}))
+        lines.insert(1, "knot slices (explicit, all groups): " + " ".join(str(int(i)) for i in shared["all"])
+                        + "  (t = " + " ".join(f"{t[int(i)]:.2f}" for i in shared["all"]) + ")")
     if args.knot_share != "group":
         n = th.shape[0]
         d2, k0s = {}, {}                              # per set: squared step lengths (switch-on steps excluded)
@@ -211,6 +224,8 @@ def main():
     for g, a in groups:
         X = np.asarray(a, dtype=np.float64).reshape(a.shape[0], -1)
         sh = None if (g in gmodes or not shared) else shared.get(set_of(g) if args.knot_share == "set" else "all")
+        if args.knot_slices and g not in gmodes:
+            sh = shared["all"]
         Rx, stored, na, err, knot_t = compress(X, t, gmodes.get(g, args.mode), shared=sh)
         arrays[g] = Rx.reshape(a.shape).astype(a.dtype)
         P = X.shape[1]
@@ -231,6 +246,7 @@ def main():
         cfg = json.load(f)
     cfg["time_compression"] = {"mode": args.mode, "group_modes": gmodes, "source_run": args.run,
                                "knot_share": args.knot_share,
+                               **({"knot_slices": [int(v) for v in shared["all"]]} if args.knot_slices else {}),
                                "stored": int(tot_stored),
                                "full": int(tot_full), "per_slice": int(tot_slice),
                                "job": os.environ.get("SLURM_JOB_ID", "manual")}
