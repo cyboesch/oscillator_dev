@@ -6367,10 +6367,105 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
   | Fashion | 128 | **4290146** | 4290147 | (same) |
 
   - Gallery: `galleries/2026-11-21_{mnist,fashion}_global-unit-test_K16-vs-K128-vs-K784_locked-patches-16x16-8x8-64-states_exact_noise-start_quench1`.
+  - **Results (2026-11-21 16:00; Inception 4290141 / 4290148, classifier 4290142 / 4290149):** n = 2000, noise
+    start, seed 1, quench 1 unless noted. The K784 corrector sets ran out of memory at 32 G (4290138 / 4290145);
+    rerun with 64 G as 4290595 / 4290598, re-scored by 4290596 / 4290597 (MNIST) and 4290599 / 4290600 (Fashion).
+
+    | MNIST ten digits | Inception (FID_inf) | + corrector | classifier FID | confident | precision F / recall F |
+    |---|---|---|---|---|---|
+    | old best K784 + 7x7 (one 32-state set from t = 2.22) | 27.86 (24.13) | - | 7.66 | **88.8%** | **0.81** / 0.80 |
+    | locked patches + K16 | 14.39 (8.13) | 12.00 (4.83) | 14.23 | 71.5% | 0.61 / 0.89 |
+    | locked patches + K128 | 12.03 (6.29) | 10.62 (4.20) | 9.44 | 76.3% | 0.67 / 0.88 |
+    | locked patches + K784 | **10.01 (4.44)** | **9.19 (3.57)** | **6.23**; corrector 5.06 | 83.0%; corrector 82.2% | 0.74 / 0.88 |
+
+    | Fashion ten classes | Inception (FID_inf) | + corrector | classifier FID | confident | precision F / recall F |
+    |---|---|---|---|---|---|
+    | old best K784 + 8x8 every 2 px (32 states from t = 2.22) | 26.35 (13.71) | - | 3.17 | **62.7%** | **0.82** / 0.73 |
+    | locked patches + K16 | 26.00 (15.66) | 25.80 (14.62) | 5.97 | 49.9% | 0.70 / 0.80 |
+    | locked patches + K128 | 23.53 (11.80) | 23.30 (11.14) | 3.57 | 58.5% | 0.78 / 0.81 |
+    | locked patches + K784 | **21.32 (9.78)** | 21.82 (9.79) | **2.77**; corrector 2.32 | 62.0%; corrector 62.6% | 0.81 / 0.80 |
+
+  - **Reading: yes, it is the global unit.** Every metric improves monotonically with K at fixed patches (Inception,
+    classifier FID, confident share, precision; recall stays at 0.80-0.89). With K784 the locked patches beat the
+    old best on both data sets in Inception (MNIST 10.0 vs 27.9, Fashion 21.3 vs 26.4) and in classifier FID (6.2 vs
+    7.7, 2.8 vs 3.2). The confident share is back at the old level on Fashion (62.0 vs 62.7%) and closes most of
+    the gap on MNIST (83.0 vs 88.8%; K16 was 71.5%). Contrast with CelebA-32, where K hardly mattered (K16 / 32 / 64
+    within about 0.4 FID): on the ten-class data the global unit carries the class / shape identity, which the
+    local patches cannot.
+  - **Gallery** (`galleries/2026-11-21_mnist_global-unit-test_...`): K784 + locked patches draws the same digit as
+    the old best in most columns (same trajectory), without the grain; K16 / K128 more often an unclear shape.
+    Nearest training images: similar digits, not copies.
+  - Run times (exact, train + 2000 samples): K16 1.4 h, K128 1.5 h, K784 2.2 h.
+  - **K784 corrector sets (17:15, 4290596 / 4290599, classifier 4290597 / 4290600):** MNIST 9.19 (FID_inf 3.57), the
+    best MNIST number so far, classifier 5.06; Fashion 21.82 vs 21.32 without (FID_inf equal, 9.79 vs 9.78): on Fashion
+    the corrector no longer helps Inception at K784 (it gave -0.2 at K16 / K128), while the classifier FID still
+    improves (2.32 vs 2.77).
   - **K16 on device for MNIST and Fashion held until this is in** (the user: "Hold the pending K16 on-device runs").
     The four trainings had started 5-6 min earlier; `scontrol requeuehold` put them back to pending with their ids,
     so their corrector / knots / evaluation jobs stay chained. Release: `scontrol release 4290098 4290102 4290107
     4290111` (they resume from the saved slices; slices are written atomically).
+- **Ablation: do the visible-visible springs matter in the locked model? (submitted 2026-11-21 ~14:00; the user:
+  "Control ... This is an ablation row, not a change of the locked model.")** CelebA-32, exact, seed 1, n = 2000,
+  noise start, SDE + quench 1, Inception FID, gallery on the same trajectories. No corrector set (not asked).
+
+  | row | flags | run | pipeline |
+  |---|---|---|---|
+  | locked model with springs (the 20.20 run) | `--pair-terms lin` (radius-1 c_lin (x_i - x_j)^2, the only pair group used) | `celeba32g_K16_ema_potts_quad_local_quartic_r1_lin_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1` | exists |
+  | locked model, no springs | identical flags except `--pair-terms none` (on-site quartic terms k_lin x^2 / 2 + k_duff x^4 / 4 + bias kept; global, patch and per-pixel units unchanged) | `celeba32g_K16_ema_potts_quad_local_quartic_r1_nopairs_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1` | **4290231** (12 h) |
+  | pixels only (optional row) | the same visible model with springs (`--visible quartic --radius 1 --pair-terms lin`), K = 0, no `--local`, no patches: no hidden units at all | `celeba32g_K0_ema_pixels-only_quartic_r1_lin_mixst_seed1` | **4290232** (6 h) |
+
+  - Inception 4290233, gallery 4290234
+    (`galleries/2026-11-21_celeba32_spring-ablation_locked-K16-64-states_with-vs-without-visible-springs_vs-pixels-only_exact_noise-start_quench1`);
+    scratchpad `eval_springs.sh`.
+  - Checked before submitting: the stencil energy handles an empty pair-group list (on-site terms only); K = 0
+    refuses `--ref-kmeans gpu` and the patch flags, so the pixels-only row drops them (and `--quad`, `--proto-init`,
+    which need hidden units).
+  - Reading of "the same visible model" for the pixels-only row: with springs (without them the pixels would be
+    independent); "no hidden units" includes the per-pixel units of `--local`.
+  - **Results (2026-11-21 16:20; Inception 4290233; floor 6.43 at n = 2000, FID_inf 2.22):**
+
+    | CelebA-32, exact, seed 1 | Inception, SDE + quench 1 (sd) | FID_inf | as sampled (no quench) | train time |
+    |---|---|---|---|---|
+    | locked model with springs (K16, 64 states) | **20.20** (0.19) | **12.34** | 76.70 | - |
+    | the same, no springs (`--pair-terms none`) | 25.83 (0.35) | 20.32 | 99.31 | 2.2 h |
+    | pixels only: springs, no hidden units | 218.38 (1.44) | 337.93 | 317.32 | 0.3 h |
+
+  - **Reading:** the springs matter, but as a texture term: +5.6 FID (+8.0 FID_inf) without them. In the gallery
+    the no-spring samples are the same faces on every trajectory (identity, pose, hair, lighting set by the
+    hidden units), only grainier, with pixel-to-pixel speckle and blockier edges. The quench removes much less of
+    that grain without springs. Pixels only (springs alone) gives generic blurry face-like texture, no structure:
+    all content comes from the hidden units; the springs only smooth neighbouring pixels.
+  - Gallery: `galleries/2026-11-21_celeba32_spring-ablation_locked-K16-64-states_with-vs-without-visible-springs_vs-pixels-only_exact_noise-start_quench1`.
+- **Two more CelebA-32 controls and more on-device MNIST / Fashion (submitted 2026-11-21 17:00-17:30; the user: "no
+  coupling and only linear self spring on each pixel (no duffing)"; "K784 for the 32x32 CelebA. to see whether this
+  also improves"; "then I want start running some more on-device training for the MNIST and the Fashion MNIST").**
+  - **Harmonic visible model, no springs:** new option `--visible harmonic` (only k_lin x^2 / 2 + bias per pixel;
+    k_duff = k_6 = 0 exactly; k_lin starts at 1, no floor). Caveat: without the x^4 term, positive squared-pixel
+    couplings Q of the hidden units can make F unbounded at large |x|; the test prints the per-pixel margin
+    k_lin / 2 - (max Q+ of the global unit + folded max Q+ of the patch units), also for the trained 20.20 quartic
+    model, and the samples' divergence count. Test **4290730** (quartic bitwise regression, refusals, constraints in
+    all 100 slices, margins, sampling) -> full run **4290731** (only if the test passes; locked flags with
+    `--visible harmonic --pair-terms none`; run `celeba32g_K16_ema_potts_quad_local_harmonic_r1_nopairs_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1`)
+    -> Inception 4290732 and gallery 4290733 with all spring-ablation rows (scratchpad `eval_springs.sh`, now 4
+    rows; gallery `..._spring-ablation_locked-K16-64-states_with-vs-without-springs_vs-harmonic-self-spring-only_vs-pixels-only_...`).
+  - **CelebA-32 K784 with the locked patches, exact:** pipeline **4290714**, corrector set 4290715 (64 G); Inception
+    4290734 (K784 vs K16 vs the previous K64), gallery 4290735
+    (`galleries/2026-11-21_celeba32_global-unit-test_K16-vs-K784_locked-patches-16x16-8x8-64-states_exact_noise-start_quench1`);
+    scratchpad `eval_c32_kglobal.sh`.
+  - **MNIST / Fashion on device, K16 and K784** (the user chose "K784 + K16"): the held K16 runs released at 17:25
+    (4290098, 4290102, 4290107, 4290111; chains as above). K784 on device with the same flags, `--K 784`:
+
+    | data set | S | pipeline (36 h) | corrector (64 G) | knots 5/9/9: compress / sample | Inception / classifier / gallery |
+    |---|---|---|---|---|---|
+    | MNIST | 64 | **4290774** | 4290775 | 4290776 / 4290777 | 4290780 / 4290781 / 4290782 |
+    | MNIST | 16 | **4290778** | 4290779 | - | (same) |
+    | Fashion | 64 | **4290783** | 4290784 | 4290785 / 4290786 | 4290789 / 4290790 / 4290791 |
+    | Fashion | 16 | **4290787** | 4290788 | - | (same) |
+
+    The evaluation (scratchpad `eval_k784od.sh`) waits for both the K16 and the K784 chains and puts K16 and K784,
+    exact / S64 / S16 / corrector / knots, in one table and one gallery
+    (`galleries/2026-11-21_{mnist,fashion}_locked-patches-64-states_K16-and-K784_exact-vs-on-device-S64-vs-S16_noise-start_quench1`).
+  - Disk at submission: 858 G of 1 T used (84%), 167 G free.
 - **To follow after the gates:** on device S = 64 / S = 16 (incl. CelebA-32 S = 16); corrector sets for them;
   post-hoc knots 5/9/9 (wl, bl constant) on each S = 64 model; ODE + quench on CelebA-32 S = 64; galleries per data
   set; then the second wave (seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the S = 64

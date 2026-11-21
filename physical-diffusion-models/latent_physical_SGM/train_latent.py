@@ -196,8 +196,12 @@ def parse():
                          "only when set")
     ap.add_argument("--local", action="store_true",
                     help="add one Ising hidden unit per pixel, coupled only to that pixel (params wl, bl)")
-    ap.add_argument("--visible", choices=["sextic", "quartic"], default="sextic",
-                    help="quartic: no x^6 self term (k_6 = 0); confinement from k_duff >= 0.01 and c_duff >= 0")
+    ap.add_argument("--visible", choices=["sextic", "quartic", "harmonic"], default="sextic",
+                    help="quartic: no x^6 self term (k_6 = 0); confinement from k_duff >= 0.01 and c_duff >= 0. "
+                         "harmonic (2026-11-21): only the linear self spring k_lin x^2 / 2 + bias per pixel (k_duff = "
+                         "k_6 = 0, held at exactly zero; k_lin starts at 1 and is not floored, so confinement is not "
+                         "guaranteed against positive squared-pixel couplings Q of the hidden units); --pair-terms "
+                         "none or lin only")
     ap.add_argument("--select", choices=["best", "ema"], default="best",
                     help="slice result: the paper's luckiest-mini-batch iterate, or an EMA of the iterates")
     ap.add_argument("--ema-steps", type=float, default=1000.0)
@@ -900,7 +904,7 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
     extra_key = floor > 0 or (occupancy and floor_samples > 0 and not occ_same_draws)
     k6 = lm.k6_slice(n_vis)
     w_ema = 1.0 / ema_steps
-    if visible == "quartic":
+    if visible in ("quartic", "harmonic"):
         kd, cd = lm.kduff_slice(n_vis), lm.cduff_slice(n_vis, n_pairs)
     if theta_masks:                       # project() and the k_6 gradient zeroing below as constant masks
         if n_pairs is None:
@@ -908,10 +912,15 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         n_theta = 4 * n_vis + 3 * n_pairs
         zero_m, floor_v, k6_m = np.zeros(n_theta, bool), np.full(n_theta, -np.inf), np.zeros(n_theta, bool)
         k6_m[k6] = True
+        if visible == "harmonic":         # k_duff is not a parameter of the harmonic model either
+            k6_m[kd] = True
         for s in zero_slices:
             zero_m[s] = True
         if visible == "sextic":
             floor_v[k6] = lm.K6_FLOOR
+        elif visible == "harmonic":
+            zero_m[k6] = True
+            zero_m[kd] = True             # c_duff: dropped by --pair-terms (harmonic keeps at most lin)
         else:
             zero_m[k6] = True
             floor_v[kd] = lm.K4_FLOOR
@@ -925,6 +934,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         if visible == "sextic":           # the paper's constraint
             return theta.at[k6].set(jnp.maximum(theta[k6], lm.K6_FLOOR))
         theta = theta.at[k6].set(0.0)
+        if visible == "harmonic":         # on-site k_lin x^2 / 2 + bias only; c_duff dropped by --pair-terms
+            return theta.at[kd].set(0.0)
         theta = theta.at[kd].set(jnp.maximum(theta[kd], lm.K4_FLOOR))
         return theta.at[cd].set(jnp.maximum(theta[cd], 0.0))
 
@@ -983,6 +994,9 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         if visible == "quartic":                                  # k_6 is not a parameter of the quartic model
             grads = dict(grads, theta=(jnp.where(k6_m, 0.0, grads["theta"]) if theta_masks
                                        else grads["theta"].at[k6].set(0.0)))
+        elif visible == "harmonic":                               # nor are k_6 and k_duff of the harmonic one
+            grads = dict(grads, theta=(jnp.where(k6_m, 0.0, grads["theta"]) if theta_masks
+                                       else grads["theta"].at[k6].set(0.0).at[kd].set(0.0)))
         if occupancy:
             occ = (lm.loss_draw_occupation(p_occ, X, lm.TEMP, k_loss, floor_samples, dtype=occ_dtype)
                    if occ_same_draws
@@ -1171,6 +1185,8 @@ def main():
                          "--hidden-samples and --hidden-norm occupancy are allowed since 2026-11-17 (the draws come "
                          "from the float32 fields)")
     pair_terms = lm.parse_pair_terms(args.pair_terms)          # raises on an invalid list
+    if args.visible == "harmonic" and not set(pair_terms) <= {"lin"}:
+        raise ValueError("--visible harmonic allows only --pair-terms none or lin (om and duff are not harmonic)")
     steps_sched = parse_steps_schedule(args.steps_schedule)    # raises on an invalid schedule
     time_grid = lm.parse_time_grid(args.time_grid)             # canonical spec; raises on an invalid one
     split_slices = parse_split_slices(args.split_dead)         # raises on an invalid list
@@ -1496,8 +1512,10 @@ def main():
         prob["conn"], n_vis, args.visible_impl, pair_terms, sextic=args.visible == "sextic")   # the training loss
     cdt = jnp.float32 if args.precision == "mixed" else None   # --precision mixed: float32 training loss
     theta0, _ = lm.paper_theta_layout(vis.P, n_vis)
-    if args.visible == "quartic":
+    if args.visible in ("quartic", "harmonic"):
         theta0 = lm.quartic_initial_theta(theta0, n_vis, vis.P)
+    if args.visible == "harmonic":                            # k_duff = 0: only the linear self spring k_lin = 1
+        theta0 = theta0.at[lm.kduff_slice(n_vis)].set(0.0)
     zero_slices = lm.dropped_pair_slices(n_vis, vis.P, pair_terms)    # --pair-terms: groups held at exactly zero
     for s in zero_slices:
         theta0 = theta0.at[s].set(0.0)

@@ -1,4 +1,4 @@
-\begin{thebibliography}{41}
+\begin{thebibliography}{42}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -124,6 +124,11 @@ Kamb, M. and Ganguli, S.
 \newblock An analytic theory of creativity in convolutional diffusion models.
 \newblock \emph{arXiv preprint arXiv:2412.20292}, 2024.
 \newblock verify venue (ICML 2025?).
+
+\bibitem[Kingma \& Ba(2015)Kingma and Ba]{kingma2015adam}
+Kingma, D.~P. and Ba, J.
+\newblock Adam: A method for stochastic optimization.
+\newblock In \emph{International Conference on Learning Representations}, 2015.
 
 \bibitem[Krotov \& Hopfield(2016)Krotov and Hopfield]{krotov2016dense}
 Krotov, D. and Hopfield, J.~J.

@@ -66,6 +66,8 @@
 \newcommand{\x}{\bm{x}}
 \newcommand{\dd}{\mathrm{d}}
 \newcommand{\Evis}{E^{\mathrm{v}}}
+\newcommand{\gen}{\mathcal{L}}            % generator of the pixel dynamics
+\DeclareMathOperator{\Cov}{Cov}
 
 \icmltitlerunning{Physical Diffusion Models with Fast Hidden Units}
 
@@ -94,10 +96,12 @@
 
 % =============================================================================
 \begin{abstract}
-% Draft. One paragraph, 4-6 sentences (ICML rule). Numbers come from results.tex.
-Physical systems that generate data through their own stochastic dynamics promise
-large savings in energy, but existing proposals are either trained by
-backpropagation through a digital model or limited to simple data.
+% One paragraph. Numbers come from results.tex. ICML asks for 4-6 sentences:
+% this has 7, trim when the numbers are in.
+Physical systems that generate data through their own stochastic dynamics
+promise large savings in energy, but existing proposals are trained by
+backpropagation through a digital model, need a second free-running or nudged
+phase, or are limited to simple data.
 We introduce a score-based diffusion model in which the score is the force of a
 physical energy with fast hidden units: a small global Potts unit and Potts units
 on overlapping image patches, which sum out exactly and leave the visible units
@@ -106,77 +110,18 @@ Seen as a dense associative memory, its memories are learned at every noise
 level instead of stored.
 The time-dependent couplings follow a local rule evaluated in a single phase,
 with the visible units clamped to data: the thermal fluctuations of the hidden
-units supply what other physical learning rules take from a free-running or a
-nudged second phase, and no backpropagation is needed.
+units supply the response that other physical learning rules obtain from a
+second phase.
 In simulation, training from \Slarge{} sampled hidden states per data point
 reaches an FID of \FIDcelebLowSlarge{} on $32\times32$ CelebA, against
-\FIDcelebLowExact{} with exact hidden averages, and the same model with unchanged
-hyperparameters generates MNIST, Fashion-MNIST and $64\times64$ faces
+\FIDcelebLowExact{} with exact hidden averages, and the same architecture
+generates MNIST, Fashion-MNIST and $64\times64$ faces
 (FID \FIDmnistSlarge, \FIDfashionSlarge{} and \FIDcelebHighSlarge).
 On MNIST and Fashion-MNIST this improves on earlier generative models designed
 for analog hardware.
 We describe how each operation of training and generation maps onto analog
 crossbar hardware.
 \end{abstract}
-
-% =============================================================================
-\section{Introduction}
-\label{sec:intro}
-\budget{0.9 page, including the top of Figure~\ref{fig:concept}}
-
-\begin{plan}
-  \item \textbf{Motivation.} The energy cost of generative models; physical and
-        thermodynamic computing as an alternative, where a system samples by its
-        own dynamics. Diffusion models fit this well: the reverse process is
-        Langevin dynamics in a time-dependent energy
-        \citep{sohldickstein2015deep,song2021score}.
-  \item \textbf{The gap, in three points.}
-        (i) Pairwise energies of the visible units are not expressive enough
-        beyond toy data \citep{firstpaper2025}.
-        (ii) More expressive proposals are trained with backpropagation through
-        a digital model \citep{wangachour2026}, with a free-running second phase
-        \citep{jelincic2025dtm}, or with nudged second equilibria, exact only
-        for vanishing nudge
-        \citep{de2026symmetric,gower2026potentialep,gower2026floweqprop}.
-        (iii) Results beyond MNIST-scale data are missing.
-        (iv) Diffusion models have been identified with dense associative
-        memories, but with the training images as memories or as a reading of
-        trained neural networks
-        \citep{hoover2023memory,ambrogioni2024search,pham2026emergence}; a
-        circuit for such memories exists \citep{bacvanski2025dense}, a
-        generator built from one does not.
-  \item \textbf{Idea.} Fast hidden units in one bipartite layer sum out exactly.
-        The visible units then move in a free energy, its gradient is the score,
-        and the score-matching gradient of every coupling becomes a local rule
-        evaluated at clamped data (Figure~\ref{fig:concept}).
-  \item \textbf{Contributions} (three bullets in the final text):
-        \begin{enumerate}[leftmargin=1.3em,itemsep=0pt,topsep=1pt]
-          \item the model: a small global Potts unit plus Potts units on
-                overlapping patches at two scales, switched on at different
-                noise levels. It is a dense associative memory at finite
-                temperature, used as a diffusion model, whose memories are
-                learned at every noise level: $K\ll N$ templates instead of
-                the $N$ training images;
-          \item the learning rule: local and single-phase. The pixels are fully
-                clamped to data; there is no free-running phase, no nudged
-                phase and no small-perturbation limit, because the fluctuations
-                of the thermal hidden units carry the response that a nudge
-                would measure. It trains from \Slarge{} or \Ssmall{} sampled
-                hidden states per data point;
-          \item the results: one model, unchanged, on MNIST, Fashion-MNIST and
-                CelebA at $32\times32$ and $64\times64$; exact against sampled
-                statistics; comparison with earlier analog-hardware models.
-        \end{enumerate}
-  \item \todo{wording of the two novelty statements: ``to our knowledge'';
-        not ``the first trained dense associative memory''
-        (\citet{krotov2016dense} train memories for classification), and not
-        ``score matching without a negative phase'' as such (a known property
-        of score matching, and of our first paper for visible couplings). The
-        new parts are: learned memories in a generator, and the single-phase
-        rule for hidden units read from their fluctuations.}
-  \item \textbf{Scope, one sentence.} Everything is a simulation; Section
-        \ref{sec:hardware} discusses the mapping to hardware.
-\end{plan}
 
 % ---------------------------------------------------------------- Figure 1 ---
 \begin{figure*}[t]
@@ -207,40 +152,133 @@ crossbar hardware.
 \end{figure*}
 
 % =============================================================================
+\section{Introduction}
+\label{sec:intro}
+\budget{0.9 page, including the top of Figure~\ref{fig:concept}}
+
+The energy cost of large generative models has revived interest in hardware
+that computes with its own physics: a system whose stochastic dynamics draws
+the samples, in place of a processor that simulates such dynamics.
+\todo{cite one or two overviews of thermodynamic and physical computing.}
+Diffusion models suit this idea. Their reverse process is a Langevin dynamics
+in an energy landscape that changes in time
+\citep{sohldickstein2015deep,song2021score}, which is what an analog system in
+contact with a thermal bath performs when an external schedule drives its
+couplings \citep{firstpaper2025}.
+
+Two obstacles remain. The first is expressiveness. An energy made of on-site
+potentials and pairwise springs between the visible units can be trained by a
+local rule, but it has been shown only on two digit classes of MNIST
+\citep{firstpaper2025}. The second is training. More expressive proposals
+give up locality or need a second phase. Oscillator networks with hidden units
+have been trained adversarially, by backpropagation through a digital solver
+\citep{wangachour2026}. Chains of Boltzmann machines subtract a free-running
+phase from the clamped one \citep{hinton2002training,jelincic2025dtm}.
+Equilibrium propagation compares a free with a nudged equilibrium of the whole
+system and gives the gradient in the limit of a vanishing nudge
+\citep{scellier2017equilibrium}; it has recently been applied to score, energy
+and flow matching
+\citep{de2026symmetric,gower2026potentialep,gower2026floweqprop}.
+
+A separate line of work has identified diffusion models with dense
+associative memories \citep{krotov2016dense,ramsauer2021hopfield}. The exact
+score of a noised training set is the force of a log-sum-exp energy whose
+memories are the training images \citep{hoover2023memory,ambrogioni2024search},
+and trained networks pass from retrieving these memories to generalising as
+the training set grows \citep{pham2026emergence}. Such memories have an analog
+circuit: visible and hidden neurons joined by one resistive crossbar, with
+hidden neurons that settle faster than the visible ones
+\citep{bacvanski2025dense}. But a memory that stores its training set returns
+it, and the circuit has been used for retrieval, with weights set by hand or
+trained digitally.
+
+Here we join the two lines. We add fast hidden units to a physical diffusion
+model in one bipartite layer: a Potts unit coupled to all pixels, Potts units
+coupled to overlapping patches at two scales, and one bistable unit per pixel
+(Figure~\ref{fig:concept}a). Since the hidden units do not couple to each
+other, they sum out exactly. The pixels then move in a free energy whose
+gradient is the time-averaged force of the hidden units, and this force,
+divided by the temperature, is the score. Our contributions are:
+\begin{itemize}[leftmargin=1.3em,itemsep=1pt,topsep=2pt,parsep=0pt]
+  \item \textbf{Model.} A dense associative memory at finite temperature, used
+        as a diffusion model, whose memories are learned at every noise level:
+        a few learned templates per unit in place of the stored training
+        images, together with
+        local memories on patches (Section~\ref{sec:model}). To our knowledge,
+        earlier links between associative memories and diffusion either store
+        the data or interpret trained neural networks.
+  \item \textbf{Learning rule.} A local rule for the hidden couplings that is
+        evaluated in a single phase (Section~\ref{sec:learning}). The pixels
+        are fully clamped to data. There is no free-running phase, no nudged
+        phase and no limit of small perturbation, because the thermal
+        fluctuations of the hidden units carry the response that a nudge would
+        measure. The rule follows in a few lines from the generator of the
+        pixel dynamics.
+  \item \textbf{Results.} Trained from \Slarge{} or \Ssmall{} sampled hidden
+        states per clamped image, the model reaches an FID of
+        \FIDcelebLowSlarge{} on $32\times32$ CelebA, against
+        \FIDcelebLowExact{} with exact hidden averages, and generates MNIST,
+        Fashion-MNIST and $64\times64$ faces
+        (Section~\ref{sec:experiments}).
+        \todo{one clause on the comparison with earlier analog-hardware models
+        once the MNIST and Fashion numbers are fixed.}
+\end{itemize}
+All results are simulations in the limit of fast hidden units. Training
+samples the hidden states; the forces at the clamp are computed exactly
+(Section~\ref{sec:onephase}). Section~\ref{sec:hardware} discusses the mapping
+to hardware.
+
+
+
+% =============================================================================
 \section{Background: Diffusion as Physical Dynamics}
 \label{sec:background}
 \budget{0.5 page}
 
-\begin{plan}
-  \item \textbf{Forward process.} Ornstein--Uhlenbeck noising at temperature $T$
-        for $t\in[0,\tau]$:
-\end{plan}
+\textbf{Forward process.}
+Data $\x_0\in\mathbb{R}^{N}$ are noised by an Ornstein--Uhlenbeck process at
+temperature $T$ for $t\in[0,\tau]$,
 \begin{align}
   \dd\x &= -\x\,\dd t + \sqrt{2T}\,\dd W , \nonumber\\
-  \x_t &= e^{-t}\x_0 + \sqrt{T\,(1-e^{-2t})}\,\bm{\epsilon} .
+  \x_t &= e^{-t}\x_0 + \sqrt{T\,(1-e^{-2t})}\,\bm{\epsilon} ,
   \label{eq:forward}
 \end{align}
-\begin{plan}
-  \item \textbf{Score as a force.} Parametrise $p_t(\x)\propto e^{-F_t(\x)/T}$,
-        so the score is $-\nabla F_t/T$ and the reverse process is Langevin
-        dynamics of a physical system with time-dependent couplings
-        \citep{firstpaper2025}. Cite in the third person.
-  \item \textbf{Training objective.} Score matching per noise level
-        \citep{hyvarinen2005estimation}, written with forces (``force
-        matching''):
-\end{plan}
+with $\bm{\epsilon}\sim\mathcal{N}(0,I)$. This is the relaxation of $N$
+uncoupled, overdamped harmonic oscillators in a thermal bath, and for
+$\tau\gg1$ it ends in their thermal state $\mathcal{N}(0,TI)$. We write $p_t$
+for the density of $\x_t$.
+
+\textbf{Score as a force.}
+Following \citet{firstpaper2025}, we model $p_t$ by the Boltzmann distribution
+of a physical system at the same temperature,
+$p_t(\x)\approx e^{-F_t(\x)/T}/Z_t$. The score is then a force divided by the
+temperature, $\nabla\log p_t=-\nabla F_t/T$, and the reverse process
+\citep{song2021score} reads, in reverse time $s=\tau-t$,
+\begin{equation}
+  \dd\x = \bigl[\x - 2\nabla F_{\tau-s}(\x)\bigr]\dd s + \sqrt{2T}\,\dd W .
+  \label{eq:reverse}
+\end{equation}
+This is overdamped Langevin dynamics at the bath temperature in the potential
+$2F_{\tau-s}(\x)-\tfrac12\lVert\x\rVert^{2}$. Generation is therefore a
+physical protocol: prepare the thermal state, then drive the couplings of the
+system along a schedule while the bath supplies the noise.
+
+\textbf{Training objective.}
+The parameters $\theta$ of $F_t$ are fitted separately at each noise level by
+score matching \citep{hyvarinen2005estimation}, which in terms of forces reads
 \begin{equation}
   J_t(\theta) = \mathbb{E}_{\x\sim p_t}\!\left[
      -\frac{\Delta F_t(\x)}{T} + \frac{\lVert\nabla F_t(\x)\rVert^{2}}{2T^{2}}
   \right] .
   \label{eq:loss}
 \end{equation}
-\begin{plan}
-  \item \textbf{What was known.} For an energy that is linear in its
-        parameters the gradient of~\eqref{eq:loss} is local, but a pairwise
-        energy of the pixels generates only digits 0 and 1
-        \citep{firstpaper2025}. One sentence; this is the baseline.
-\end{plan}
+Up to an additive constant, $J_t$ is half the mean squared difference between
+the model score $-\nabla F_t/T$ and the score of $p_t$. It needs no samples
+from the model. For an energy that is linear in its parameters, such as
+on-site potentials and pairwise springs, the gradient of \eqref{eq:loss} is a
+sum of local terms measured with the pixels clamped to data
+\citep{firstpaper2025}. Such an energy has been shown on two digit classes of
+MNIST. It is the baseline that we extend.
 
 % =============================================================================
 \section{Model: Fast Hidden Units}
@@ -248,178 +286,335 @@ crossbar hardware.
 \budget{1.1 pages}
 
 \subsection{Energy and Free Energy}
-\begin{plan}
-  \item \textbf{Joint energy.} Visible units $\x\in\mathbb{R}^{N}$ (the pixels)
-        and discrete hidden units that couple to the pixels only (one bipartite
-        layer, no hidden--hidden couplings). A hidden state $m$ feels the field
-        $a_m(\x)=b_m+W_m\!\cdot\!\x+Q_m\!\cdot\!\x^{2}$.
-  \item \textbf{Fast hidden units sum out exactly.} The pixels move in
-\end{plan}
+
+\textbf{Units.}
+Next to the pixels $\x$, the system has discrete hidden units that couple to
+the pixels and not to each other (Figure~\ref{fig:concept}a). The building
+block is a Potts unit: a hidden unit $u$ with $K_u$ mutually exclusive states.
+With state $m$ active, it lowers the energy by its input field
+\begin{equation}
+  a^{u}_{m}(\x) = b^{u}_{m}
+     + \sum_{i\in\mathcal{P}_u}\bigl(W^{u}_{mi}\,x_i + Q^{u}_{mi}\,x_i^{2}\bigr) ,
+  \label{eq:field}
+\end{equation}
+where $\mathcal{P}_u$ is the set of pixels to which the unit is coupled. The
+linear coupling $W$ pulls the pixels towards a template, and the quadratic
+coupling $Q$ changes their stiffness: for $Q^{u}_{mi}<0$, state $m$ binds pixel
+$i$ to the position $-W^{u}_{mi}/2Q^{u}_{mi}$ by a spring of stiffness
+$-2Q^{u}_{mi}$. Templates can thus differ in width as well as in position.
+
+We use three kinds of hidden unit:
+(i)~one \emph{global} Potts unit with $K$ states, coupled to all pixels;
+(ii)~\emph{patch} Potts units with $M$ states each, one for every patch of a
+grid of overlapping square patches, in a coarse set and a fine set;
+(iii)~one bistable unit $\sigma_i=\pm1$ per pixel, with energy
+$-\sigma_i(\nu_i+w_ix_i)$, which can give the pixel an on-site double well.
+In our experiments $K=\Kglobal$ and $M=\Mpatch$ (Section~\ref{sec:setup}).
+\todo{$K$ on MNIST and Fashion is open: see the outline, section 0.}
+The visible energy has the form used by \citet{firstpaper2025}, restricted to
+on-site terms and springs between the eight nearest neighbours
+$\langle ij\rangle$ of the pixel grid,
+\begin{align}
+  \Evis_t(\x) ={}& \sum_{i}\Bigl[\tfrac{k_i}{2}x_i^{2}+\tfrac{\lambda_i}{4}x_i^{4}
+                   +h_ix_i\Bigr] \nonumber\\
+                 & +\sum_{\langle ij\rangle}\kappa_{ij}\,(x_i-x_j)^{2} .
+  \label{eq:visible}
+\end{align}
+
+\textbf{Summing out the hidden units.}
+With $y_u$ the active state of unit $u$, the joint energy is
+$E_t=\Evis_t(\x)-\sum_u a^{u}_{y_u}(\x)-\sum_i\sigma_i(\nu_i+w_ix_i)$.
+If the hidden units equilibrate much faster than the pixels move, the pixels
+feel only the time average of the hidden forces. Because no hidden unit
+couples to another, the sum over hidden states factorises, and the pixels move
+in the free energy
 \begin{align}
   F_t(\x) ={}& \Evis_t(\x)
-     - T\log\sum_{m=1}^{K} e^{a_m(\x)/T} \nonumber\\
-   & - T\sum_{g}\sum_{p\in\mathcal{P}_g}\log\sum_{s=1}^{M} e^{a^{g}_{ps}(\x_p)/T}
-     \nonumber\\
-   & - T\sum_{i=1}^{N}\log 2\cosh\frac{c_i+w_i x_i}{T} ,
+     - T\sum_{u}\log\sum_{m=1}^{K_u} e^{a^{u}_{m}(\x)/T} \nonumber\\
+   & - T\sum_{i=1}^{N}\log 2\cosh\frac{\nu_i+w_i x_i}{T} ,
   \label{eq:free-energy}
 \end{align}
-\begin{plan}
-  \item \textbf{The terms of \eqref{eq:free-energy}.}
-        $\Evis$: quartic on-site wells and springs to the 8 neighbours.
-        Global Potts unit with $K=\Kglobal$ states.
-        Patch sets $g$: a Potts unit with $M=\Mpatch$ states on each
-        overlapping patch $p$; a coarse set and a fine set.
-        One bistable unit per pixel.
-  \item \textbf{Relation to dense associative memories; say it here, early.}
-        The global term of \eqref{eq:free-energy} is the log-sum-exp energy of
-        a dense associative memory
-        \citep{krotov2016dense,demircigil2017model,ramsauer2021hopfield} in its
-        form with fast hidden units \citep{krotov2021large}, here at finite
-        temperature and with $K$ templates per noise level. The exact score of
-        a noised training set has the same form with one memory per training
-        image
-        \citep{ambrogioni2024search,hoover2023memory,pham2026emergence}.
-        Our model replaces these $N$ stored memories by $K\ll N$ learned ones
-        ($K=\Kglobal$) and adds local memories on patches.
-  \item \textbf{Learned, not stored (novelty statement 1).} In the works above
-        the memories are the training images, which reproduces the training
-        set, or the memory is a reading of a trained neural network. Here the
-        memories are the model's parameters, a separate set per noise level,
-        fitted by score matching. One line of evidence: with the templates held
-        at data prototypes the same energy is far worse than with learned ones
-        (Appendix~\ref{app:model-search}).
-        \todo{that comparison (FID 147 against 34 and 22, CelebA
-        $32\times32$) is from an earlier, larger model: label it so, or repeat
-        it on the locked model.}
-        Say also, for the machine-learning reader: with learned templates the
-        global term is a mixture of $K$ Gaussians with diagonal covariance, and
-        the patch units make the model a product of such mixtures
-        (Section~\ref{sec:related}).
-  \item \textbf{Why these units, one sentence each.} A Potts unit is a mixture
-        of templates (a product of independent binary units is not); patches
-        carry local structure that whole-image templates lack; the coarse set
-        acts from high noise, the fine set from lower noise.
-        \todo{give the two switch-on times and the patch sizes per resolution in
-        a small inline table; details in Appendix~\ref{app:model-search}.}
-  \item \textbf{Size.} \paramsCelebLow{} couplings per time slice at
-        $32\times32$ (\paramsSmall{} at $28\times28$, \paramsCelebHigh{} at
-        $64\times64$), \nSlices{} slices.
-\end{plan}
+where $u$ runs over the global unit and all patch units. A Potts unit spends
+the fraction
+$p^{u}_{m}(\x)=e^{a^{u}_{m}/T}/\sum_k e^{a^{u}_{k}/T}$
+of its time in state $m$ and exerts the force
+$G^{u}_{m}=\nabla a^{u}_{m}$ on the pixels while there, with components
+$W^{u}_{mi}+2Q^{u}_{mi}x_i$. The gradient of \eqref{eq:free-energy} is the
+average of these forces,
+\begin{align}
+  -\nabla F_t ={}& -\nabla\Evis_t + \sum_{u}\sum_{m}p^{u}_{m}\,G^{u}_{m}
+                \nonumber\\
+               & + \sum_i w_i\tanh\frac{\nu_i+w_ix_i}{T}\,\bm{e}_i ,
+  \label{eq:mean-force}
+\end{align}
+with $\bm{e}_i$ the unit vector of pixel $i$. The hidden units are neither
+controlled nor read during generation.
+
+\textbf{Time dependence.}
+Every parameter in \eqref{eq:field}--\eqref{eq:free-energy} depends on the
+noise level $t$. The patch sets act only below a noise level of their own: the
+coarse set for $t\le t_{\mathrm c}$ and the fine set for
+$t\le t_{\mathrm f}<t_{\mathrm c}$, because coarse structure forms at higher
+noise than fine detail (Appendix~\ref{app:model-search}). At the highest
+noise only the global unit acts.
+
+\textbf{A dense associative memory with learned memories.}
+The term of a Potts unit in \eqref{eq:free-energy} is the log-sum-exp energy of
+a dense associative memory
+\citep{krotov2016dense,demircigil2017model,ramsauer2021hopfield}, in its
+formulation with fast hidden neurons \citep{krotov2021large} and at finite
+temperature. The model class contains the exact score of the noised training
+set $\{\x_n\}_{n=1}^{N_{\mathrm{d}}}$. That density is a mixture of
+$N_{\mathrm d}$ Gaussians, which is \eqref{eq:free-energy} with $\Evis=0$ and
+one Potts unit with one state per training image:
+\begin{equation}
+  W_n=\frac{e^{-t}\x_n}{\gamma_t},\quad
+  Q_{ni}=-\frac{1}{2\gamma_t},\quad
+  b_n=-\frac{e^{-2t}\lVert\x_n\rVert^{2}}{2\gamma_t},
+  \label{eq:stored}
+\end{equation}
+with $\gamma_t=1-e^{-2t}$. This is the memory that
+\citet{hoover2023memory}, \citet{ambrogioni2024search} and
+\citet{pham2026emergence} identify with a diffusion model; used as a
+generator, it returns the training set. We instead keep
+$K\ll N_{\mathrm d}$ states and treat $b$, $W$ and $Q$ as parameters, fitted
+at every noise level by \eqref{eq:loss}. The patch units add local memories:
+$U$ patch units with $M$ states each have $M^{U}$ joint states, so the images
+the model can form are not limited to $K$ templates.
+With the templates held at data prototypes instead of learned, the same energy
+generates far worse images (Appendix~\ref{app:model-search}).
+\todo{that comparison (FID 147 against 34 and 22, CelebA $32\times32$) is from
+an earlier, larger model: label it so, or repeat it on the locked model.}
+In the language of machine learning, each state of a Potts unit is a tilted
+copy of the visible model, the global term is a mixture of $K$ such copies,
+and the patch units multiply mixtures (Section~\ref{sec:related}).
+
+\textbf{Size.}
+The model has \paramsCelebLow{} couplings per noise level at $32\times32$
+pixels (\paramsSmall{} at $28\times28$ and \paramsCelebHigh{} at
+$64\times64$), nearly all of them in the patch units.
+\todo{check ``nearly all in the patch units'' for the final $K$.}
 
 \subsection{Generation}
-\begin{plan}
-  \item \textbf{Reverse process.} For reverse time $s\in[0,\tau]$,
-\end{plan}
-\begin{equation}
-  \dd\x = \bigl[\x - 2\nabla F_{\tau-s}(\x)\bigr]\dd s + \sqrt{2T}\,\dd W ,
-  \label{eq:reverse}
-\end{equation}
-\begin{plan}
-  \item with the couplings of the \nSlices{} slices interpolated linearly in
-        time and replayed by an external controller.
-  \item \textbf{Quench.} After the reverse process the bath is switched off for
-        a short time: $\dot{\x}=-\nabla F_{0}(\x)$. It removes the thermal
-        speckle (Table~\ref{tab:sampler}).
-  \item \textbf{Corrector (optional).} Two Langevin steps per slice
-        \citep{song2021score}.
-  \item \textbf{Physical reading of the factor 2.} Duplicated hidden units at
-        the bath temperature, or a gain of 2 on the hidden force
-        (Appendix~\ref{app:derivation}).
-\end{plan}
+
+\textbf{Protocol.}
+With $F_t$ fitted, generation runs \eqref{eq:reverse} from
+$\x\sim\mathcal{N}(0,TI)$ (Figure~\ref{fig:concept}c). The pixels stay at the
+bath temperature, and an external controller replays the couplings
+$\theta_{\tau-s}$. We store them at \nSlices{} noise levels and interpolate
+linearly in between. The coarse and the fine patch set enter at
+$s=\tau-t_{\mathrm c}$ and $s=\tau-t_{\mathrm f}$.
+
+\textbf{The factor two.}
+The potential of \eqref{eq:reverse} contains $2F_t$. For the visible energy,
+which is linear in its parameters, $2\Evis_t-\tfrac12\lVert\x\rVert^{2}$ is the
+same network with other coupling constants. For the hidden units this fails:
+doubling the couplings of a unit at temperature $T$ does not double its free
+energy, since $-T\log2\cosh(2a/T)\neq-2T\log2\cosh(a/T)$. Two copies of every
+hidden unit, each at temperature $T$ and with the trained couplings, give
+$2F_t$ exactly, with the whole system at one temperature and all couplings
+reciprocal. A gain of two on the force that the hidden units exert on the
+pixels gives the same drift without reciprocity
+(Appendix~\ref{app:derivation}). Our simulations use the drift of
+\eqref{eq:reverse} directly.
+
+\textbf{Quench and corrector.}
+After the reverse process we switch the bath off for a short time,
+$\dot{\x}=-\nabla F_{0}(\x)$. The pixels relax in the final landscape, which
+removes the thermal speckle (Table~\ref{tab:sampler}). Optionally, two Langevin
+steps at fixed couplings follow every stored noise level, the corrector of
+\citet{song2021score}.
+
+\textbf{Validity.}
+The free-energy picture holds if the hidden units equilibrate faster than the
+pixels relax and faster than the couplings change
+(Appendix~\ref{app:derivation}). Our simulations take this limit: they evaluate
+the occupations and the mean force \eqref{eq:mean-force} in closed form and do
+not simulate hidden trajectories.
 
 % =============================================================================
 \section{Learning from Statistics at Clamped Data}
 \label{sec:learning}
-\budget{1.0 page}
+\budget{1.0 page planned; about 1.4 with the derivation in the main text}
 
-\subsection{A Local Rule Without a Negative Phase}
-\begin{plan}
-  \item \textbf{Setting.} Clamp the pixels to a noised image $\x\sim p_t$. The
-        hidden units equilibrate; state $m$ of a Potts unit has occupation
-        $p_m=\mathrm{softmax}(a/T)_m$. The clamp force is
-        $\bm{\psi}=\nabla F_t(\x)$.
-  \item \textbf{Rule for one Potts unit} (write for the global unit; the patch
-        units have the same form on their patch). With
-        $G_m=W_m+2Q_m\!\circ\!\x$, $\bar G=\sum_k p_kG_k$,
-        $V=\sum_k p_k\lVert G_k-\bar G\rVert^{2}$, $s_m=\sum_i Q_{mi}$ and
-        $\bar s=\sum_k p_k s_k$, define one scalar per state,
-\end{plan}
+Throughout this section the pixels are \emph{clamped}: held by an external
+constraint at a noised training image $\x\sim p_t$, while the hidden units
+equilibrate. We write $\bm{\psi}(\x)=\nabla F_t(\x)$ for the force that the
+clamp must supply, and $\langle\,\cdot\,\rangle$ for the average over
+$\x\sim p_t$.
+
+\subsection{The Gradient as a Response to Release}
+
+Let $\theta$ be any parameter of $F_t$. Differentiating \eqref{eq:loss} gives
 \begin{equation}
-  c_m = \lVert G_m-\bar G\rVert^{2} - V + 2T(s_m-\bar s)
-        - (G_m-\bar G)\!\cdot\!\bm{\psi} ,
-  \label{eq:cm}
+  \partial_\theta J_t = -\frac{1}{T^{2}}
+     \bigl\langle \gen\,\partial_\theta F_t \bigr\rangle ,
+  \qquad
+  \gen = T\Delta - \bm{\psi}\!\cdot\!\nabla .
+  \label{eq:generator}
 \end{equation}
-\begin{plan}
-  \item and the gradient of \eqref{eq:loss} is
-\end{plan}
+The operator $\gen$ is the generator of the Langevin dynamics of the pixels in
+$F_t$: for an observable $g$, $\gen g(\x)$ is the rate at which the mean of
+$g$ changes when the pixels are released from $\x$. The observable
+$\partial_\theta F_t$ is the Hebbian term of a Boltzmann machine, for example
+$-p_m$ for the bias of state $m$ and $-p_mx_i$ for its coupling to pixel $i$.
+Equation \eqref{eq:generator} thus says that learning has converged when the
+Hebbian terms are stationary under the model's own dynamics started from data.
+
+A device could measure $\gen\,\partial_\theta F_t$ literally, by releasing the
+pixels for a short time and reading the Hebbian term before and after. This is
+contrastive divergence with one short Langevin step
+\citep{hinton2002training,hyvarinen2007connections}. It is a difference of two
+noisy readings whose signal vanishes with the release time. We instead
+evaluate $\gen\,\partial_\theta F_t$ at the clamp.
+
+\subsection{The Rule for a Potts Unit}
+
+Consider one Potts unit and drop its index $u$. Let
+$\bar G=\sum_k p_kG_k$ be the mean force of the unit on the pixels and
+$\delta G_m=G_m-\bar G$ the excess force of state $m$. The occupations respond
+to a displacement of the pixels as
+\begin{equation}
+  \nabla p_m = \frac{p_m}{T}\,\delta G_m .
+  \label{eq:response}
+\end{equation}
+Taking the divergence of \eqref{eq:response}, with
+$\nabla\!\cdot G_m=2q_m$ and $q_m=\sum_iQ_{mi}$, and inserting both into
+$\gen$ gives
+\begin{align}
+  \gen\,p_m &= \frac{p_m}{T}\,c_m , \qquad
+  c_m = \phi_m-\sum_k p_k\phi_k , \nonumber\\
+  \phi_m &= \delta G_m\!\cdot\!\bigl(\delta G_m-\bm{\psi}\bigr) + 2T\,q_m .
+  \label{eq:cm}
+\end{align}
+The parameters of state $m$ enter $F_t$ through
+$\partial_{b_m}F_t=-p_m$, $\partial_{W_{mi}}F_t=-p_mx_i$ and
+$\partial_{Q_{mi}}F_t=-p_mx_i^{2}$. The product rule
+$\gen(fg)=f\gen g+g\gen f+2T\,\nabla f\!\cdot\!\nabla g$, together with
+$\gen x_i=-\psi_i$ and $\gen x_i^{2}=2T-2x_i\psi_i$, then turns
+\eqref{eq:generator} into
 \begin{align}
   \partial_{b_m}J_t &= \frac{\langle p_m c_m\rangle}{T^{3}} , \nonumber\\
   \partial_{W_{mi}}J_t &= \Bigl\langle p_m\Bigl[\tfrac{x_i c_m}{T^{3}}
-      + \tfrac{2(G_{mi}-\bar G_i)-\psi_i}{T^{2}}\Bigr]\Bigr\rangle ,
+      + \tfrac{2\,\delta G_{mi}-\psi_i}{T^{2}}\Bigr]\Bigr\rangle , \nonumber\\
+  \partial_{Q_{mi}}J_t &= \Bigl\langle p_m\Bigl[\tfrac{x_i^{2}c_m}{T^{3}}
+      + \tfrac{2x_i(2\,\delta G_{mi}-\psi_i)}{T^{2}}
+      + \tfrac{2}{T}\Bigr]\Bigr\rangle .
   \label{eq:rule}
 \end{align}
-\begin{plan}
-  \item (and the analogous expression for $Q_{mi}$; Appendix
-        \ref{app:derivation}).
-        \todo{the rule for the patch units is checked against automatic
-        differentiation on a small model (relative difference below
-        $2\times10^{-15}$); it is not yet checked on trained slices.}
-  \item \textbf{Why it is local.} A coupler $(m,i)$ needs a scalar of its hidden
-        state ($p_m$, $c_m$) and signals of its pixel ($x_i$, $\psi_i$,
-        $\bar G_i$).
-  \item \textbf{One phase, full clamp (novelty statement 2).} The rule is one
-        experiment per training image: the pixels are held at the noised data
-        point, the hidden units equilibrate, and everything is read at that one
-        configuration. No free phase, no second run, no difference of two
-        states, no limit of small amplitude.
-  \item \textbf{Fluctuations take the place of the nudge.} The gradient of
-        \eqref{eq:loss} contains the response of the hidden units to a
-        displacement of the pixels. A thermal unit shows this response in its
-        fluctuations at the fixed clamp:
-        $\bm{\psi}\!\cdot\!\nabla_{\x}p_m
-        =\tfrac{1}{T}\,\mathrm{Cov}_{k}\bigl(\delta_{km},\,G_k\!\cdot\!\bm{\psi}\bigr)
-        =\tfrac{1}{T}\,p_m(G_m-\bar G)\!\cdot\!\bm{\psi}$,
-        and the Laplacian term gives the second and third moments in
-        \eqref{eq:cm} in the same way. This is what the last term and the
-        first two terms of $c_m$ are.
-  \item \textbf{The price, state it.} (i) The hidden units must be thermal:
-        a deterministic element with output $p_m$ has no fluctuations to read
-        and would need displacements of the clamp. (ii) Moments estimated
-        from $S$ reads carry a bias of order $1/S$, which takes the place of
-        the finite-nudge bias and is removed by a jackknife
-        (Section~\ref{sec:sampled}).
-  \item \textbf{What a device measures.} Clamp forces; the active state of
-        each hidden unit at each read; the sums over pixels inside $c_m$.
-        These sums can be read from the hidden unit's input field under a
-        symmetric pair of probe displacements of the clamp, exact at any
-        amplitude because the fields are quadratic in $\x$. Call these
-        ``probe displacements'', never ``nudges'': they are a read-out of an
-        inner product, not a second phase.
-  \item \textbf{What is not needed.} No free-running negative phase
-        \citep{hinton2002training,jelincic2025dtm}, no nudged second
-        equilibrium of the whole system
-        \citep{scellier2017equilibrium,de2026symmetric}, no backpropagation.
-        In the language of Boltzmann machines: a positive phase only, with
-        higher moments of the hidden units in place of the negative phase.
-  \item \textbf{State plainly.} In our simulations the clamp forces and
-        projections are computed exactly; only the hidden states are sampled.
-\end{plan}
+This is the complete rule. With several hidden units, each unit obeys
+\eqref{eq:rule} with its own $p$, $G$ and $\phi$ and with the total clamp
+force $\bm{\psi}$: the Laplacian in \eqref{eq:loss} is additive over the units,
+so no cross terms between units appear. The bistable units are the case of two
+states with opposite fields. For a parameter of the visible energy,
+$\partial_\theta F_t$ is a fixed function of $\x$ and \eqref{eq:generator} is
+the rule of \citet{firstpaper2025}, with $\bm{\psi}$ now including the mean
+force of the hidden units. Equation \eqref{eq:rule} agrees with automatic
+differentiation of \eqref{eq:loss} to rounding error, on trained models for
+the global and per-pixel units and on a small test model that includes patch
+units (Appendix~\ref{app:derivation}).
+
+\subsection{One Phase at Full Clamp}
+\label{sec:onephase}
+
+\textbf{No second phase.}
+Equation \eqref{eq:rule} is one experiment per training image. The pixels are
+held at the noised data point, the hidden units equilibrate, and everything is
+read at this one configuration. There is no free-running phase as in
+Boltzmann learning \citep{hinton2002training,jelincic2025dtm}, no second,
+nudged equilibrium of the whole system as in equilibrium propagation
+\citep{scellier2017equilibrium}, and no limit of small perturbation. The clamp
+is a full clamp, as in the positive phase of a Boltzmann machine; the negative
+phase is replaced by higher moments of the hidden units in the positive phase.
+
+\textbf{Fluctuations take the place of the nudge.}
+Equation \eqref{eq:response} is a response of the hidden unit to a
+displacement of the pixels, which a deterministic unit could only reveal if
+the pixels were displaced. A thermal unit reveals it in its fluctuations at
+the fixed clamp. As the unit hops between its states $k$, let $\phi_k$ be the
+scalar of \eqref{eq:cm} for the state that is active. Then
+\begin{equation}
+  \gen\,p_m = \frac{1}{T}\,\Cov_k\bigl(\delta_{km},\,\phi_k\bigr) ,
+  \label{eq:cov}
+\end{equation}
+the covariance, over the unit's own thermal states, between ``state $m$ is
+active'' and $\phi$. The term of $\phi$ that is linear in $\bm{\psi}$ is the
+fluctuation--response relation
+$\bm{\psi}\!\cdot\!\nabla p_m=\Cov_k(\delta_{km},G_k\!\cdot\!\bm{\psi})/T$; the
+quadratic term comes from the Laplacian in the same way.
+
+\textbf{The rule per read.}
+Read the hidden unit $S$ times while the pixels are clamped. If a read finds
+the unit in state $k$, only the parameters of that state are updated:
+\begin{align}
+  \Delta b_k &\propto -\frac{\phi_k-\bar\phi}{T^{3}} , \nonumber\\
+  \Delta W_{ki} &\propto -\frac{x_i(\phi_k-\bar\phi)}{T^{3}}
+                 -\frac{2\,\delta G_{ki}-\psi_i}{T^{2}} ,
+  \label{eq:per-read}
+\end{align}
+and likewise for $Q_{ki}$, where $\bar\phi$, $\bar G$ and $\bm{\psi}$ are
+averages over the $S$ reads. Averaged over the reads, \eqref{eq:per-read} is
+\eqref{eq:rule} with the occupations $p_m$ replaced by the measured
+frequencies $\hat p_m$. A coupler $(k,i)$ needs one scalar of its hidden state,
+$\phi_k-\bar\phi$, and signals of its pixel: the position $x_i$, the clamp
+force $\psi_i$, and the excess force $\delta G_{ki}$ that the unit exerts on
+this pixel during the read.
+
+\textbf{What a device measures.}
+(i)~The active state of every hidden unit at each read.
+(ii)~The time-averaged force on every clamp, $\psi_i$.
+(iii)~The sum over the unit's pixels inside $\phi_k$, the only quantity that
+is not local to a coupler. It can be accumulated along the unit's line, or
+read from the unit's input field under symmetric pairs of probe displacements
+$\pm\varepsilon\bm{v}$ of the clamp:
+$[a_k(\x+\varepsilon\bm{v})-a_k(\x-\varepsilon\bm{v})]/2\varepsilon
+=G_k\!\cdot\!\bm{v}$
+holds for any $\varepsilon$, because the fields are quadratic in $\x$
+(Appendix~\ref{app:derivation}). Such a probe reads an inner product. It
+carries no error signal and is not a second phase.
+
+\textbf{The price.}
+First, the hidden units must be thermal. A deterministic element with output
+$p_m$ has no fluctuations to read, and its response would have to be measured
+by displacing the clamp. Second, \eqref{eq:rule} contains products of
+measured averages, so its estimate from $S$ reads is biased at order $1/S$.
+This bias takes the place of the finite-nudge bias of equilibrium propagation,
+and Section~\ref{sec:sampled} removes it. Third, in our simulations only (i)
+is sampled: the clamp forces and the sums over pixels are computed in exact
+arithmetic from the sampled states, without read noise.
 
 \subsection{Sampled Hidden Statistics}
 \label{sec:sampled}
-\begin{plan}
-  \item \textbf{On a device} the occupations are estimated from $S$ sampled
-        hidden states per clamped image, for every hidden unit.
-  \item \textbf{Two ingredients}, one sentence each, details in Appendix
-        \ref{app:sampled}: a jackknife correction of the plug-in bias; a
-        visit-count step rule (the averaged gradient of a state divided by its
-        averaged visit count) in place of Adam for the hidden couplings.
-  \item \textbf{Cost.} $S$ reads per clamped image; training time
-        \trainHoursSlarge\,h against \trainHoursExact\,h with exact averages
-        (CelebA $32\times32$, one GPU).
-  \item Optional: Algorithm 1, ``training one time slice on the device'', if
-        space allows (about 0.25 page).
-\end{plan}
+
+\textbf{Jackknife.}
+Let $\hat J_S$ be the loss \eqref{eq:loss} with every occupation replaced by
+its frequency over $S$ reads. The loss is quadratic in these frequencies, and
+\begin{equation}
+  \mathbb{E}\bigl[\hat J_S\bigr] = J_t - \frac{V}{2ST^{2}} ,
+  \label{eq:bias}
+\end{equation}
+where $V$ is the variance of the forces that the hidden units exert on the
+pixels, summed over all hidden units and averaged over the data. We remove
+this bias, and the bias of the gradient to first order in $1/S$, with a
+jackknife over the same reads, using the loss of all $S$ reads and of its two
+halves,
+\begin{equation}
+  \hat J^{\,\mathrm{jk}}_S = 2\hat J_S
+    -\tfrac12\bigl(\hat J^{(1)}_{S/2}+\hat J^{(2)}_{S/2}\bigr) ,
+  \label{eq:jackknife}
+\end{equation}
+which costs no further reads. On a device, this means averaging the hidden
+read-outs over one full window and its two halves
+(Appendix~\ref{app:sampled}).
+
+\textbf{Visit-count rule.}
+With few reads, a rarely occupied state is rarely visited. Its gradient is
+zero in most steps and large in the others, and an optimiser that normalises
+every coupling by its own gradient history, such as Adam
+\citep{kingma2015adam}, then moves it too slowly and the state dies out. For
+the hidden couplings we therefore keep, per state, a leaky average of its
+gradient and a leaky count of its visits, and step by their ratio
+(Appendix~\ref{app:sampled}). This needs one counter per hidden state.
 
 % =============================================================================
 \section{Experiments}
@@ -427,6 +622,7 @@ crossbar hardware.
 \budget{3.0 pages, including Figures~\ref{fig:ondevice}, \ref{fig:samples} and the two tables}
 
 \subsection{Setup}
+\label{sec:setup}
 \begin{plan}
   \item \textbf{Data.} MNIST \citep{lecun1998gradient}, Fashion-MNIST
         \citep{xiao2017fashion}, CelebA \citep{liu2015deep} as grey centre crops

@@ -82,6 +82,46 @@ This section is the plan. Sections 1 to 6 record the state of 2026-11-17 and are
     the ablation that shows what the global unit does. Figure 3 cannot show the K16 digits next to an FID of 12-14
     without a second number: a reader checks the samples first.
   - Not decided by the user as of this entry. `results.tex` is not filled for MNIST and Fashion until it is.
+  - **Result of the test (notebook, "Global-unit test", 2026-11-21 16:00; exact, seed 1, n = 2000, quench 1):**
+    the reading holds. With the locked patch units, every metric improves with K.
+
+    | | Inception FID | classifier FID | confident share |
+    |---|---|---|---|
+    | MNIST, K16 / K128 / K784 | 14.39 / 12.03 / **10.01** | 14.23 / 9.44 / **6.23** | 71.5 / 76.3 / **83.0%** |
+    | MNIST, old best (K784 + 7x7) | 27.86 | 7.66 | 88.8% |
+    | Fashion, K16 / K128 / K784 | 26.00 / 23.53 / **21.32** | 5.97 / 3.57 / **2.77** | 49.9 / 58.5 / **62.0%** |
+    | Fashion, old best (K784 + 8x8) | 26.35 | 3.17 | 62.7% |
+
+    Galleries `2026-11-21_{mnist,fashion}_global-unit-test_...`: K784 with the locked patches draws the same digit
+    as the old best on most trajectories, without the grain; K16 and K128 more often an unclear shape. My
+    recommendation, as the coding agent's: K784 for MNIST and Fashion, K16 for faces. Cost: about 2.7 M couplings
+    per slice at 28x28 instead of about 1.55 M (my count from the unit sizes), 2.2 h instead of 1.4 h. Open risk:
+    on-device training of K784 at S = 16 has not been run on these data. In the paper: K is the one size set per
+    data set, and the K16 / K128 / K784 rows are the ablation of the global unit. The user's decision is pending.
+- **Ablation of the visible springs (2026-11-21 16:20; notebook, "Ablation: do the visible-visible springs
+  matter"; CelebA-32, exact, seed 1, n = 2000, quench 1; Inception 4290233).**
+
+  | | Inception FID | as sampled, no quench |
+  |---|---|---|
+  | locked model | 20.20 | 76.70 |
+  | the same without springs (`--pair-terms none`) | 25.83 | 99.31 |
+  | pixels only: this paper's visible energy, no hidden units | 218.38 | 317.32 |
+
+  - Gallery `2026-11-21_celeba32_spring-ablation_...`: without springs the same face on every trajectory, with
+    speckle from pixel to pixel and blockier edges; pixels only gives one generic face-like texture on every
+    trajectory. I looked at the grids and agree with the notebook's reading.
+  - For the paper: one decomposition, 218 -> 25.8 -> 20.2 (hidden units give the content, springs smooth
+    neighbouring pixels). Two sentences in Section 5, rows in the ablation table, the same-trajectory strip in the
+    appendix. Section 6: the device is not purely bipartite; it needs nearest-neighbour couplings between the
+    visible units on top of the crossbar of Bacvanski et al.
+  - **Label the pixels-only row correctly:** it is the simplified visible energy of this paper (quartic on-site
+    terms, springs to 8 neighbours), not the model of the first paper (all pairs within distance 14, three pair
+    terms). It must not be presented as the first paper's result.
+  - **FID_inf is not usable as it stands.** In today's tables it exceeds the FID in two rows (pixels only 338
+    against 218; MNIST as sampled 58.9 against 50.6), and its distance to the FID varies from 3.7 to 12.6 between
+    similar models. A likely cause: 2000 samples are fewer than the 2048 feature dimensions, so the extrapolation
+    in 1/N is not in its linear range. Report the FID at fixed n with the floor of real images at the same n, and
+    FID_inf only from the 10,000-sample sets.
 
 ## 1. Thesis and scope
 
@@ -1016,4 +1056,16 @@ texts read).
 - 2026-11-21 (afternoon): section 12, addition on two novelty statements proposed by the user (learned memories;
   one phase at full clamp), with the wording that holds and the prior work that limits each; written into
   `main.tex`.
+- 2026-11-21 (evening): abstract and Sections 1 to 4 of `main.tex` written as prose, at the user's request, with
+  the derivation of the rule in the main text (the generator form: dJ/dtheta = -<L dF/dtheta>/T^2 with
+  L = T Lap - psi . grad; L p_m = p_m c_m / T; product rule for W and Q; then the covariance form and the rule per
+  read). Sections 5 to 8 and the appendices are still bullets. The earlier bullets of Sections 1 to 4 are kept in
+  `ICML-writeup/main_skeleton_bullets_2026-11-21.tex`. **Length:** Sections 1 to 4 with Figure 1 end at the top of
+  page 6 (about 5.0 pages, notes shown), against 3.9 planned; with the planned 4.9 pages for Sections 5 to 8 the
+  main text would be about 10 pages against the limit of 8. First candidates to move to the appendix: the
+  jackknife formula and visit-count rule (4.4), "what a device measures" and the rule per read (4.3), the factor
+  two (3.2), equation (8) with the stored memories (3.1).
+- 2026-11-21 (17:00): section 0, results of the global-unit test (K784 with the locked patches is best on MNIST
+  and Fashion; decision pending) and of the spring ablation (20.20 / 25.83 / 218.4); notes on the label of the
+  pixels-only row and on FID_inf.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.
