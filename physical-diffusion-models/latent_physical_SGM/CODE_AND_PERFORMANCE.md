@@ -6448,6 +6448,13 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
     `--visible harmonic --pair-terms none`; run `celeba32g_K16_ema_potts_quad_local_harmonic_r1_nopairs_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1`)
     -> Inception 4290732 and gallery 4290733 with all spring-ablation rows (scratchpad `eval_springs.sh`, now 4
     rows; gallery `..._spring-ablation_locked-K16-64-states_with-vs-without-springs_vs-harmonic-self-spring-only_vs-pixels-only_...`).
+  - **Harmonic test 4290730 PASSED (17:41):** quartic path old vs new bitwise; refusals of --pair-terms all / duff /
+    lin,om; k_duff, k_6 and all pair groups exactly 0 in all 100 slices; 0 of 200 samples diverged (1%-steps run).
+    Confinement margin min_i [k_lin_i / 2 - Q+_i] (Q+ = max positive squared-pixel coupling of the global unit +
+    folded patch units): in the trained **quartic 20.20 model** it turns negative from t ~ 1.5 on (slice 70: 983 of
+    1024 pixels; slices 90 and 99: all pixels; k_lin median 0.66 -> 0.04, patch Q+ up to 1.3). So at small t the
+    x^4 term, not k_lin, confines that model; a fully trained harmonic model may become unbounded there (watch the
+    div column of 4290732). Full run 4290731 started 17:43.
   - **CelebA-32 K784 with the locked patches, exact:** pipeline **4290714**, corrector set 4290715 (64 G); Inception
     4290734 (K784 vs K16 vs the previous K64), gallery 4290735
     (`galleries/2026-11-21_celeba32_global-unit-test_K16-vs-K784_locked-patches-16x16-8x8-64-states_exact_noise-start_quench1`);
@@ -6466,6 +6473,12 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
     exact / S64 / S16 / corrector / knots, in one table and one gallery
     (`galleries/2026-11-21_{mnist,fashion}_locked-patches-64-states_K16-and-K784_exact-vs-on-device-S64-vs-S16_noise-start_quench1`).
   - Disk at submission: 858 G of 1 T used (84%), 167 G free.
+- **CelebA-32 on device S = 16 started before gate (a) (2026-11-21 17:55; the user: "yes start CelebA-32 S=16 now").**
+  Pipeline **4290850** (24 h), corrector set 4290851. Also queued behind 4289676 (CelebA-32 on device S = 64), the
+  lock-in sampling extras that were not yet submitted: corrector set 4290852, post-hoc knots 5/9/9 4290853 -> SDE +
+  quench 1 4290854, ODE + quench 1 4290855. Full CelebA-32 lock-in table (exact, S64, S16, corrector, knots, ODE):
+  Inception **4290856**; gallery (real, exact, S64, S16) 4290857. The earlier Inception 4289742 still runs after
+  4289676 with the sets that exist then. CelebA-64 on device (S = 64, S = 16) still waits for gate (a).
 - **To follow after the gates:** on device S = 64 / S = 16 (incl. CelebA-32 S = 16); corrector sets for them;
   post-hoc knots 5/9/9 (wl, bl constant) on each S = 64 model; ODE + quench on CelebA-32 S = 64; galleries per data
   set; then the second wave (seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the S = 64
