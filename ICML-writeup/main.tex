@@ -1,0 +1,701 @@
+%%%%%%%% ICML 2027 submission skeleton: physical diffusion models with hidden units %%%%%%%%
+%
+% Skeleton of 2026-11-21. Every section holds bullet points (blue) that say what
+% goes there, figure and table placeholders, and result placeholders (red xx.x)
+% that are filled in results.tex when the lock-in runs are in.
+%
+% Compile:  sbatch compile.sh      (or: latexmk -pdf main.tex)
+%
+% Two switches:
+%   \preprintversiontrue   -> arXiv version, authors shown ("Preprint" footer)
+%   \preprintversionfalse  -> anonymous ICML submission (the style hides the authors)
+%   \shownotesfalse        -> hides the budget notes and TODOs
+
+\documentclass{article}
+
+\newif\ifpreprintversion
+\preprintversionfalse          % <- switch here
+% compile.sh builds main_preprint.pdf by defining \forcepreprint on the command line
+\ifdefined\forcepreprint\preprintversiontrue\fi
+\newif\ifshownotes
+\shownotestrue                 % <- switch here
+
+% Recommended packages of the ICML template
+\usepackage{microtype}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\newcommand{\theHalgorithm}{\arabic{algorithm}}
+
+\ifpreprintversion
+  \usepackage[preprint]{icml2027}
+\else
+  \usepackage{icml2027}
+\fi
+
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{mathtools}
+\usepackage{bm}
+\usepackage{enumitem}
+
+% ---------------------------------------------------------------------------
+% Skeleton helpers
+% ---------------------------------------------------------------------------
+\definecolor{plancolor}{RGB}{0,70,140}
+\definecolor{tbdcolor}{RGB}{190,0,0}
+\definecolor{notegray}{RGB}{110,110,110}
+
+% bullet list that says what goes into a section
+\newenvironment{plan}
+  {\begin{itemize}[leftmargin=1.1em,itemsep=1pt,topsep=2pt,parsep=0pt]\color{plancolor}}
+  {\end{itemize}}
+% page budget and open points
+\newcommand{\budget}[1]{\ifshownotes{\noindent\small\itshape\textcolor{notegray}{[Budget: #1]}\par}\fi}
+\newcommand{\todo}[1]{\ifshownotes\textcolor{tbdcolor}{[TODO: #1]}\fi}
+% grey box that stands for a figure
+\newcommand{\placeholderbox}[3]{% width, height, text
+  \fcolorbox{notegray}{black!5}{%
+    \parbox[c][#2][c]{\dimexpr#1-2\fboxsep-2\fboxrule\relax}{\centering\small\color{plancolor}#3}}}
+
+% all numbers of the paper
+\input{results}
+
+% notation
+\newcommand{\x}{\bm{x}}
+\newcommand{\dd}{\mathrm{d}}
+\newcommand{\Evis}{E^{\mathrm{v}}}
+
+\icmltitlerunning{Physical Diffusion Models with Fast Hidden Units}
+
+\begin{document}
+
+\twocolumn[
+  \icmltitle{Physical Diffusion Models with Fast Hidden Units}
+
+  % Author information is removed automatically in the anonymous version.
+  \begin{icmlauthorlist}
+    \icmlauthor{First Author}{aff}
+    \icmlauthor{Second Author}{aff}
+    \icmlauthor{Third Author}{aff}
+  \end{icmlauthorlist}
+
+  \icmlaffiliation{aff}{Department, University, City, Country}
+
+  \icmlcorrespondingauthor{First Author}{first.author@university.edu}
+
+  \icmlkeywords{physical computing, neuromorphic computing, diffusion models, score matching, local learning, energy-based models}
+
+  \vskip 0.3in
+]
+
+\printAffiliationsAndNotice{}
+
+% =============================================================================
+\begin{abstract}
+% Draft. One paragraph, 4-6 sentences (ICML rule). Numbers come from results.tex.
+Physical systems that generate data through their own stochastic dynamics promise
+large savings in energy, but existing proposals are either trained by
+backpropagation through a digital model or limited to simple data.
+We introduce a score-based diffusion model in which the score is the force of a
+physical energy with fast hidden units: a small global Potts unit and Potts units
+on overlapping image patches, which sum out exactly and leave the visible units
+moving in a free-energy landscape.
+The time-dependent couplings are learned by a local rule that needs only
+statistics measured while the visible units are clamped to data, without a
+negative phase and without backpropagation.
+In simulation, training from \Slarge{} sampled hidden states per data point
+reaches an FID of \FIDcelebLowSlarge{} on $32\times32$ CelebA, against
+\FIDcelebLowExact{} with exact hidden averages, and the same model with unchanged
+hyperparameters generates MNIST, Fashion-MNIST and $64\times64$ faces
+(FID \FIDmnistSlarge, \FIDfashionSlarge{} and \FIDcelebHighSlarge).
+On MNIST and Fashion-MNIST this improves on earlier generative models designed
+for analog hardware.
+We describe how each operation of training and generation maps onto analog
+crossbar hardware.
+\end{abstract}
+
+% =============================================================================
+\section{Introduction}
+\label{sec:intro}
+\budget{0.9 page, including the top of Figure~\ref{fig:concept}}
+
+\begin{plan}
+  \item \textbf{Motivation.} The energy cost of generative models; physical and
+        thermodynamic computing as an alternative, where a system samples by its
+        own dynamics. Diffusion models fit this well: the reverse process is
+        Langevin dynamics in a time-dependent energy
+        \citep{sohldickstein2015deep,song2021score}.
+  \item \textbf{The gap, in three points.}
+        (i) Pairwise energies of the visible units are not expressive enough
+        beyond toy data \citep{firstpaper2025}.
+        (ii) More expressive proposals are trained with backpropagation through
+        a digital model \citep{wangachour2026}, with a free-running second phase
+        \citep{jelincic2025dtm}, or with nudged second equilibria
+        \citep{de2026symmetric,gower2026potentialep}.
+        (iii) Results beyond MNIST-scale data are missing.
+  \item \textbf{Idea.} Fast hidden units in one bipartite layer sum out exactly.
+        The visible units then move in a free energy, its gradient is the score,
+        and the score-matching gradient of every coupling becomes a local rule
+        evaluated at clamped data (Figure~\ref{fig:concept}).
+  \item \textbf{Contributions} (three bullets in the final text):
+        \begin{enumerate}[leftmargin=1.3em,itemsep=0pt,topsep=1pt]
+          \item the model: a small global Potts unit plus Potts units on
+                overlapping patches at two scales, switched on at different
+                noise levels;
+          \item the learning rule: local, no negative phase, and trainable from
+                \Slarge{} or \Ssmall{} sampled hidden states per data point;
+          \item the results: one model, unchanged, on MNIST, Fashion-MNIST and
+                CelebA at $32\times32$ and $64\times64$; exact against sampled
+                statistics; comparison with earlier analog-hardware models.
+        \end{enumerate}
+  \item \textbf{Scope, one sentence.} Everything is a simulation; Section
+        \ref{sec:hardware} discusses the mapping to hardware.
+\end{plan}
+
+% ---------------------------------------------------------------- Figure 1 ---
+\begin{figure*}[t]
+  \centering
+  \begin{minipage}[c]{0.36\textwidth}
+    \centering
+    \includegraphics[width=\linewidth]{Conceptual-fig/figure_stacked.pdf}
+  \end{minipage}\hfill
+  \begin{minipage}[c]{0.62\textwidth}
+    \placeholderbox{\linewidth}{2.25in}{%
+      \textbf{Figure 1 placeholder: to be redrawn from the figure on the left}
+      (\texttt{Conceptual-fig/figure\_stacked.tex}).\par\smallskip
+      Target shape: full text width, about 2.3\,in high, three panels side by
+      side.\par\smallskip
+      \textbf{(a) Physical network.} Visible oscillators with nearest-neighbour
+      springs, now with the hidden layer above them: one global Potts unit
+      coupled to all pixels, Potts units on overlapping patches (coarse and
+      fine), one bistable unit per pixel.\par\smallskip
+      \textbf{(b) Local learning.} Clamp the visible units to a noised image;
+      the fast hidden units settle; read the clamp forces and \Slarge{} sampled
+      hidden states; update each coupling from the two ends it connects. Drop
+      the CD1 branch of the old figure.\par\smallskip
+      \textbf{(c) Generation.} Replay the learned couplings in reverse time;
+      coarse patches switch on first, fine patches later; final quench. Use a
+      face trajectory in place of the digit.}
+  \end{minipage}
+  \caption{\textbf{A physical diffusion model with fast hidden units.}
+    \todo{caption after the redraw. (a) network with hidden units; (b) local
+    learning at clamped data from sampled hidden states; (c) generation by
+    replaying the learned couplings, followed by a quench.}}
+  \label{fig:concept}
+\end{figure*}
+
+% =============================================================================
+\section{Background: Diffusion as Physical Dynamics}
+\label{sec:background}
+\budget{0.5 page}
+
+\begin{plan}
+  \item \textbf{Forward process.} Ornstein--Uhlenbeck noising at temperature $T$
+        for $t\in[0,\tau]$:
+\end{plan}
+\begin{align}
+  \dd\x &= -\x\,\dd t + \sqrt{2T}\,\dd W , \nonumber\\
+  \x_t &= e^{-t}\x_0 + \sqrt{T\,(1-e^{-2t})}\,\bm{\epsilon} .
+  \label{eq:forward}
+\end{align}
+\begin{plan}
+  \item \textbf{Score as a force.} Parametrise $p_t(\x)\propto e^{-F_t(\x)/T}$,
+        so the score is $-\nabla F_t/T$ and the reverse process is Langevin
+        dynamics of a physical system with time-dependent couplings
+        \citep{firstpaper2025}. Cite in the third person.
+  \item \textbf{Training objective.} Score matching per noise level
+        \citep{hyvarinen2005estimation}, written with forces (``force
+        matching''):
+\end{plan}
+\begin{equation}
+  J_t(\theta) = \mathbb{E}_{\x\sim p_t}\!\left[
+     -\frac{\Delta F_t(\x)}{T} + \frac{\lVert\nabla F_t(\x)\rVert^{2}}{2T^{2}}
+  \right] .
+  \label{eq:loss}
+\end{equation}
+\begin{plan}
+  \item \textbf{What was known.} For an energy that is linear in its
+        parameters the gradient of~\eqref{eq:loss} is local, but a pairwise
+        energy of the pixels generates only digits 0 and 1
+        \citep{firstpaper2025}. One sentence; this is the baseline.
+\end{plan}
+
+% =============================================================================
+\section{Model: Fast Hidden Units}
+\label{sec:model}
+\budget{1.1 pages}
+
+\subsection{Energy and Free Energy}
+\begin{plan}
+  \item \textbf{Joint energy.} Visible units $\x\in\mathbb{R}^{N}$ (the pixels)
+        and discrete hidden units that couple to the pixels only (one bipartite
+        layer, no hidden--hidden couplings). A hidden state $m$ feels the field
+        $a_m(\x)=b_m+W_m\!\cdot\!\x+Q_m\!\cdot\!\x^{2}$.
+  \item \textbf{Fast hidden units sum out exactly.} The pixels move in
+\end{plan}
+\begin{align}
+  F_t(\x) ={}& \Evis_t(\x)
+     - T\log\sum_{m=1}^{K} e^{a_m(\x)/T} \nonumber\\
+   & - T\sum_{g}\sum_{p\in\mathcal{P}_g}\log\sum_{s=1}^{M} e^{a^{g}_{ps}(\x_p)/T}
+     \nonumber\\
+   & - T\sum_{i=1}^{N}\log 2\cosh\frac{c_i+w_i x_i}{T} ,
+  \label{eq:free-energy}
+\end{align}
+\begin{plan}
+  \item \textbf{The terms of \eqref{eq:free-energy}.}
+        $\Evis$: quartic on-site wells and springs to the 8 neighbours.
+        Global Potts unit with $K=\Kglobal$ states.
+        Patch sets $g$: a Potts unit with $M=\Mpatch$ states on each
+        overlapping patch $p$; a coarse set and a fine set.
+        One bistable unit per pixel.
+  \item \textbf{Why these units, one sentence each.} A Potts unit is a mixture
+        of templates (a product of independent binary units is not); patches
+        carry local structure that whole-image templates lack; the coarse set
+        acts from high noise, the fine set from lower noise.
+        \todo{give the two switch-on times and the patch sizes per resolution in
+        a small inline table; details in Appendix~\ref{app:model-search}.}
+  \item \textbf{Size.} \paramsCelebLow{} couplings per time slice at
+        $32\times32$ (\paramsSmall{} at $28\times28$, \paramsCelebHigh{} at
+        $64\times64$), \nSlices{} slices.
+\end{plan}
+
+\subsection{Generation}
+\begin{plan}
+  \item \textbf{Reverse process.} For reverse time $s\in[0,\tau]$,
+\end{plan}
+\begin{equation}
+  \dd\x = \bigl[\x - 2\nabla F_{\tau-s}(\x)\bigr]\dd s + \sqrt{2T}\,\dd W ,
+  \label{eq:reverse}
+\end{equation}
+\begin{plan}
+  \item with the couplings of the \nSlices{} slices interpolated linearly in
+        time and replayed by an external controller.
+  \item \textbf{Quench.} After the reverse process the bath is switched off for
+        a short time: $\dot{\x}=-\nabla F_{0}(\x)$. It removes the thermal
+        speckle (Table~\ref{tab:sampler}).
+  \item \textbf{Corrector (optional).} Two Langevin steps per slice
+        \citep{song2021score}.
+  \item \textbf{Physical reading of the factor 2.} Duplicated hidden units at
+        the bath temperature, or a gain of 2 on the hidden force
+        (Appendix~\ref{app:derivation}).
+\end{plan}
+
+% =============================================================================
+\section{Learning from Statistics at Clamped Data}
+\label{sec:learning}
+\budget{1.0 page}
+
+\subsection{A Local Rule Without a Negative Phase}
+\begin{plan}
+  \item \textbf{Setting.} Clamp the pixels to a noised image $\x\sim p_t$. The
+        hidden units equilibrate; state $m$ of a Potts unit has occupation
+        $p_m=\mathrm{softmax}(a/T)_m$. The clamp force is
+        $\bm{\psi}=\nabla F_t(\x)$.
+  \item \textbf{Rule for one Potts unit} (write for the global unit; the patch
+        units have the same form on their patch). With
+        $G_m=W_m+2Q_m\!\circ\!\x$, $\bar G=\sum_k p_kG_k$,
+        $V=\sum_k p_k\lVert G_k-\bar G\rVert^{2}$, $s_m=\sum_i Q_{mi}$ and
+        $\bar s=\sum_k p_k s_k$, define one scalar per state,
+\end{plan}
+\begin{equation}
+  c_m = \lVert G_m-\bar G\rVert^{2} - V + 2T(s_m-\bar s)
+        - (G_m-\bar G)\!\cdot\!\bm{\psi} ,
+  \label{eq:cm}
+\end{equation}
+\begin{plan}
+  \item and the gradient of \eqref{eq:loss} is
+\end{plan}
+\begin{align}
+  \partial_{b_m}J_t &= \frac{\langle p_m c_m\rangle}{T^{3}} , \nonumber\\
+  \partial_{W_{mi}}J_t &= \Bigl\langle p_m\Bigl[\tfrac{x_i c_m}{T^{3}}
+      + \tfrac{2(G_{mi}-\bar G_i)-\psi_i}{T^{2}}\Bigr]\Bigr\rangle ,
+  \label{eq:rule}
+\end{align}
+\begin{plan}
+  \item (and the analogous expression for $Q_{mi}$; Appendix
+        \ref{app:derivation}).
+        \todo{derive and check the rule for the patch units against automatic
+        differentiation; the code checks only the global and per-pixel units so
+        far.}
+  \item \textbf{Why it is local.} A coupler $(m,i)$ needs a scalar of its hidden
+        state ($p_m$, $c_m$) and signals of its pixel ($x_i$, $\psi_i$,
+        $\bar G_i$).
+  \item \textbf{What a device measures.} Clamp forces; occupations; the
+        projections inside $c_m$ from a symmetric pair of small displacements of
+        the clamped pixels, which is exact for any displacement because the
+        fields are quadratic in $\x$.
+  \item \textbf{What is not needed.} No free-running negative phase
+        \citep{hinton2002training,jelincic2025dtm}, no second equilibrium of the
+        whole system \citep{scellier2017equilibrium}, no backpropagation.
+  \item \textbf{State plainly.} In our simulations the clamp forces and
+        projections are computed exactly; only the hidden states are sampled.
+\end{plan}
+
+\subsection{Sampled Hidden Statistics}
+\begin{plan}
+  \item \textbf{On a device} the occupations are estimated from $S$ sampled
+        hidden states per clamped image, for every hidden unit.
+  \item \textbf{Two ingredients}, one sentence each, details in Appendix
+        \ref{app:sampled}: a jackknife correction of the plug-in bias; a
+        visit-count step rule (the averaged gradient of a state divided by its
+        averaged visit count) in place of Adam for the hidden couplings.
+  \item \textbf{Cost.} $S$ reads per clamped image; training time
+        \trainHoursSlarge\,h against \trainHoursExact\,h with exact averages
+        (CelebA $32\times32$, one GPU).
+  \item Optional: Algorithm 1, ``training one time slice on the device'', if
+        space allows (about 0.25 page).
+\end{plan}
+
+% =============================================================================
+\section{Experiments}
+\label{sec:experiments}
+\budget{3.0 pages, including Figures~\ref{fig:ondevice}, \ref{fig:samples} and the two tables}
+
+\subsection{Setup}
+\begin{plan}
+  \item \textbf{Data.} MNIST \citep{lecun1998gradient}, Fashion-MNIST
+        \citep{xiao2017fashion}, CelebA \citep{liu2015deep} as grey centre crops
+        at $32\times32$ and $64\times64$. Pixels in $[0,1]$ with
+        $\mathcal{N}(0,0.01^{2})$ noise, one global normalisation.
+  \item \textbf{Model.} The same for all four: $K=\Kglobal$, $M=\Mpatch$,
+        \nSlices{} slices, $T=0.02$, $\tau=5$. \todo{state the one thing that
+        differs with resolution: the patch sizes.}
+  \item \textbf{Training.} Each slice separately, from $t=\tau$ down, warm
+        started from the previous slice; 512 fresh noised images per step.
+        Three runs per data set: exact hidden averages; sampled with
+        $S=\Slarge$; sampled with $S=\Ssmall$.
+  \item \textbf{Sampling.} Noise start, reverse SDE \eqref{eq:reverse}, quench.
+        \nSamples{} samples per model.
+  \item \textbf{Metric.} Inception FID against the train split
+        \citep{heusel2017gans}; the floor is the FID of real test images at the
+        same sample count. \todo{say whether FID at n or the extrapolated
+        FID$_\infty$ \citep{chong2020effectively} is reported.}
+  \item \textbf{Compute.} One GPU per run; hours in
+        Appendix~\ref{app:details}.
+\end{plan}
+
+\subsection{Training from Sampled Hidden States}
+\begin{plan}
+  \item \textbf{Main result} (Figure~\ref{fig:ondevice},
+        Table~\ref{tab:results}): with $S=\Slarge$ the FID is within
+        \todo{x} of exact training on all four data sets
+        (CelebA $32\times32$: \FIDcelebLowSlarge{} against \FIDcelebLowExact).
+  \item \textbf{Fewer samples.} $S=\Ssmall$: \FIDcelebLowSsmall{}.
+        \todo{one sentence on where it starts to cost.}
+  \item \textbf{Same samples.} With the same start and noise, exact and sampled
+        training give the same images (strip in Figure~\ref{fig:samples} or
+        Appendix~\ref{app:more-results}).
+  \item \textbf{Seeds.} Spread over three seeds: \seedSdCelebLow{} (CelebA),
+        \seedSdMnist{} (MNIST), \seedSdFashion{} (Fashion).
+\end{plan}
+
+% ---------------------------------------------------------------- Figure 2 ---
+\begin{figure}[t]
+  \centering
+  \placeholderbox{\columnwidth}{2.1in}{%
+    \textbf{Figure 2 placeholder.}\par\smallskip
+    FID against the number of sampled hidden states.\par\smallskip
+    x-axis: $S=\Ssmall$, $S=\Slarge$, exact ($S\to\infty$).\par
+    y-axis: FID (log scale if the data sets differ much).\par
+    One line per data set: MNIST, Fashion-MNIST, CelebA $32\times32$,
+    CelebA $64\times64$; or four small panels.\par
+    Dashed line: exact training. Error bars: seeds, where run.\par\smallskip
+    Source: the lock-in runs; numbers as in Table~\ref{tab:results}.}
+  \caption{\textbf{Training from sampled hidden states matches training with
+    exact hidden averages.} \todo{caption: what is plotted, the protocol in one
+    line, the take-away.}}
+  \label{fig:ondevice}
+\end{figure}
+
+% ----------------------------------------------------------------- Table 1 ---
+\begin{table}[t]
+  \caption{\textbf{FID on four data sets} (\nSamples{} samples, quench).
+    Top: this work with exact hidden averages and with $S$ sampled hidden
+    states. Middle: earlier generative models for analog hardware
+    \todo{their sample counts are not stated; say so}.
+    Bottom: real test images.}
+  \label{tab:results}
+  \centering
+  \small
+  \setlength{\tabcolsep}{3.5pt}
+  \begin{tabular}{lcccc}
+    \toprule
+      & MNIST & Fashion & CelebA\,32 & CelebA\,64 \\
+    \midrule
+    \multicolumn{5}{l}{\emph{This work}} \\
+    exact averages        & \FIDmnistExact  & \FIDfashionExact  & \FIDcelebLowExact  & \FIDcelebHighExact  \\
+    sampled, $S=\Slarge$  & \FIDmnistSlarge & \FIDfashionSlarge & \FIDcelebLowSlarge & \FIDcelebHighSlarge \\
+    sampled, $S=\Ssmall$  & \FIDmnistSsmall & \FIDfashionSsmall & \FIDcelebLowSsmall & \FIDcelebHighSsmall \\
+    $S=\Slarge$, corrector & \FIDmnistSlargeCorr & \FIDfashionSlargeCorr & \FIDcelebLowSlargeCorr & \FIDcelebHighSlargeCorr \\
+    \midrule
+    \multicolumn{5}{l}{\emph{Earlier models for analog hardware}} \\
+    Wang \& Achour        & \FIDwaMnist  & \FIDwaFashion  & -- & -- \\
+    DTM (re-run)          & \FIDdtmMnist & \FIDdtmFashion & -- & -- \\
+    NLM (re-run)          & \FIDnlmMnist & \FIDnlmFashion & -- & -- \\
+    \midrule
+    real test images      & \floorMnist & \floorFashion & \floorCelebLow & \floorCelebHigh \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\subsection{Sample Quality and Comparison}
+\begin{plan}
+  \item \textbf{Samples} (Figure~\ref{fig:samples}): uncurated, next to real
+        images, from the model trained with $S=\Slarge$.
+  \item \textbf{Against earlier analog-hardware models}
+        (Table~\ref{tab:results}): MNIST \FIDmnistSlarge{} against \FIDwaMnist{}
+        \citep{wangachour2026}; Fashion-MNIST \FIDfashionSlarge{} against
+        \FIDwaFashion. Say how they are trained (adversarial loss with
+        backpropagation through the solver) and how large they are; ours is
+        larger. \todo{parameter counts of both, in the text or the table.}
+  \item \textbf{Faces.} No earlier model of this kind reports faces.
+        \todo{a digital reference on the same grey data, if run.}
+  \item \textbf{No memorisation.} Nearest-training-image distances as for real
+        test images (Appendix~\ref{app:more-results}).
+  \item \textbf{What is still wrong.} \todo{one honest sentence: contrast of
+        faces, residual malformed digits.}
+\end{plan}
+
+% ---------------------------------------------------------------- Figure 3 ---
+\begin{figure*}[t]
+  \centering
+  \placeholderbox{0.235\textwidth}{2.5in}{%
+    \textbf{MNIST}\par\smallskip real (left half)\par generated, $S=\Slarge$
+    (right half)\par\smallskip uncurated, fixed seed}\hfill
+  \placeholderbox{0.235\textwidth}{2.5in}{%
+    \textbf{Fashion-MNIST}\par\smallskip real (left half)\par generated,
+    $S=\Slarge$ (right half)\par\smallskip uncurated, fixed seed}\hfill
+  \placeholderbox{0.49\textwidth}{2.5in}{%
+    \textbf{CelebA}\par\smallskip top: $32\times32$, real and generated\par
+    bottom: $64\times64$, real and generated\par\smallskip
+    \textbf{Figure 3 placeholder.} Optional last row: the same trajectories
+    with exact averages, $S=\Slarge$ and $S=\Ssmall$.}
+  \caption{\textbf{Generated images on the three data sets,} from the model
+    trained with $S=\Slarge$ sampled hidden states. \todo{caption: uncurated;
+    which rows are real; protocol in one line.}}
+  \label{fig:samples}
+\end{figure*}
+
+\subsection{The Steps of the Sampler}
+\begin{plan}
+  \item \textbf{Quench.} As sampled against quenched
+        (Table~\ref{tab:sampler}): the largest single effect.
+  \item \textbf{Corrector.} Small at $32\times32$, larger at $64\times64$.
+  \item \textbf{Noise is needed.} The probability-flow ODE is worse
+        (\FIDablExactOde{} against \FIDcelebLowExact) and sensitive to the scale
+        of the force.
+  \item Could move to the appendix if space is short; keep one sentence here.
+\end{plan}
+
+% ----------------------------------------------------------------- Table 2 ---
+\begin{table}[t]
+  \caption{\textbf{Sampler ablation} on CelebA $32\times32$ (FID).}
+  \label{tab:sampler}
+  \centering
+  \small
+  \begin{tabular}{lcc}
+    \toprule
+    Sampler & exact & $S=\Slarge$ \\
+    \midrule
+    reverse SDE, as sampled       & \FIDablExactRaw       & \FIDablSlargeRaw \\
+    + quench                      & \FIDcelebLowExact     & \FIDcelebLowSlarge \\
+    + corrector and quench        & \FIDcelebLowExactCorr & \FIDcelebLowSlargeCorr \\
+    probability-flow ODE + quench & \FIDablExactOde       & \FIDablSlargeOde \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% =============================================================================
+\section{Towards Hardware}
+\label{sec:hardware}
+\budget{0.6 page; high level, no circuit design}
+
+\begin{plan}
+  \item \textbf{Each operation is a known analog primitive.}
+        Fields: forward read of a conductance array (crossbar)
+        \citep{wan2022neurram}.
+        Hidden average: an analog softmax element \citep{elfadel1993softmax};
+        a sampled state: a winner-take-all circuit with noise.
+        Force on the pixels: transposed read of the same array, so the coupling
+        is reciprocal by construction.
+        Learning: rank-one updates per clamped image; with a sampled state only
+        the winner's row changes.
+  \item \textbf{Most of the model is local.} The patch units are wired to
+        their patch only; the global unit has \Kglobal{} states.
+  \item \textbf{Time dependence.} \nSlices{} slices are a convenience of
+        training; a few coupling sets cross-faded in time suffice at sampling.
+        \todo{one sentence with the measured numbers: 5 to 9 sets per parameter
+        group, 7.8 times fewer stored couplings, no loss, on a larger global
+        unit; Appendix~\ref{app:model-search}.}
+  \item \textbf{Not shown here.} Explicit dynamics of the hidden units at a
+        finite switching rate; the displacement measurements with read noise;
+        the precision of the couplings. \todo{one sentence each.}
+\end{plan}
+
+% =============================================================================
+\section{Related Work}
+\label{sec:related}
+\budget{0.8 page; this section cannot be cut}
+
+\begin{plan}
+  \item \textbf{Generative models for analog and thermodynamic hardware.}
+        Denoising thermodynamic models: a chain of Boltzmann machines with
+        latent nodes, trained with a clamped and a free phase
+        \citep{jelincic2025dtm}.
+        Oscillator networks with hidden units and four weight sets, trained
+        adversarially with backpropagation through the solver
+        \citep{wangachour2026}.
+        Langevin computers trained on the likelihood of reversed trajectories
+        \citep{whitelam2025generative}, with an online local rule and hidden
+        units on a few MNIST prototypes \citep{wangdeng2026online}.
+  \item \textbf{Equilibrium propagation for generative models.}
+        \citet{scellier2017equilibrium}; denoising score matching with
+        symmetric nudges on synthetic data \citep{de2026symmetric}; energy
+        matching at CIFAR scale in simulation \citep{gower2026potentialep}.
+        Difference: these compare a free and a nudged equilibrium of the whole
+        system; our rule uses statistics at clamped data only, and the score is
+        the system's own force.
+  \item \textbf{Energy-based models with hidden units.} Contrastive divergence
+        \citep{hinton2002training}; exponential family harmoniums
+        \citep{welling2004exponential}, of which our model is a member with
+        visible--visible springs; score matching for such models
+        \citep{hyvarinen2005estimation,hyvarinen2007connections,swersky2011autoencoders,vincent2011connection};
+        dense associative memories \citep{krotov2021large}.
+  \item \textbf{Diffusion models.} \citet{song2019generative,ho2020denoising};
+        the final denoising step and the stochastic sampler are known practice,
+        here as physical operations.
+  \item \textbf{Physical learning.}
+        \citet{stern2021supervised,dillavou2026imperfection}.
+  \item \todo{read the three closest preprints in full before writing this
+        section; check for newer ones.}
+\end{plan}
+
+% =============================================================================
+\section{Limitations and Conclusion}
+\label{sec:conclusion}
+\budget{0.5 page}
+
+\begin{plan}
+  \item \textbf{Limitations.} A simulation in the limit of fast hidden units;
+        clamp forces and projections exact; grey images up to $64\times64$;
+        \paramsCelebLow{} couplings per slice; face contrast too low; the
+        comparison with earlier models is across different sizes and unknown
+        sample counts.
+  \item \textbf{Conclusion.} Three sentences: what the model is, that it trains
+        from sampled statistics without loss, what it reaches.
+  \item \textbf{Outlook.} A circuit-level study; explicit hidden dynamics;
+        colour.
+\end{plan}
+
+% ============================== END OF THE 8-PAGE MAIN TEXT ==================
+
+\section*{Software and Data}
+\begin{plan}
+  \item Code and trained models: anonymous link or supplementary material for
+        the submission; public repository for the preprint.
+\end{plan}
+
+\ifpreprintversion
+\section*{Acknowledgements}
+\begin{plan}
+  \item Funding, computing resources, discussions. Not in the anonymous version.
+\end{plan}
+\fi
+
+\section*{AI Use Statement}
+% Required by ICML 2027; does not count toward the page limit; at most one page.
+\begin{plan}
+  \item \todo{write this statement; authors are responsible for all content.}
+        Points to cover:
+  \item an AI coding agent wrote and ran much of the experiment code, submitted
+        the jobs, and kept the laboratory notebook under the authors' direction;
+  \item AI assistance in the literature search, in outlining and in drafting
+        text;
+  \item AI-assisted drawing code for Figure~\ref{fig:concept};
+  \item how the authors checked the code, the derivations and the numbers.
+\end{plan}
+
+\section*{Impact Statement}
+% Required; does not count toward the page limit.
+\begin{plan}
+  \item \todo{write.} Possible content: the aim is energy-efficient hardware
+        for generative models; the societal consequences are those of
+        generative models in general; no new risk specific to this work. The
+        standard ICML sentence may be enough.
+\end{plan}
+
+\bibliography{references}
+\bibliographystyle{icml2027}
+
+% =============================================================================
+% APPENDIX (no page limit)
+% =============================================================================
+\newpage
+\appendix
+\onecolumn
+
+\section{Derivations}
+\label{app:derivation}
+\begin{plan}
+  \item Free energy \eqref{eq:free-energy}, its gradient and Laplacian in closed
+        form.
+  \item The gradient of \eqref{eq:loss}: the rule \eqref{eq:rule} for the global
+        unit including $Q$, for the patch units, and for the per-pixel units.
+  \item Measuring the projections by symmetric displacements.
+  \item The reverse process with hidden units: why doubling the couplings is not
+        enough; duplicated hidden units.
+  \item Conditions on the time scale of the hidden units.
+\end{plan}
+
+\section{Sampled Statistics: Jackknife and Visit-Count Rule}
+\label{app:sampled}
+\begin{plan}
+  \item The plug-in bias of sampled occupations and the jackknife correction.
+  \item The visit-count rule and why per-element Adam loses hidden states.
+  \item Accuracy of the sampled gradient against $S$ (cosine with the exact
+        gradient; error falls as $1/\sqrt{S}$).
+\end{plan}
+
+\section{Training and Sampling Details}
+\label{app:details}
+\begin{plan}
+  \item Data preprocessing; patch sizes and switch-on times per resolution;
+        initialisation of the hidden units; steps per slice; learning rates.
+  \item Solver and tolerances; quench; corrector.
+  \item Evaluation: the FID implementation, sample counts, floors.
+  \item Compute per run (table).
+\end{plan}
+
+\section{Additional Results}
+\label{app:more-results}
+\begin{plan}
+  \item Full table: all data sets, with and without corrector, FID and
+        FID$_\infty$, seeds.
+  \item Class shares for MNIST and Fashion-MNIST.
+  \item Nearest training images (memorisation check).
+  \item More samples; the same trajectories under exact, $S=\Slarge$ and
+        $S=\Ssmall$ training.
+\end{plan}
+
+\section{Model Search}
+\label{app:model-search}
+\begin{plan}
+  \item Tables as they were run, each labelled with the model it was run on:
+        size of the global unit, number of patch states, the quadratic
+        couplings $Q$, switch-on times of the patch sets.
+  \item Fewer coupling sets in time: linear knots and step-wise constant
+        pieces.
+  \item What did not help: binary global units, frozen prototypes, shared
+        Gaussian modes.
+\end{plan}
+
+\section{Mapping to Hardware}
+\label{app:hardware}
+\begin{plan}
+  \item The table of operations and analog primitives behind
+        Section~\ref{sec:hardware}.
+\end{plan}
+
+\end{document}

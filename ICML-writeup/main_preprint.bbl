@@ -1,0 +1,188 @@
+\begin{thebibliography}{28}
+\providecommand{\natexlab}[1]{#1}
+\providecommand{\url}[1]{\texttt{#1}}
+\expandafter\ifx\csname urlstyle\endcsname\relax
+  \providecommand{\doi}[1]{doi: #1}\else
+  \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[{[authors to fill in]}(2025)]{firstpaper2025}
+{[authors to fill in]}.
+\newblock Local learning rules for out-of-equilibrium physical generative
+  models.
+\newblock \emph{arXiv preprint arXiv:2506.19136}, 2025.
+\newblock check: paste the correct entry.
+
+\bibitem[Chong \& Forsyth(2020)Chong and Forsyth]{chong2020effectively}
+Chong, M.~J. and Forsyth, D.
+\newblock Effectively unbiased {FID} and {I}nception {S}core and where to find
+  them.
+\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
+  Recognition}, 2020.
+
+\bibitem[De(2026)]{de2026symmetric}
+De, A.
+\newblock Symmetric equilibrium propagation for thermodynamic diffusion
+  training.
+\newblock \emph{arXiv preprint arXiv:2604.23806}, 2026.
+
+\bibitem[Dillavou et~al.(2026)Dillavou, Guzman, Liu, and
+  Durian]{dillavou2026imperfection}
+Dillavou, S., Guzman, M., Liu, A.~J., and Durian, D.~J.
+\newblock Understanding and embracing imperfection in physical learning
+  networks.
+\newblock \emph{PRX Intelligence}, 2026.
+\newblock accepted; check volume and pages.
+
+\bibitem[Elfadel \& Wyatt(1993)Elfadel and Wyatt]{elfadel1993softmax}
+Elfadel, I.~M. and Wyatt, Jr., J.~L.
+\newblock The ``softmax'' nonlinearity: Derivation using statistical mechanics
+  and useful properties as a multiterminal analog circuit element.
+\newblock In \emph{Advances in Neural Information Processing Systems 6}, pp.\
+  882--887, 1993.
+
+\bibitem[Gower(2026)]{gower2026potentialep}
+Gower, A.
+\newblock {PotentialEP}: Backprop-free training of {CIFAR}-scale generative
+  models via equilibrium propagation.
+\newblock \emph{arXiv preprint arXiv:2610.14409}, 2026.
+
+\bibitem[Heusel et~al.(2017)Heusel, Ramsauer, Unterthiner, Nessler, and
+  Hochreiter]{heusel2017gans}
+Heusel, M., Ramsauer, H., Unterthiner, T., Nessler, B., and Hochreiter, S.
+\newblock {GAN}s trained by a two time-scale update rule converge to a local
+  {N}ash equilibrium.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2017.
+
+\bibitem[Hinton(2002)]{hinton2002training}
+Hinton, G.~E.
+\newblock Training products of experts by minimizing contrastive divergence.
+\newblock \emph{Neural Computation}, 14\penalty0 (8):\penalty0 1771--1800,
+  2002.
+
+\bibitem[Ho et~al.(2020)Ho, Jain, and Abbeel]{ho2020denoising}
+Ho, J., Jain, A., and Abbeel, P.
+\newblock Denoising diffusion probabilistic models.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2020.
+
+\bibitem[Hyv{\"a}rinen(2005)]{hyvarinen2005estimation}
+Hyv{\"a}rinen, A.
+\newblock Estimation of non-normalized statistical models by score matching.
+\newblock \emph{Journal of Machine Learning Research}, 6:\penalty0 695--709,
+  2005.
+
+\bibitem[Hyv{\"a}rinen(2007)]{hyvarinen2007connections}
+Hyv{\"a}rinen, A.
+\newblock Connections between score matching, contrastive divergence, and
+  pseudolikelihood for continuous-valued variables.
+\newblock \emph{IEEE Transactions on Neural Networks}, 18\penalty0
+  (5):\penalty0 1529--1531, 2007.
+
+\bibitem[Jelin{\v{c}}i{\v{c}} et~al.(2025)Jelin{\v{c}}i{\v{c}}, Lockwood,
+  Garlapati, Schillinger, Chuang, Verdon, and McCourt]{jelincic2025dtm}
+Jelin{\v{c}}i{\v{c}}, Lockwood, Garlapati, Schillinger, Chuang, Verdon, and
+  McCourt.
+\newblock An efficient probabilistic hardware architecture for diffusion-like
+  models.
+\newblock \emph{arXiv preprint arXiv:2510.23972}, 2025.
+\newblock check: first names.
+
+\bibitem[Krotov \& Hopfield(2021)Krotov and Hopfield]{krotov2021large}
+Krotov, D. and Hopfield, J.~J.
+\newblock Large associative memory problem in neurobiology and machine
+  learning.
+\newblock In \emph{International Conference on Learning Representations}, 2021.
+
+\bibitem[LeCun et~al.(1998)LeCun, Bottou, Bengio, and
+  Haffner]{lecun1998gradient}
+LeCun, Y., Bottou, L., Bengio, Y., and Haffner, P.
+\newblock Gradient-based learning applied to document recognition.
+\newblock \emph{Proceedings of the IEEE}, 86\penalty0 (11):\penalty0
+  2278--2324, 1998.
+
+\bibitem[Liu et~al.(2015)Liu, Luo, Wang, and Tang]{liu2015deep}
+Liu, Z., Luo, P., Wang, X., and Tang, X.
+\newblock Deep learning face attributes in the wild.
+\newblock In \emph{IEEE International Conference on Computer Vision}, 2015.
+
+\bibitem[Scellier \& Bengio(2017)Scellier and Bengio]{scellier2017equilibrium}
+Scellier, B. and Bengio, Y.
+\newblock Equilibrium propagation: Bridging the gap between energy-based models
+  and backpropagation.
+\newblock \emph{Frontiers in Computational Neuroscience}, 11:\penalty0 24,
+  2017.
+
+\bibitem[Sohl-Dickstein et~al.(2015)Sohl-Dickstein, Weiss, Maheswaranathan, and
+  Ganguli]{sohldickstein2015deep}
+Sohl-Dickstein, J., Weiss, E., Maheswaranathan, N., and Ganguli, S.
+\newblock Deep unsupervised learning using nonequilibrium thermodynamics.
+\newblock In \emph{International Conference on Machine Learning}, 2015.
+
+\bibitem[Song \& Ermon(2019)Song and Ermon]{song2019generative}
+Song, Y. and Ermon, S.
+\newblock Generative modeling by estimating gradients of the data distribution.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2019.
+
+\bibitem[Song et~al.(2021)Song, Sohl-Dickstein, Kingma, Kumar, Ermon, and
+  Poole]{song2021score}
+Song, Y., Sohl-Dickstein, J., Kingma, D.~P., Kumar, A., Ermon, S., and Poole,
+  B.
+\newblock Score-based generative modeling through stochastic differential
+  equations.
+\newblock In \emph{International Conference on Learning Representations}, 2021.
+
+\bibitem[Stern et~al.(2021)Stern, Hexner, Rocks, and Liu]{stern2021supervised}
+Stern, M., Hexner, D., Rocks, J.~W., and Liu, A.~J.
+\newblock Supervised learning in physical networks: From machine learning to
+  learning machines.
+\newblock \emph{Physical Review X}, 11:\penalty0 021045, 2021.
+
+\bibitem[Swersky et~al.(2011)Swersky, Ranzato, Buchman, Marlin, and
+  de~Freitas]{swersky2011autoencoders}
+Swersky, K., Ranzato, M., Buchman, D., Marlin, B.~M., and de~Freitas, N.
+\newblock On autoencoders and score matching for energy based models.
+\newblock In \emph{International Conference on Machine Learning}, 2011.
+\newblock check.
+
+\bibitem[Vincent(2011)]{vincent2011connection}
+Vincent, P.
+\newblock A connection between score matching and denoising autoencoders.
+\newblock \emph{Neural Computation}, 23\penalty0 (7):\penalty0 1661--1674,
+  2011.
+
+\bibitem[Wan et~al.(2022)]{wan2022neurram}
+Wan, W. et~al.
+\newblock A compute-in-memory chip based on resistive random-access memory.
+\newblock \emph{Nature}, 608:\penalty0 504--512, 2022.
+\newblock check: full author list.
+
+\bibitem[Wang \& Achour(2026)Wang and Achour]{wangachour2026}
+Wang and Achour.
+\newblock Generative models on analog hardware with dynamics.
+\newblock \emph{arXiv preprint arXiv:2606.27294}, 2026.
+\newblock check: first names.
+
+\bibitem[Wang \& Deng(2026)Wang and Deng]{wangdeng2026online}
+Wang, H. and Deng, W.
+\newblock Online local learning for generative thermodynamic computing.
+\newblock \emph{arXiv preprint arXiv:2609.15439}, 2026.
+
+\bibitem[Welling et~al.(2004)Welling, Rosen-Zvi, and
+  Hinton]{welling2004exponential}
+Welling, M., Rosen-Zvi, M., and Hinton, G.~E.
+\newblock Exponential family harmoniums with an application to information
+  retrieval.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2004.
+
+\bibitem[Whitelam(2025)]{whitelam2025generative}
+Whitelam, S.
+\newblock Generative thermodynamic computing.
+\newblock \emph{arXiv preprint arXiv:2506.15121}, 2025.
+\newblock check: published in Physical Review Letters 136 (2026)?
+
+\bibitem[Xiao et~al.(2017)Xiao, Rasul, and Vollgraf]{xiao2017fashion}
+Xiao, H., Rasul, K., and Vollgraf, R.
+\newblock {Fashion-MNIST}: a novel image dataset for benchmarking machine
+  learning algorithms.
+\newblock \emph{arXiv preprint arXiv:1708.07747}, 2017.
+
+\end{thebibliography}

@@ -900,4 +900,7 @@ prior work ("no hidden units"; from a summary, to verify).
 - 2026-11-21: section 10 replaced by the official ICML 2027 dates and rules (arXiv before submission allowed).
 - 2026-11-21: section 0 added: the current plan for one short 8-page paper with the locked model; sections 1 to 6
   are now the record of 11-17.
+- 2026-11-21: LaTeX skeleton in `/n/fs/cyrills-part/oscillator_dev/ICML-writeup/` (`main.tex`, official ICML 2027
+  style; numbers in `results.tex`; compile with `sbatch compile.sh`). It follows section 0, with three figures
+  (concept; FID exact against sampled statistics; generated images) and two tables.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.

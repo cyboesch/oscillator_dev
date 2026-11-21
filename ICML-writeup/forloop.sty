@@ -1,0 +1,43 @@
+%%
+%% forloop.sty, v3.0 (2023/05/03), by nsetzer.
+%% Extracted from forloop.dtx (CTAN, macros/latex/contrib/forloop) because the
+%% TeX Live installation on this cluster does not ship the package and
+%% icml2027.sty requires it. Not needed where TeX Live already has forloop.
+%%
+%% This file may be distributed and/or modified under the
+%% conditions of the GNU Lesser General Public License.
+%%
+\NeedsTeXFormat{LaTeX2e}[1999/12/01]
+\ProvidesPackage{forloop}
+ [2023/05/03 v3.0 For Loops for LaTeX]
+\RequirePackage{ifthen}
+\newcommand{\forloop}[5][1]%
+{%
+\setcounter{#2}{#3}%
+\ifthenelse{#4}%
+	{%
+	#5%
+	\addtocounter{#2}{#1}%
+	\forloop[#1]{#2}{\value{#2}}{#4}{#5}%
+	}%
+	{%
+	}%
+}%
+\newcommand{\forLoop}[5][1]
+{%
+\setcounter{#4}{#2}%
+\ifthenelse{ \value{#4}<#3 }%
+	{%
+	#5%
+	\addtocounter{#4}{#1}%
+	\forLoop[#1]{\value{#4}}{#3}{#4}{#5}%
+	}%
+	{%
+	\ifthenelse{\value{#4}=#3}%
+		{%
+		#5%
+		}%
+		{}%
+	}%
+}
+\endinput

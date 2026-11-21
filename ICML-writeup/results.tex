@@ -1,0 +1,95 @@
+% =============================================================================
+% results.tex -- every number of the paper, one macro per number.
+%
+% When a run is in, replace \TBD by the value, e.g.
+%     \newcommand{\FIDcelebLowExact}{20.20}
+% Nothing else in main.tex has to change: the abstract, the text, Table 1 and
+% Table 2 all read these macros.
+%
+% Convention for all FID macros (the locked protocol, 2026-11-21):
+%   Inception FID against the train split, noise start, reverse SDE, quench 1,
+%   \nSamples generated samples, seed 1.  "Corr" = with two corrector steps.
+% =============================================================================
+
+\newcommand{\TBD}{\textcolor{tbdcolor}{\textbf{xx.x}}}
+
+% ---- protocol ----------------------------------------------------------------
+\newcommand{\nSamples}{\textcolor{tbdcolor}{\textbf{2{,}000}}} % 2,000 or 10,000: decide
+\newcommand{\Slarge}{64}      % sampled hidden states per clamped image, run 2
+\newcommand{\Ssmall}{16}      % sampled hidden states per clamped image, run 3
+\newcommand{\Kglobal}{16}     % states of the global Potts unit
+\newcommand{\Mpatch}{64}      % states of each patch Potts unit
+\newcommand{\nSlices}{100}    % time slices
+
+% ---- model size (couplings W + Q per time slice) -----------------------------
+\newcommand{\paramsSmall}{\TBD}     % 28x28 (MNIST, Fashion)
+\newcommand{\paramsCelebLow}{2.4\,M} % 32x32; notebook 2026-11-21: about 2.4 M
+\newcommand{\paramsCelebHigh}{\TBD} % 64x64
+
+% ---- floors: real test images against train, n = 2000 (MODEL_AND_CODE.md) ----
+\newcommand{\floorMnist}{3.7}
+\newcommand{\floorFashion}{7.2}
+\newcommand{\floorCelebLow}{6.4}
+\newcommand{\floorCelebHigh}{5.9}
+
+% ---- MNIST, ten digits --------------------------------------------------------
+\newcommand{\FIDmnistExact}{\TBD}       % exact statistics, Adam
+\newcommand{\FIDmnistSlarge}{\TBD}      % on device, S = 64
+\newcommand{\FIDmnistSsmall}{\TBD}      % on device, S = 16
+\newcommand{\FIDmnistExactCorr}{\TBD}
+\newcommand{\FIDmnistSlargeCorr}{\TBD}
+\newcommand{\FIDmnistSsmallCorr}{\TBD}
+
+% ---- Fashion-MNIST, ten classes -----------------------------------------------
+\newcommand{\FIDfashionExact}{\TBD}
+\newcommand{\FIDfashionSlarge}{\TBD}
+\newcommand{\FIDfashionSsmall}{\TBD}
+\newcommand{\FIDfashionExactCorr}{\TBD}
+\newcommand{\FIDfashionSlargeCorr}{\TBD}
+\newcommand{\FIDfashionSsmallCorr}{\TBD}
+
+% ---- CelebA 32x32 grey --------------------------------------------------------
+% Exists already: exact, K16 / 64 patch states = 20.20 (Inception job 4287721,
+% notebook 2026-11-21). Left as \TBD until the lock-in table is final.
+\newcommand{\FIDcelebLowExact}{\TBD}
+\newcommand{\FIDcelebLowSlarge}{\TBD}   % running: 4289676, Inception 4289677
+\newcommand{\FIDcelebLowSsmall}{\TBD}
+\newcommand{\FIDcelebLowExactCorr}{\TBD}
+\newcommand{\FIDcelebLowSlargeCorr}{\TBD}
+\newcommand{\FIDcelebLowSsmallCorr}{\TBD}
+
+% ---- CelebA 64x64 grey --------------------------------------------------------
+\newcommand{\FIDcelebHighExact}{\TBD}
+\newcommand{\FIDcelebHighSlarge}{\TBD}
+\newcommand{\FIDcelebHighSsmall}{\TBD}
+\newcommand{\FIDcelebHighExactCorr}{\TBD}
+\newcommand{\FIDcelebHighSlargeCorr}{\TBD}
+\newcommand{\FIDcelebHighSsmallCorr}{\TBD}
+
+% ---- sampler ablation, CelebA 32x32 (Table 2) ---------------------------------
+\newcommand{\FIDablExactRaw}{\TBD}      % as sampled, no quench
+\newcommand{\FIDablSlargeRaw}{\TBD}
+\newcommand{\FIDablExactOde}{\TBD}      % probability-flow ODE + quench
+\newcommand{\FIDablSlargeOde}{\TBD}
+% quench only and quench + corrector reuse \FIDcelebLow... above
+
+% ---- seed spread of the headline model (second wave) --------------------------
+\newcommand{\seedSdMnist}{\TBD}
+\newcommand{\seedSdFashion}{\TBD}
+\newcommand{\seedSdCelebLow}{\TBD}
+
+% ---- earlier models for analog hardware (verify against the papers) -----------
+% Wang & Achour, arXiv 2606.27294, their best model; their n and FID code are
+% not stated.
+\newcommand{\FIDwaMnist}{27.6}
+\newcommand{\FIDwaFashion}{80.8}
+% DTM and NLM as re-run by Wang & Achour. DTM's own paper (arXiv 2510.23972)
+% reports 28 +- 1 on *binarised* Fashion-MNIST; decide which to quote.
+\newcommand{\FIDdtmMnist}{107.8}
+\newcommand{\FIDdtmFashion}{112.8}
+\newcommand{\FIDnlmMnist}{230.5}
+\newcommand{\FIDnlmFashion}{200.8}
+
+% ---- compute -------------------------------------------------------------------
+\newcommand{\trainHoursExact}{\TBD}     % CelebA 32, one GPU
+\newcommand{\trainHoursSlarge}{\TBD}
