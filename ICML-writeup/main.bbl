@@ -1,4 +1,4 @@
-\begin{thebibliography}{36}
+\begin{thebibliography}{41}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
@@ -60,11 +60,17 @@ Elfadel, I.~M. and Wyatt, Jr., J.~L.
 \newblock In \emph{Advances in Neural Information Processing Systems 6}, pp.\
   882--887, 1993.
 
-\bibitem[Gower(2026)]{gower2026potentialep}
+\bibitem[Gower(2026{\natexlab{a}})]{gower2026floweqprop}
+Gower, A.
+\newblock {FlowEqProp}: Training flow matching generative models with gradient
+  equilibrium propagation.
+\newblock \emph{arXiv preprint arXiv:2604.08150}, 2026{\natexlab{a}}.
+
+\bibitem[Gower(2026{\natexlab{b}})]{gower2026potentialep}
 Gower, A.
 \newblock {PotentialEP}: Backprop-free training of {CIFAR}-scale generative
   models via equilibrium propagation.
-\newblock \emph{arXiv preprint arXiv:2610.14409}, 2026.
+\newblock \emph{arXiv preprint arXiv:2610.14409}, 2026{\natexlab{b}}.
 
 \bibitem[Heusel et~al.(2017)Heusel, Ramsauer, Unterthiner, Nessler, and
   Hochreiter]{heusel2017gans}
@@ -112,6 +118,12 @@ Jelin{\v{c}}i{\v{c}}, Lockwood, Garlapati, Schillinger, Chuang, Verdon, and
   models.
 \newblock \emph{arXiv preprint arXiv:2510.23972}, 2025.
 \newblock check: first names.
+
+\bibitem[Kamb \& Ganguli(2024)Kamb and Ganguli]{kamb2025analytic}
+Kamb, M. and Ganguli, S.
+\newblock An analytic theory of creativity in convolutional diffusion models.
+\newblock \emph{arXiv preprint arXiv:2412.20292}, 2024.
+\newblock verify venue (ICML 2025?).
 
 \bibitem[Krotov \& Hopfield(2016)Krotov and Hopfield]{krotov2016dense}
 Krotov, D. and Hopfield, J.~J.
@@ -167,6 +179,12 @@ Scellier, B. and Bengio, Y.
   and backpropagation.
 \newblock \emph{Frontiers in Computational Neuroscience}, 11:\penalty0 24,
   2017.
+
+\bibitem[Shah et~al.(2023)Shah, Chen, and Klivans]{shah2023learning}
+Shah, K., Chen, S., and Klivans, A.
+\newblock Learning mixtures of {G}aussians using the {DDPM} objective.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2023.
+\newblock arXiv:2307.01178; verify volume.
 
 \bibitem[Sohl-Dickstein et~al.(2015)Sohl-Dickstein, Weiss, Maheswaranathan, and
   Ganguli]{sohldickstein2015deep}
@@ -241,5 +259,18 @@ Xiao, H., Rasul, K., and Vollgraf, R.
 \newblock {Fashion-MNIST}: a novel image dataset for benchmarking machine
   learning algorithms.
 \newblock \emph{arXiv preprint arXiv:1708.07747}, 2017.
+
+\bibitem[Zach et~al.(2024)Zach, Kobler, Chambolle, and Pock]{zach2024product}
+Zach, M., Kobler, E., Chambolle, A., and Pock, T.
+\newblock Product of {G}aussian mixture diffusion models.
+\newblock \emph{Journal of Mathematical Imaging and Vision}, 66, 2024.
+\newblock arXiv:2310.12653; verify pages.
+
+\bibitem[Zoran \& Weiss(2011)Zoran and Weiss]{zoran2011learning}
+Zoran, D. and Weiss, Y.
+\newblock From learning models of natural image patches to whole image
+  restoration.
+\newblock In \emph{International Conference on Computer Vision}, 2011.
+\newblock entered from memory: verify.
 
 \end{thebibliography}

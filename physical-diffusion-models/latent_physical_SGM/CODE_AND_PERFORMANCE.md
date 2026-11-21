@@ -6352,6 +6352,25 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
 
   Resources: the CelebA-32 on-device run (4289676) uses 8.8 G RSS and about 7-8 h; MNIST / Fashion have fewer patch
   units (16 + 121 vs 25 + 169). Disk: 203 G free (81% of 1 T), about 3 G per run.
+- **Global-unit test, MNIST and Fashion (submitted 2026-11-21 13:30; the user: "K16 locked model: lower Inception FID
+  but fewer clear digits than the old K784 model (71.5% vs 88.8% confident). Test whether this is the global
+  unit.")** Exact statistics, seed 1, locked patch units unchanged (16x16 every 4 px from t = 4.49 + 8x8 every 2 px
+  from t = 2.22, 64 states), global K = 784 and K = 128. Same sampling and evaluation as the K16 exact runs (noise
+  start, SDE + quench 1, corrector set; Inception, classifier FID and confident share; gallery on the same
+  trajectories with the old best, K16, K128, K784). Evaluation script: scratchpad `eval_kglobal.sh`.
+
+  | data set | K | pipeline (12 h, 64 G) | corrector | Inception / classifier / gallery |
+  |---|---|---|---|---|
+  | MNIST | 784 | **4290137** | 4290138 | 4290141 / 4290142 / 4290143 |
+  | MNIST | 128 | **4290139** | 4290140 | (same) |
+  | Fashion | 784 | **4290144** | 4290145 | 4290148 / 4290149 / 4290150 |
+  | Fashion | 128 | **4290146** | 4290147 | (same) |
+
+  - Gallery: `galleries/2026-11-21_{mnist,fashion}_global-unit-test_K16-vs-K128-vs-K784_locked-patches-16x16-8x8-64-states_exact_noise-start_quench1`.
+  - **K16 on device for MNIST and Fashion held until this is in** (the user: "Hold the pending K16 on-device runs").
+    The four trainings had started 5-6 min earlier; `scontrol requeuehold` put them back to pending with their ids,
+    so their corrector / knots / evaluation jobs stay chained. Release: `scontrol release 4290098 4290102 4290107
+    4290111` (they resume from the saved slices; slices are written atomically).
 - **To follow after the gates:** on device S = 64 / S = 16 (incl. CelebA-32 S = 16); corrector sets for them;
   post-hoc knots 5/9/9 (wl, bl constant) on each S = 64 model; ODE + quench on CelebA-32 S = 64; galleries per data
   set; then the second wave (seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the S = 64

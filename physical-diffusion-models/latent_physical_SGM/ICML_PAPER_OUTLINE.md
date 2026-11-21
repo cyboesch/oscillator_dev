@@ -53,6 +53,35 @@ This section is the plan. Sections 1 to 6 record the state of 2026-11-17 and are
 - **Dropped from the main text:** K sweep, Ising against Potts, frozen against trained, oracle starts and
   switch-on scan, compression. One sentence each where needed, pointing to the appendix.
 - **Cannot be cut:** the positioning against the closest work, and the statement of what "on device" covers.
+- **Open since 2026-11-21 afternoon: the size of the global unit on MNIST and Fashion.** The first locked runs
+  (exact, seed 1, noise start, SDE + quench 1; notebook entry "Stage 1 results", Inception 4289737 / 4289739,
+  classifier 4289738 / 4289740; galleries `2026-11-21_mnist_interim_...` and `2026-11-21_fashion_interim_...`):
+
+  | | Inception FID | classifier FID | confident share | precision / recall |
+  |---|---|---|---|---|
+  | MNIST real | 3.70 | 1.69 | 97.8% | 0.87 / 0.88 |
+  | MNIST old best, K784 + 7x7 (32 states, from t = 2.22) | 27.86 | 7.66 | 88.8% | 0.81 / 0.80 |
+  | MNIST locked, K16 + two patch sets (64 states) | 14.39 (corrector 12.00) | 14.23 | 71.5% | 0.61 / 0.89 |
+  | Fashion real | 7.17 | 0.40 | 73.8% | 0.88 / 0.87 |
+  | Fashion old best, K784 + 8x8 (32 states, from t = 2.22) | 26.35 | 3.17 | 62.7% | 0.82 / 0.73 |
+  | Fashion locked, K16 + two patch sets (64 states) | 26.00 (corrector 25.80) | 5.97 | 49.9% | 0.70 / 0.80 |
+
+  - The user, looking at the galleries: "while the FID is lower with the K16, the old K784 look visibly better". I
+    looked at the same grids and agree: K16 strokes are smooth and free of specks, but many more tiles are not a
+    digit. On Fashion the difference is smaller: more blended objects with K16.
+  - Inception FID on MNIST follows stroke texture, not digit identity. The quench alone takes the K16 model from
+    50.56 to 14.39, while the confident share stays at 71.4% -> 71.5% and the classifier FID at 15.7 -> 14.2.
+  - The comparison changes two things at once: the global unit (784 -> 16 states) and the patch units (one 7x7 or
+    8x8 set with 32 states from t = 2.22 -> two sets with 64 states, the coarse one from t = 4.49). The notebook's
+    earlier finding (2026-11-14, blind count) points at the global unit for the shapes: malformed ten-digit samples
+    7.8% at K784, 3.0% at K3072, real 0.5%, and "at equal K the patches never changed a shape". K16 is 1.6 states
+    per digit class. The clean strokes should then come from the new patch units. This is my reading; the run that
+    separates the two (large K with the locked patch units, on MNIST and Fashion) has not been made.
+  - Consequence for the paper if the reading holds: the architecture is the same for every data set and K is the
+    one size set per data set (16 for faces, larger for the ten-class sets). K16 against large K on MNIST becomes
+    the ablation that shows what the global unit does. Figure 3 cannot show the K16 digits next to an FID of 12-14
+    without a second number: a reader checks the samples first.
+  - Not decided by the user as of this entry. `results.tex` is not filled for MNIST and Fashion until it is.
 
 ## 1. Thesis and scope
 
@@ -914,6 +943,53 @@ Read on 2026-11-21 (the first two in part, the third from its abstract and intro
 - **In the write-up:** cited in Section 3.1 (relation to dense associative memories), 5.4 (time dependence),
   6 (the circuit), 7 (related work), 8 (outlook); eight entries added to `references.bib`.
 
+### Addition 2026-11-21 (afternoon): two novelty statements proposed by the user
+
+The user: "two novelty claims that we currently leave out: trained DAMs for diffusion models (in contrast to just
+memorized), and the fact that the clamping rule is finite amplitude, not a nudge". Both go into the paper, each
+in a narrower wording than "first". Searches of 2026-11-21 (five web searches, five arXiv abstracts; no full
+texts read).
+
+**1. Learned memories.**
+- Holds as: "a dense associative memory used as a diffusion model whose memories are learned at every noise level
+  (K << N templates), where earlier links between the two have the training images as memories or read trained
+  neural networks in these terms" (Hoover et al. 2023, Ambrogioni 2024, Pham et al. 2026; no counter-example
+  found, also not in the abstract of the ICML 2025 tutorial by Krotov, Hoover, Ram, Pham, arXiv 2507.06211).
+- Does not hold as "the first trained dense associative memory": Krotov & Hopfield 2016 train the memories for
+  classification.
+- A machine-learning referee will read a learned log-sum-exp energy as a mixture model: the global term is a
+  mixture of K Gaussians with diagonal covariance, the patch units a product of such mixtures. Relatives to cite,
+  so that we say it first: Shah, Chen, Klivans (NeurIPS 2023, arXiv 2307.01178; mixtures of Gaussians learned by
+  gradient descent on the denoising objective, theory); Zach, Kobler, Chambolle, Pock (J. Math. Imaging Vis. 66,
+  2024, arXiv 2310.12653; products of Gaussian-mixture experts on filter responses, trained over the whole
+  diffusion horizon, for denoising; no generation in the abstract); Zoran & Weiss (ICCV 2011; mixtures on
+  overlapping patches as an image prior); Kamb & Ganguli (arXiv 2412.20292; mixing local training-set patches
+  predicts what convolutional diffusion models generate: the stored-memory counterpart of our patch units).
+- Evidence we have: templates held at data prototypes 147 against 34 and 22 learned (CelebA-32, an earlier and
+  larger model). To be labelled as such or repeated on the locked model.
+
+**2. One phase at full clamp.**
+- Holds as: "the rule is evaluated in one phase with the pixels fully clamped to data; no free phase, no nudged
+  phase, no small-perturbation limit; the fluctuations of the thermal hidden units carry the response that a nudge
+  would measure" (`DEVICE_RULE_CHECK_2026-11-20.md`, section "Clamping, not nudging"; device emulation without any
+  displacement of the pixels equals autodiff to 1e-15 on a toy model with patch units, job 4287868).
+- This replaces the earlier item "do not claim finite nudges" by a sharper one: do not use the word "nudge" for
+  anything we do. The clamp is a full clamp, as in the positive phase of a Boltzmann machine. The optional
+  read-out of the sums over pixels by symmetric displacements is called "probe displacement" in the paper.
+- Limits to state: (i) that score matching needs no samples from the model is a known property, and its gradient
+  for hidden units as posterior moments at data is known mathematics (Hyvarinen 2005, 2007; Swersky et al. 2011);
+  our first paper has the clamp for visible couplings. New: the single-phase rule for hidden units as fluctuation
+  measurements, local to each coupler, and training from S reads. (ii) The price: thermal hidden units are
+  required, and a bias of order 1/S takes the place of the finite-nudge bias (removed by the jackknife).
+  (iii) The runs simulate the sampling of hidden states only; clamp forces and sums over pixels are exact
+  arithmetic.
+- Neighbours for the contrast: De (arXiv 2604.23806; per a search summary, unbiased only for vanishing nudge: to
+  check in the full text), Gower PotentialEP (2610.14409), and new in this search **Gower, FlowEqProp, arXiv
+  2604.08150** (flow matching with "gradient equilibrium propagation", small digit images, 5 pages).
+- **In the write-up:** abstract, introduction (gap (iv), contributions 1 and 2, a wording note), Section 3.1
+  ("Learned, not stored"), Section 4.1 ("One phase, full clamp", "Fluctuations take the place of the nudge", "The
+  price"), related work (three bullets), Appendix A. Five entries added to `references.bib` (41 in total).
+
 ## 13. Updates
 
 - 2026-11-17: first version.
@@ -932,4 +1008,12 @@ Read on 2026-11-21 (the first two in part, the third from its abstract and intro
 - 2026-11-21: LaTeX skeleton in `/n/fs/cyrills-part/oscillator_dev/ICML-writeup/` (`main.tex`, official ICML 2027
   style; numbers in `results.tex`; compile with `sbatch compile.sh`). It follows section 0, with three figures
   (concept; FID exact against sampled statistics; generated images) and two tables.
+- 2026-11-21: section 12, addition on three papers on dense associative memories (Bacvanski et al., Pham et al.,
+  Rooke et al.); cited in `main.tex` sections 3.1, 5.4, 6, 7, 8 and appendix E.
+- 2026-11-21 (afternoon): section 0, open item on the size of the global unit for MNIST and Fashion: locked K16
+  has the lower Inception FID (14.39 against 27.86 on MNIST) but fewer clear digits (71.5% against 88.8%
+  confident); the user finds the old K784 samples visibly better.
+- 2026-11-21 (afternoon): section 12, addition on two novelty statements proposed by the user (learned memories;
+  one phase at full clamp), with the wording that holds and the prior work that limits each; written into
+  `main.tex`.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.

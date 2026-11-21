@@ -102,9 +102,12 @@ We introduce a score-based diffusion model in which the score is the force of a
 physical energy with fast hidden units: a small global Potts unit and Potts units
 on overlapping image patches, which sum out exactly and leave the visible units
 moving in a free-energy landscape.
-The time-dependent couplings are learned by a local rule that needs only
-statistics measured while the visible units are clamped to data, without a
-negative phase and without backpropagation.
+Seen as a dense associative memory, its memories are learned at every noise
+level instead of stored.
+The time-dependent couplings follow a local rule evaluated in a single phase,
+with the visible units clamped to data: the thermal fluctuations of the hidden
+units supply what other physical learning rules take from a free-running or a
+nudged second phase, and no backpropagation is needed.
 In simulation, training from \Slarge{} sampled hidden states per data point
 reaches an FID of \FIDcelebLowSlarge{} on $32\times32$ CelebA, against
 \FIDcelebLowExact{} with exact hidden averages, and the same model with unchanged
@@ -132,9 +135,16 @@ crossbar hardware.
         beyond toy data \citep{firstpaper2025}.
         (ii) More expressive proposals are trained with backpropagation through
         a digital model \citep{wangachour2026}, with a free-running second phase
-        \citep{jelincic2025dtm}, or with nudged second equilibria
-        \citep{de2026symmetric,gower2026potentialep}.
+        \citep{jelincic2025dtm}, or with nudged second equilibria, exact only
+        for vanishing nudge
+        \citep{de2026symmetric,gower2026potentialep,gower2026floweqprop}.
         (iii) Results beyond MNIST-scale data are missing.
+        (iv) Diffusion models have been identified with dense associative
+        memories, but with the training images as memories or as a reading of
+        trained neural networks
+        \citep{hoover2023memory,ambrogioni2024search,pham2026emergence}; a
+        circuit for such memories exists \citep{bacvanski2025dense}, a
+        generator built from one does not.
   \item \textbf{Idea.} Fast hidden units in one bipartite layer sum out exactly.
         The visible units then move in a free energy, its gradient is the score,
         and the score-matching gradient of every coupling becomes a local rule
@@ -143,13 +153,27 @@ crossbar hardware.
         \begin{enumerate}[leftmargin=1.3em,itemsep=0pt,topsep=1pt]
           \item the model: a small global Potts unit plus Potts units on
                 overlapping patches at two scales, switched on at different
-                noise levels;
-          \item the learning rule: local, no negative phase, and trainable from
-                \Slarge{} or \Ssmall{} sampled hidden states per data point;
+                noise levels. It is a dense associative memory at finite
+                temperature, used as a diffusion model, whose memories are
+                learned at every noise level: $K\ll N$ templates instead of
+                the $N$ training images;
+          \item the learning rule: local and single-phase. The pixels are fully
+                clamped to data; there is no free-running phase, no nudged
+                phase and no small-perturbation limit, because the fluctuations
+                of the thermal hidden units carry the response that a nudge
+                would measure. It trains from \Slarge{} or \Ssmall{} sampled
+                hidden states per data point;
           \item the results: one model, unchanged, on MNIST, Fashion-MNIST and
                 CelebA at $32\times32$ and $64\times64$; exact against sampled
                 statistics; comparison with earlier analog-hardware models.
         \end{enumerate}
+  \item \todo{wording of the two novelty statements: ``to our knowledge'';
+        not ``the first trained dense associative memory''
+        (\citet{krotov2016dense} train memories for classification), and not
+        ``score matching without a negative phase'' as such (a known property
+        of score matching, and of our first paper for visible couplings). The
+        new parts are: learned memories in a generator, and the single-phase
+        rule for hidden units read from their fluctuations.}
   \item \textbf{Scope, one sentence.} Everything is a simulation; Section
         \ref{sec:hardware} discusses the mapping to hardware.
 \end{plan}
@@ -257,6 +281,20 @@ crossbar hardware.
         \citep{ambrogioni2024search,hoover2023memory,pham2026emergence}.
         Our model replaces these $N$ stored memories by $K\ll N$ learned ones
         ($K=\Kglobal$) and adds local memories on patches.
+  \item \textbf{Learned, not stored (novelty statement 1).} In the works above
+        the memories are the training images, which reproduces the training
+        set, or the memory is a reading of a trained neural network. Here the
+        memories are the model's parameters, a separate set per noise level,
+        fitted by score matching. One line of evidence: with the templates held
+        at data prototypes the same energy is far worse than with learned ones
+        (Appendix~\ref{app:model-search}).
+        \todo{that comparison (FID 147 against 34 and 22, CelebA
+        $32\times32$) is from an earlier, larger model: label it so, or repeat
+        it on the locked model.}
+        Say also, for the machine-learning reader: with learned templates the
+        global term is a mixture of $K$ Gaussians with diagonal covariance, and
+        the patch units make the model a product of such mixtures
+        (Section~\ref{sec:related}).
   \item \textbf{Why these units, one sentence each.} A Potts unit is a mixture
         of templates (a product of independent binary units is not); patches
         carry local structure that whole-image templates lack; the coarse set
@@ -323,24 +361,52 @@ crossbar hardware.
 \begin{plan}
   \item (and the analogous expression for $Q_{mi}$; Appendix
         \ref{app:derivation}).
-        \todo{derive and check the rule for the patch units against automatic
-        differentiation; the code checks only the global and per-pixel units so
-        far.}
+        \todo{the rule for the patch units is checked against automatic
+        differentiation on a small model (relative difference below
+        $2\times10^{-15}$); it is not yet checked on trained slices.}
   \item \textbf{Why it is local.} A coupler $(m,i)$ needs a scalar of its hidden
         state ($p_m$, $c_m$) and signals of its pixel ($x_i$, $\psi_i$,
         $\bar G_i$).
-  \item \textbf{What a device measures.} Clamp forces; occupations; the
-        projections inside $c_m$ from a symmetric pair of small displacements of
-        the clamped pixels, which is exact for any displacement because the
-        fields are quadratic in $\x$.
+  \item \textbf{One phase, full clamp (novelty statement 2).} The rule is one
+        experiment per training image: the pixels are held at the noised data
+        point, the hidden units equilibrate, and everything is read at that one
+        configuration. No free phase, no second run, no difference of two
+        states, no limit of small amplitude.
+  \item \textbf{Fluctuations take the place of the nudge.} The gradient of
+        \eqref{eq:loss} contains the response of the hidden units to a
+        displacement of the pixels. A thermal unit shows this response in its
+        fluctuations at the fixed clamp:
+        $\bm{\psi}\!\cdot\!\nabla_{\x}p_m
+        =\tfrac{1}{T}\,\mathrm{Cov}_{k}\bigl(\delta_{km},\,G_k\!\cdot\!\bm{\psi}\bigr)
+        =\tfrac{1}{T}\,p_m(G_m-\bar G)\!\cdot\!\bm{\psi}$,
+        and the Laplacian term gives the second and third moments in
+        \eqref{eq:cm} in the same way. This is what the last term and the
+        first two terms of $c_m$ are.
+  \item \textbf{The price, state it.} (i) The hidden units must be thermal:
+        a deterministic element with output $p_m$ has no fluctuations to read
+        and would need displacements of the clamp. (ii) Moments estimated
+        from $S$ reads carry a bias of order $1/S$, which takes the place of
+        the finite-nudge bias and is removed by a jackknife
+        (Section~\ref{sec:sampled}).
+  \item \textbf{What a device measures.} Clamp forces; the active state of
+        each hidden unit at each read; the sums over pixels inside $c_m$.
+        These sums can be read from the hidden unit's input field under a
+        symmetric pair of probe displacements of the clamp, exact at any
+        amplitude because the fields are quadratic in $\x$. Call these
+        ``probe displacements'', never ``nudges'': they are a read-out of an
+        inner product, not a second phase.
   \item \textbf{What is not needed.} No free-running negative phase
-        \citep{hinton2002training,jelincic2025dtm}, no second equilibrium of the
-        whole system \citep{scellier2017equilibrium}, no backpropagation.
+        \citep{hinton2002training,jelincic2025dtm}, no nudged second
+        equilibrium of the whole system
+        \citep{scellier2017equilibrium,de2026symmetric}, no backpropagation.
+        In the language of Boltzmann machines: a positive phase only, with
+        higher moments of the hidden units in place of the negative phase.
   \item \textbf{State plainly.} In our simulations the clamp forces and
         projections are computed exactly; only the hidden states are sampled.
 \end{plan}
 
 \subsection{Sampled Hidden Statistics}
+\label{sec:sampled}
 \begin{plan}
   \item \textbf{On a device} the occupations are estimated from $S$ sampled
         hidden states per clamped image, for every hidden unit.
@@ -577,15 +643,25 @@ crossbar hardware.
   \item \textbf{Equilibrium propagation for generative models.}
         \citet{scellier2017equilibrium}; denoising score matching with
         symmetric nudges on synthetic data \citep{de2026symmetric}; energy
-        matching at CIFAR scale in simulation \citep{gower2026potentialep}.
+        matching at CIFAR scale in simulation \citep{gower2026potentialep};
+        flow matching on small digit images \citep{gower2026floweqprop}.
         Difference: these compare a free and a nudged equilibrium of the whole
-        system; our rule uses statistics at clamped data only, and the score is
-        the system's own force.
+        system, and the gradient is exact for vanishing nudge. Our rule is one
+        phase at full clamp and exact there; the response comes from the
+        fluctuations of thermal hidden units; and the score is the system's
+        own force.
+        \todo{check in the full texts: the statement on the nudge limit for
+        each of the three, and whether any of them reads fluctuations.}
   \item \textbf{Energy-based models with hidden units.} Contrastive divergence
         \citep{hinton2002training}; exponential family harmoniums
         \citep{welling2004exponential}, of which our model is a member with
         visible--visible springs; score matching for such models
         \citep{hyvarinen2005estimation,hyvarinen2007connections,swersky2011autoencoders,vincent2011connection}.
+        That score matching needs no samples from the model, and that its
+        gradient for hidden units is a function of their posterior moments at
+        data, is known there as mathematics. New here: these moments as
+        fluctuation measurements on thermal hidden units, local to each
+        coupler, and training from $S$ reads.
   \item \textbf{Dense associative memories and diffusion models.} The score of
         a diffusion model is the gradient of a dense-associative-memory energy
         \citep{hoover2023memory,ambrogioni2024search}; as the training set
@@ -595,6 +671,19 @@ crossbar hardware.
         data. We build the energy explicitly, with few learned templates, and
         show that templates held at data prototypes are far worse than learned
         ones (Appendix~\ref{app:model-search}).
+        Dense associative memories with learned memories exist for
+        classification \citep{krotov2016dense}; to our knowledge not as a
+        diffusion model that generates images.
+        In machine-learning terms a learned memory energy is a mixture model,
+        and we say so: Gaussian-mixture scores trained on the denoising
+        objective are analysed in theory \citep{shah2023learning}; products
+        of Gaussian-mixture experts on filter responses are trained over all
+        noise levels for image restoration \citep{zach2024product}; mixtures
+        on overlapping patches are a classical image prior
+        \citep{zoran2011learning}. Mixing training-set patches locally
+        predicts what convolutional diffusion models generate
+        \citep{kamb2025analytic}; our patch units learn \Mpatch{} templates
+        each instead of storing patches.
         Analog circuits for dense associative memories
         \citep{bacvanski2025dense} and the thermodynamic cost of retrieval at
         finite temperature \citep{rooke2026stochastic} treat stored memories
@@ -680,7 +769,15 @@ crossbar hardware.
         form.
   \item The gradient of \eqref{eq:loss}: the rule \eqref{eq:rule} for the global
         unit including $Q$, for the patch units, and for the per-pixel units.
-  \item Measuring the projections by symmetric displacements.
+  \item The rule as the generator of the pixel dynamics acting on the Hebbian
+        term: the drift part is a first-order response, the Laplacian part
+        needs fluctuations; both are covariances of a thermal hidden unit at
+        the fixed clamp.
+  \item Reading the sums over pixels by symmetric probe displacements (exact
+        at any amplitude).
+  \item For comparison, the denoising form of the rule: no Laplacian, one
+        covariance per unit; with deterministic hidden units it needs one pair
+        of displacements. Derived, not used in the experiments.
   \item The reverse process with hidden units: why doubling the couplings is not
         enough; duplicated hidden units.
   \item Conditions on the time scale of the hidden units.
