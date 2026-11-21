@@ -13,6 +13,47 @@ Written 2026-11-17 in the paper chat. Job states are as of 2026-11-17 21:35.
   "Classifier FID" is the FID in the features of our small CNN (`fid_score.py`). The two scales are not comparable.
   "Quench 1" is `--quench 1`; "equil start" is `--init-dist equil:3`.
 
+## 0. Current plan (2026-11-21): one short paper
+
+This section is the plan. Sections 1 to 6 record the state of 2026-11-17 and are superseded where they differ.
+
+- **Venue and dates.** arXiv in about two weeks; ICML 2027 (abstract 2027-01-14, paper 2027-01-22). One manuscript
+  for both: 8 pages and an appendix (the user: "a short snappy paper").
+- **Model (locked by the user).** K16 global Potts unit, 64 states per patch unit, a coarse patch set from t = 4.49
+  and a fine one from t = 2.22, Q and per-pixel units, 100 slices with linear interpolation. Data: MNIST, Fashion,
+  CelebA-32, CelebA-64. Per data set: exact statistics, on device with S = 64, on device with S = 16. The ODE as
+  one ablation. Everything else is stopped.
+- **Three claims.**
+  1. **Model and rule.** Hidden units summed out, the score is the system's force, and the couplings are learned
+     by a local rule from statistics at clamped data, without a negative phase.
+  2. **It trains from sampled hidden states:** exact against S = 64 against S = 16 on four data sets.
+  3. **Quality:** above earlier generative models for analog hardware on MNIST and Fashion, and the first faces.
+- **Page plan.**
+
+  | Section | Pages | Content |
+  |---|---|---|
+  | 1 Introduction | 0.9 | the problem, three contributions, Figure 1 |
+  | 2 Model and learning rule | 1.6 | energy, hidden units, free energy, patch units; the rule in one equation block; what a device measures |
+  | 3 Generation | 0.6 | reverse process, time-dependent couplings, quench, corrector |
+  | 4 Results | 3.0 | Table 1, Figures 2 and 3, the ablation |
+  | 5 Implementation | 0.6 | the mapping to hardware in a short table; what is not shown |
+  | 6 Related work | 0.8 | the neighbours of section 12 |
+  | 7 Limitations and conclusion | 0.5 | simulation, grey images, parameter count, what "on device" covers |
+
+- **Figures and tables.**
+  - Figure 1: concept (pixels, global unit, two patch sets, protocol) with a strip of samples.
+  - Figure 2: samples on the four data sets next to real images.
+  - Figure 3: exact, S = 64 and S = 16 on the same trajectories, and FID against S.
+  - Table 1: four data sets by (exact, S = 64, S = 16), with and without corrector; Wang & Achour and DTM on MNIST
+    and Fashion.
+  - Table 2 (small): as sampled, quench, corrector, ODE.
+- **Appendix.** Derivation of the rule including the patch units; jackknife and visit-count rule; training details
+  and compute; memorisation check; the tables of the model search as they were run (K, patch states, Q, onset,
+  schedule compression, staircase), each labelled with the model it was run on.
+- **Dropped from the main text:** K sweep, Ising against Potts, frozen against trained, oracle starts and
+  switch-on scan, compression. One sentence each where needed, pointing to the appendix.
+- **Cannot be cut:** the positioning against the closest work, and the statement of what "on device" covers.
+
 ## 1. Thesis and scope
 
 **Thesis.** A diffusion model whose score is the force of a physical free energy becomes a competitive image
@@ -573,9 +614,18 @@ fair-share factor is already low (0.10 on 11-16), so the 10,000-sample runs are 
 
 ## 10. Target and format
 
-- ICML 2027. Trackers listed the abstract deadline as 2027-01-14 and the full paper as 2027-01-22 on 2026-11-17;
-  the official call was not posted yet, so check icml.cc.
-- In 2026 the main text was 8 pages, with unlimited references and appendix; double-blind.
+- ICML 2027, from the official call (icml.cc/Conferences/2027/CallForPapers, read 2026-11-21; the page says
+  updates to the submission process will be announced by late November):
+  - abstract 2027-01-14, full paper 2027-01-22 (both 11:59 PM anywhere on Earth); the site opens 2027-01-08;
+  - 8 pages of main text, unlimited references, impact statement and appendices; double-blind;
+  - two-stage reviewing: first-stage rejections by 2027-02-23, final decisions 2027-05-03;
+  - every submission needs a reciprocal reviewer among its authors, and an AI disclosure statement.
+- **arXiv before submission is allowed.** "Authors are allowed to post versions of their work on preprint servers
+  such as arXiv." Conditions: the submitted version must not refer to the non-anonymized version; the work must
+  not be advertised as an ICML submission during review (talks and posts about the work itself are allowed).
+- **No parallel journal submission:** a paper submitted "in parallel to other conferences or journals" is not
+  allowed, so PRX Intelligence cannot run alongside.
+- Own earlier work in the third person (2026 author instructions); differences from it must be explained.
 
 ## 11. Chances at ICML, and what moves them (assessment of 2026-11-17)
 
@@ -687,10 +737,167 @@ idealised and add comparisons with Ising units and exponential family harmoniums
   statistic, including a real double-well oscillator. Experiments on further families are not worth their cost:
   Gaussian hidden units are the harmonic modes (no gain, 11-13), and the others have no hardware counterpart.
 
-## 12. Updates
+### Update 2026-11-21: how hardware-close does the paper have to be?
+
+Asked by the user on 2026-11-21: is it enough to train the best small model with the on-device rule and add a
+high-level "Implementation" section, given the risk that someone else writes this paper first? Claude's judgement.
+
+- **Answer: yes, that is enough. Stop pushing hardware-closeness and freeze the model.** The central claim (model,
+  local rule from sampled statistics, quality) does not depend on a staircase schedule, the ODE or a circuit.
+  "As implementable as possible" has no stopping point, and each step tried on 11-20 / 11-21 cost quality:
+  - staircase 9/9/9, trained: 25.88 against 22.11 with 100 slices; with on-device training 42.61; at 64x64 61.44
+    against 48.63;
+  - knots built into the training: about 3.5 behind the 100-slice model on every grid;
+  - ODE: 25.86 against 22.11, and 163 at a force scale of 0.9.
+- **Linear interpolation is not the less buildable choice.** A crossfade between two fixed coupling sets is two
+  time-dependent gains, and it needs a quarter of the sets a staircase needs (measured post hoc: 34 steps = 9
+  linear knots, 22.36 against 22.35). The result to report is the post-hoc one: train at 100 slices, keep 5 / 9 / 9
+  knots, 10.7 M stored, no loss. The staircase is one sentence.
+- **The ODE is an ablation, not a goal.** It needs an exact force (a 10% error in its scale destroys the samples),
+  which is the property hardware does not have; the noise of the SDE is what a physical system at temperature T
+  supplies.
+- **Minimum for the paper.**
+  1. The headline model trained with the on-device rule at 100 slices. Open: the K16 controls 4289675 / 4289676
+     (Inception 4289677). So far the rule is confirmed only for K784 + two patch scales (23.59 against 22.85).
+     **Decision rule:** if K16 on device does not come within about 1 FID of exact, take the model where it does
+     (K64 or K784) as the headline instead of repairing K16.
+  2. The post-hoc knot schedule applied to that on-device model: one sampling job.
+  3. MNIST and Fashion with the same recipe and rule; they are the only data with competitors' numbers.
+  4. Two or three seeds of the headline, one n, one protocol.
+  5. The "Implementation" section: the mapping table of the 11-20 update above, and a list of what is not shown
+     (explicit hidden dynamics, nudge measurements, device precision).
+  6. Wording: "on-device rule" means sampled hidden statistics in simulation; clamp forces and projections are
+     exact.
+- **Changes to earlier advice in this file.** B7 (parameter efficiency) is done by the work of 11-18 to 11-20. B4
+  (coupling precision) and the crossbar study drop from "priority A" to optional: one sampling-only run with
+  quantised couplings if it costs a day (Wang & Deng report such a test), otherwise an open point in the text.
+  B5 and B6 go to the outlook.
+- **Against being scooped: post on arXiv as soon as items 1 to 6 are written.** The preprint fixes the date,
+  whatever the venue takes.
+
+### Update 2026-11-21 (2): which venue, after the lock-in?
+
+Asked by the user on 2026-11-21 ("ICML or some physics journal? I don't think it will get into Nature without
+experiments"). Claude's judgement; the user has not decided.
+
+- **Recommendation: PRX Intelligence, with arXiv on the day of submission.**
+  - Topic fit in practice: it accepted "Understanding and embracing imperfection in physical learning networks"
+    (Dillavou, Guzman, Liu, Durian) on 2026-11-04, a paper of the physical-learning community.
+  - Research articles have no length limit, and the scope covers "theory, computation, and experiment", so a
+    simulation paper is admissible.
+  - Its publication charge is waived for submissions and transfers received on or before 2026-12-31 (journal
+    pages, read 2026-11-21). That date is three weeks before ICML's and forces the same pace.
+  - No archival proceedings and no dual-submission bind.
+- **Cautions.**
+  - The written scope is "AI/ML that advances the physical sciences"; hardware for AI is not named. Send the
+    editor a short presubmission inquiry.
+  - The accepted paper above is an experiment; ours is a simulation. It shows the topic fits, not that a
+    simulation passes. The criteria ask for an "exceptional" advance, connection, capability or insight.
+  - The journal is new (first papers July 2026) and has no track record yet. If a known name matters for
+    applications in the next year, that speaks for ICML (machine learning) or PRX (physics).
+- **Not recommended.**
+  - Nature, Nature Physics, Nature Electronics: agreed, not without hardware.
+  - Nature Communications, Nature Machine Intelligence: possible without experiments, but slow and a gamble while
+    close preprints appear monthly.
+  - PRX first: a desk decision after 2026-12-31 would lose the waiver on a transfer, and a simulation sequel to an
+    unpublished first paper is a likely desk rejection.
+- **ICML stays the alternative** (trackers: abstract 2027-01-14, paper 2027-01-22; one report mentions a posted
+  call with two-stage reviewing; not confirmed on icml.cc). About one chance in three, eight pages, archival.
+  Choose it only if the aim is to be seen by the machine-learning community.
+- **If PRX Intelligence declines:** Physical Review Research or npj Unconventional Computing, or NeurIPS in May.
+
+### Update 2026-11-21 (3): the user's aims change the venue recommendation to ICML first
+
+The user on 2026-11-21: the readers wanted are physical and neuromorphic computing people; the CV has many physics
+papers and no machine-learning paper; "at the end of the day the thing I care most about is that it is read".
+
+- **If accepted at both, ICML is worth more to the user.**
+  - CV: a first paper at a top machine-learning conference is a new credential; one more physics paper in a
+    journal without a track record adds little to a physics-heavy list.
+  - Readers: the people who work on equilibrium propagation and neuromorphic learning publish and review at
+    ICML / NeurIPS / ICLR. The physicists of physical learning read arXiv whatever the venue.
+- **So: ICML first (paper deadline about 2027-01-22), arXiv at submission, PRX Intelligence or NeurIPS (May) if it
+  is declined.** This replaces the recommendation of the update above; the earlier one assumed a physics audience
+  and equal value of the two outcomes.
+- **Cost of ICML first:** about one chance in three; eight pages (the rest in the appendix); a rejection costs
+  four months, the waiver of the publication charge (ends 2026-12-31) and one rewrite. The arXiv posting keeps the
+  date and the readers in the meantime.
+- **Being read depends less on the venue than on:**
+  1. arXiv on the day of submission, cross-listed (cs.LG, cs.ET, cs.NE, cond-mat.dis-nn), with a title and
+     abstract that say what was done;
+  2. code and sample galleries released with it;
+  3. a short note to the authors of the closest papers (section 12); they are the first readers and the likely
+     referees;
+  4. talks: workshops on new compute paradigms at the machine-learning conferences, seminars, APS March Meeting.
+- **Check in the ICML 2027 call:** preprints are allowed (ICML 2026 call); whether advertising a preprint on
+  social media during review is discouraged was not confirmed (recalled from earlier calls).
+- **File name:** stays `ICML_PAPER_OUTLINE.md`.
+
+## 12. Closest prior work (check of 2026-11-21)
+
+Asked by the user: "nobody has done what we are doing yet, right?" A check by web search on 2026-11-21, about ten
+queries and four papers read (partly through summaries; marked below). Not exhaustive: three of the closest
+preprints are from the last seven months.
+
+**Result.** The combination was not found anywhere: a diffusion model whose score is the force of a physical
+system with hidden units, with time-dependent couplings learned by a local rule from statistics at clamped data,
+without a negative phase, trained in simulation from sampled hidden states, at the quality of faces. The search for
+exactly this combination returns our own first paper. But each single ingredient has a neighbour:
+
+| Work | Hidden units | Time dependence | Training | Second phase | Shown on |
+|---|---|---|---|---|---|
+| Extropic DTM, arXiv 2510.23972 | binary latent nodes | a chain of 2 to 8 Boltzmann machines, each with its own weights | likelihood gradient: clamped minus free expectations, Gibbs sampling in both | yes, a free phase per step | simulation; binarised Fashion-MNIST, FID 28 +- 1 |
+| Wang & Achour, arXiv 2606.27294 | 2352 hidden oscillators | 4 weight sets | GAN loss, backpropagation through the solver | - | simulation; MNIST 27.6, Fashion 80.8 |
+| Whitelam, arXiv 2506.15121 (PRL 2026) | not confirmed | fixed couplings, read out of equilibrium | likelihood of the reversed noising trajectory | no | simulation |
+| Wang & Deng, arXiv 2609.15439 (Sep 2026) | 512 explicit Langevin units | fixed couplings | the same loss as an online local rule | no | simulation; 3 to 15 MNIST prototypes, no FID in the part read |
+| De, arXiv 2604.23806 (Apr 2026) | a hidden block; the score is the equilibrium of an output block | one noise-conditioned parameter set | denoising score matching by equilibrium propagation, symmetric finite nudges, bias O(beta^2) | yes, free and nudged equilibria | simulation; synthetic Gaussian data, D = 64 |
+| Gower, arXiv 2610.14409 (Oct 2026) | hidden layers that relax | time-independent potential | energy matching by centred equilibrium propagation at finite nudge | yes; negatives from an autograd twin (summary) | simulation; CIFAR-10 FID 3.64 against 3.54 with backpropagation |
+| Our first paper, arXiv 2506.19136 | none | yes | force matching | no | simulation; digits 0/1 |
+
+Also seen, not read: an APS March Meeting 2026 talk, "Diffusion Models in Analog Circuits" (self-adjusting resistor
+networks with coupled local learning; possibly real hardware); Yu et al., neural Langevin machine; the restricted
+Kirchhoff machine (arXiv 2509.15842). Wang & Deng cite our first paper; Gower reportedly calls it the closest
+prior work ("no hidden units"; from a summary, to verify).
+
+**What follows for the claims.**
+- **Do not claim "trained on device".** Nobody has, and neither have we: every work above, and ours, is a digital
+  simulation. Our statement is "trained in simulation from statistics a device can measure".
+- **Do not claim hidden units, time dependence, a local rule or backpropagation-free training as firsts.** DTM has
+  per-step models with latent nodes and a local Boltzmann rule; De and Gower train generative models with hidden
+  units by nudging.
+- **Do not claim "finite nudges".** Finite symmetric nudges are the equilibrium-propagation line (De, Gower). And
+  our runs do not use nudges: the projections G_m.psi and G_m.Gbar are computed exactly (in `latent_model.py` and
+  `train_latent.py` the word appears only in two docstrings). The nudge measurement is a derivation in
+  `DESIGN.md` 2.1.
+- **What is ours.**
+  1. The score is the system's own force with the hidden units summed out, and the gradient needs statistics at
+     clamped data only: no free phase (DTM) and no second equilibrium of the whole system (De, Gower).
+  2. Our nudge is a measurement, not a carrier of the loss: a field is quadratic in the pixels, so a symmetric pair
+     of nudges gives the projection exactly at any size, where equilibrium propagation has a bias of order
+     beta^2. This becomes a claim only once it is simulated (experiment B6, with read noise).
+  3. Training from sampled hidden states is shown at scale: 23.59 against 22.85 with exact statistics on faces.
+     De has synthetic data; Wang & Deng a few prototypes; DTM binarised Fashion-MNIST.
+  4. The architecture and protocol: patch units switched on by time, the quench, a schedule of a few coupling
+     sets.
+- **Suggested sentence.** "To our knowledge, this is the first score-based diffusion model in which the score is
+  the force of a physical system with hidden units, and whose time-dependent couplings are learned by a local rule
+  from statistics measured at clamped data, without a negative phase."
+- **To do before writing related work:** read Wang & Deng, De and Gower in full (the reports here cover them only
+  in part), the APS abstract, and search arXiv by author for follow-ups.
+
+## 13. Updates
 
 - 2026-11-17: first version.
 - 2026-11-17: section 11 added (chances at ICML and what moves them).
 - 2026-11-20: section 11, update on the venue (ICML or a physics journal) and the revised estimate.
 - 2026-11-20: section 11, second update (crossbar mapping against more hidden-unit comparisons).
+- 2026-11-21: section 12 added (closest prior work and what can be claimed as new).
+- 2026-11-21: section 11, update on how hardware-close the paper has to be (minimum list; B4 and the crossbar
+  study now optional).
+- 2026-11-21: section 11, second update on the venue (PRX Intelligence recommended; ICML the alternative).
+- 2026-11-21: section 11, third update: with the user's aims (readers in physical and neuromorphic computing, a
+  first machine-learning paper), ICML first, PRX Intelligence or NeurIPS as fallback.
+- 2026-11-21: section 10 replaced by the official ICML 2027 dates and rules (arXiv before submission allowed).
+- 2026-11-21: section 0 added: the current plan for one short 8-page paper with the locked model; sections 1 to 6
+  are now the record of 11-17.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.

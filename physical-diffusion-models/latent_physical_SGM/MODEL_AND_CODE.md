@@ -86,6 +86,29 @@ CelebA-32 K784 + 8x8 + 16x16: 23.59 Inception FID after the quench, against 22.8
 (gap 0.7; bootstrap sd 0.3-0.4). Training takes about 2x longer at S = 64 (6.4 h vs 3.3 h). Without patch units
 the gap is about 3 (two seeds), and S = 256 does not reduce it.
 
+### LOCKED RECIPE FOR THE PAPER (2026-11-21)
+
+The same model for every data set (MNIST ten digits, Fashion ten classes, CelebA-32, CelebA-64): K16 global Potts
+unit, 64 states per patch unit, squared-pixel couplings Q and per-pixel units, 100 slices, linear interpolation,
+seed 1. Runs: exact statistics (Adam); on device with S = 64; on device with S = 16. Sampling for every model: noise
+start, reverse SDE, quench 1, n = 2000, and a second set with `--corrector 2:0.16`. Evaluation: Inception FID vs train
+with FID_inf; MNIST / Fashion also classifier FID and class shares (`fid_score.py`). Results: CODE_AND_PERFORMANCE.md,
+section "LOCK-IN FOR THE PAPER".
+
+Training (`jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA" ema 16 2000 "SAMPLE_ARGS"`), EXTRA =
+```
+--hidden potts --quad --local --visible quartic --radius 1 --pair-terms lin --proto-init pooled --seed 1
+--val-every 1000 --visible-impl stencil --precision mixed --ref-kmeans gpu --patch-init-scale 0.06
+--patch-on-slice 10 --patch2-on-slice 55
+  28x28 / 32x32: --patch 16:4:64 --patch2 8:2:64      (16x16 every 4 px from t = 4.49, 8x8 every 2 px from t = 2.22)
+  64x64:         --patch 32:8:64 --patch2 16:4:64     (32x32 every 8 px from t = 4.49, 16x16 every 4 px from t = 2.22)
+on device, add: --hidden-norm occupancy --patch-occupancy --hidden-samples S --hidden-jackknife --occ-same-draws
+  (S = 64 or 16)
+```
+PROBLEM: `mnist28_d0123456789`, `fashion28_c0123456789`, `celeba32g`, `celeba64g`. SAMPLE_ARGS: `--quench 1` (64x64:
+`--chunk 100 --quench 1`; 64x64 jobs with `--mem 160G`). Corrector set:
+`sample_latent.py --run RUN --n 2000 --chunk 250 --corrector 2:0.16 --quench 1`.
+
 ### Best models and command lines (seed 1)
 
 Training + sampling (pipeline, from `latent_physical_SGM/`):

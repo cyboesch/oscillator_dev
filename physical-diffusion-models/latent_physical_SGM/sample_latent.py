@@ -245,6 +245,21 @@ def interpolate_history(stacked, taus):
     return lambda t: jnp.concatenate([f(t) for f in fs], axis=-1)
 
 
+def reduced_noise(drift_ode, lam=1.0, g=1.0):
+    """--noise-scale / --force-scale (2026-11-20): from the PF-ODE drift x - grad F, the drift x - (1 + g^2) lam grad F
+    and the diffusion g sqrt(2T) I. For a model with exact scores (lam = 1) every g gives the same marginals: g = 1 is
+    the reverse SDE (x - 2 grad F, sqrt(2T)), g -> 0 the PF-ODE."""
+    c = (1.0 + g * g) * lam
+
+    def drift(t, x, args):
+        return x - c * (x - drift_ode(t, x, args))
+
+    def diffusion(t, x, args):
+        return jnp.sqrt(2.0 * lm.TEMP) * g * jnp.eye(x.shape[-1], dtype=x.dtype)
+
+    return drift, diffusion
+
+
 def make_drift(theta_hist, W_hist, b_hist, sampler, problem="mnist28", hidden="ising", local=None, quad=None,
                radius=None, neighbourhood="chebyshev", taus=None, harmonic=None, patch=None, cond=None):
     """Drift and diffusion of the reverse SDE (sampler 'sde') or the PF-ODE ('ode') of a run's parameter history, the
@@ -774,7 +789,13 @@ def main():
     ap.add_argument("--force-scale", type=float, default=1.0,
                     help="default SDE sampler (2026-11-17): multiply the learned force grad F by LAMBDA during sampling "
                          "(drift x - 2 LAMBDA grad F; sampling at temperature T / LAMBDA: > 1 colder, sharper). The quench "
-                         "is not scaled. Samples get the suffix _fs<LAMBDA>; 1 (default): as before")
+                         "is not scaled. Samples get the suffix _fs<LAMBDA>; 1 (default): as before. Since 2026-11-20 also "
+                         "with --sampler ode (drift x - LAMBDA grad F) and with --noise-scale")
+    ap.add_argument("--noise-scale", type=float, default=1.0,
+                    help="default SDE sampler (2026-11-20): the reverse-SDE family with the PF-ODE's marginals, drift "
+                         "x - (1 + G^2) grad F and noise G sqrt(2T) (with --force-scale: x - (1 + G^2) LAMBDA grad F). "
+                         "G = 1: the reverse SDE; G -> 0: the PF-ODE (use --sampler ode for G = 0). Not with "
+                         "--corrector. Samples get the suffix _ns<G>; 1 (default): as before")
     ap.add_argument("--cond-scale", type=float, default=1.0,
                     help="a --cond run (2026-11-18): guidance by label amplification, every label parameter (Bc, "
                          "Bpc*, hc) multiplied by LAMBDA >= 0 in the drift and the quench (the same drawn labels). "
@@ -877,12 +898,21 @@ def main():
             corr = None
         if corr is None or corr[0] < 0 or not (math.isfinite(corr[1]) and corr[1] > 0.0):
             raise SystemExit(f"--corrector {args.corrector!r}: expected M:SNR with M >= 0 and SNR > 0 (e.g. 2:0.16)")
-    if corr is not None or args.force_scale != 1.0:
-        if args.sampler != "sde" or args.fixed_langevin or args.oracle_start is not None or args.thin_knots:
-            raise SystemExit("--corrector and --force-scale: default SDE sampler only (no --sampler ode, "
-                             "--fixed-langevin, --oracle-start or --thin-knots)")
+    if corr is not None and args.sampler != "sde":
+        raise SystemExit("--corrector: default SDE sampler only (no --sampler ode)")
+    if args.noise_scale != 1.0:               # --noise-scale (2026-11-20): the reduced-noise reverse SDE
+        if args.sampler != "sde" or corr is not None or not (math.isfinite(args.noise_scale) and args.noise_scale > 0.0):
+            raise SystemExit(f"--noise-scale {args.noise_scale}: finite and > 0, with the default SDE sampler and "
+                             f"without --corrector (for G = 0 use --sampler ode)")
+    if corr is not None or args.force_scale != 1.0 or args.noise_scale != 1.0:
+        if args.fixed_langevin or args.oracle_start is not None or args.thin_knots:
+            raise SystemExit("--corrector, --force-scale and --noise-scale: not with --fixed-langevin, --oracle-start "
+                             "or --thin-knots")
         if not (math.isfinite(args.force_scale) and args.force_scale > 0.0):
             raise SystemExit(f"--force-scale {args.force_scale}: must be finite and > 0")
+        if args.noise_scale != 1.0:
+            stem += f"_ns{args.noise_scale:g}"
+            prov["noise_scale"] = float(args.noise_scale)
         if args.force_scale != 1.0:
             stem += f"_fs{args.force_scale:g}"
             prov["force_scale"] = float(args.force_scale)
@@ -907,7 +937,7 @@ def main():
         raise SystemExit("--cond-scale: only for a --cond run")
     if cond_p is not None:                    # clusters' frequencies, held through the SDE and the quench
         if (args.sampler != "sde" or args.thin_knots or args.oracle_start is not None or args.fixed_langevin
-                or args.force_scale != 1.0 or init_kind != "set"):
+                or args.force_scale != 1.0 or args.noise_scale != 1.0 or init_kind != "set"):
             raise SystemExit("a --cond run: the default SDE sampler (and --quench) only")
         if args.cond_scale != 1.0:            # --cond-scale: guidance by label amplification
             if not (math.isfinite(args.cond_scale) and args.cond_scale >= 0.0):
@@ -978,7 +1008,8 @@ def main():
         # of the parameter history next to the quench's (CelebA-64 K1536: 2 x 12 GB, RESOURCE_EXHAUSTED, job 4263039)
         drift = diffusion = None
     else:
-        drift, diffusion = make_drift(theta_hist, W_hist, b_hist, args.sampler, problem, prov.get("hidden", "ising"),
+        drift, diffusion = make_drift(theta_hist, W_hist, b_hist, "ode" if args.noise_scale != 1.0 else args.sampler,
+                                      problem, prov.get("hidden", "ising"),
                                       local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
                                       harmonic=harm_p, patch=patch_p, cond=cond_p)
     if args.fixed_langevin:                   # control: one frozen slice, no time evolution; then stop
@@ -995,8 +1026,10 @@ def main():
         print(f"quench only: loaded {stem}.npy ({x_final.shape[0]} samples)", flush=True)
     else:
         grad_ode = None
-        if args.force_scale != 1.0:           # --force-scale: drift x - 2 LAMBDA grad F (the SDE drift is x - 2 grad F)
-            drift_base, lam_f = drift, float(args.force_scale)
+        if args.noise_scale != 1.0:           # --noise-scale: from the PF-ODE drift above, x - (1 + G^2) LAMBDA grad F
+            drift, diffusion = reduced_noise(drift, float(args.force_scale), float(args.noise_scale))
+        elif args.force_scale != 1.0:         # --force-scale: x - LAMBDA (x - drift), i.e. x - 2 LAMBDA grad F for the
+            drift_base, lam_f = drift, float(args.force_scale)   # SDE, x - LAMBDA grad F for --sampler ode (11-20)
 
             def drift(t, x, a):
                 return x - lam_f * (x - drift_base(t, x, a))
@@ -1021,6 +1054,8 @@ def main_fast(args, quench):
     import sample_fast
     if args.sampler != "sde" or args.snapshots:
         raise SystemExit("--fast samples the reverse SDE only (no --sampler ode, no --snapshots)")
+    if args.noise_scale != 1.0:
+        raise SystemExit("--noise-scale: the default sampler only (without --fast)")
     theta_hist, W_hist, b_hist, run_dir, prov, problem = load_params(args.run, with_harmonic=True, with_patch=True)
     if "harmonic" in prov:                    # train_latent --harmonic: FastSampler has no harmonic force
         raise SystemExit(f"--fast does not support runs with harmonic modes ({args.run} has "

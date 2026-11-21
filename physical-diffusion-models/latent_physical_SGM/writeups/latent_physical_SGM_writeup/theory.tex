@@ -456,6 +456,28 @@ is a read-out of a projection, not a nudge whose small-amplitude response is mea
   $+V/(2ST^2)$.
 \end{itemize}
 
+\paragraph{Which combination needs a displacement.} The displacement is forced by deterministic hidden units, not
+by the denoising objective. The fluctuations of a thermal unit at one clamped configuration already contain its
+response to a displacement of the pixels (fluctuation--response). A deterministic unit has no fluctuations, so the
+response has to be measured by moving the clamp.
+\begin{center}
+\begin{tabular}{p{3.0cm}p{5.7cm}p{5.7cm}}
+\toprule
+ & thermal hidden units & deterministic hidden units\\
+\midrule
+implicit objective (Section~\ref{sec:training}) & one clamped configuration, no displacement; second- and
+  third-order fluctuation statistics & a trace over the pixel directions: $N$ displacements per image, or random
+  patterns\\[4pt]
+denoising objective (this section) & one clamped configuration, no displacement; one covariance, with the force
+  fluctuation projected on $\bm e$ & one pair of finite displacements along $\bm e$\\
+\bottomrule
+\end{tabular}
+\end{center}
+The pair of displacements is finite and exact only if the fields $a_m$ can be read. If only the outputs $p_m$ can be
+read, the displacement must be small,
+$p_m(\vx_t+\varepsilon\bm e)-p_m(\vx_t-\varepsilon\bm e)=2\varepsilon\,p_m(\bm G_m-\bar{\bm G})\cdot\bm e/T+O(\varepsilon^3)$:
+a nudge in the sense of Equilibrium Propagation, with its cost in dynamic range.
+
 \paragraph{Price.}
 \begin{itemize}
 \item The teacher must know $\vx_0$ next to $\vx_t$. It does if it prepares the noised clamp itself.

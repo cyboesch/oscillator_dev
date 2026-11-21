@@ -154,6 +154,16 @@ The user's question: is there a deterministic version of the rule, as the flow O
   and a read of the fields a_m gives `G_m . e` for every state of every unit at once. Nothing else is non-local.
   The hidden units may be deterministic elements with analogue outputs p_m = softmax(a/T) (T is then a gain), or
   thermal units read by sampling; in the second case only p_hat and one covariance are needed.
+- **Which combination needs a displacement of the clamp.** Deterministic hidden units force it, not the denoising
+  objective: a thermal unit's fluctuations at one clamp already contain its response to a displacement.
+
+  | | thermal hidden units | deterministic hidden units |
+  |---|---|---|
+  | implicit objective (present rule) | one clamp, no displacement; second- and third-order fluctuation statistics | N displacements per image, or random patterns |
+  | denoising objective | one clamp, no displacement; one covariance | one pair of finite displacements along e |
+
+  The pair is finite and exact only if the fields a_m can be read. With the outputs p_m only, it must be small
+  (a nudge in the sense of Equilibrium Propagation).
 - **Price.** The teacher must know x_0 next to x_t (it prepares the clamp, so it does). The target psi* adds
   variance, most at small t. Equal to the present rule only in expectation over the noise. Not implemented here:
   `latent_model.py` has the implicit loss and CD-1 only.

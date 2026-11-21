@@ -6141,3 +6141,168 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
   - on-device shared linear: crossfade to 1.8e-15;
   - sampling.
   - The four K16 runs (4287882-4287885) are queued for GPUs.
+
+### ODE temperature and the reduced-noise sampler family (submitted 2026-11-20 ~22:50; the user: "yes, implement both and test them")
+
+- **Code** (`sample_latent.py`, backup `sample_latent_pre_noisescale.py`):
+  - `--force-scale LAMBDA` now also with `--sampler ode` (drift x - LAMBDA grad F).
+  - New `--noise-scale G` (default SDE sampler, not with --corrector, --fast or --cond): drift
+    x - (1 + G^2) LAMBDA grad F, noise G sqrt(2T). Built from the PF-ODE drift (`reduced_noise`). G = 1 is the
+    reverse SDE, G -> 0 the PF-ODE; for exact scores every G has the same marginals. Suffix `_ns<G>`.
+  - The default paths call the same functions as before (make_drift gets the ODE drift only when G != 1).
+- **Test 4288048:**
+  - (1) exact Gaussian (d = 8, 4000 samples, s0^2 = 1.5): G = 0.25 / 0.5 / 1 and the ODE must reach the data
+    variance within 4%; lambda = 1.2 must shrink it;
+  - (2) on the K16 model: G = 1, lambda = 1 equals the reverse-SDE drift (rel. < 1e-10); ODE lambda scaling and
+    G = 0.5 drift exact; diffusion G sqrt(2T);
+  - (3) end to end on a scratch copy of the run (links): ODE at lambda 1.2 and G = 0.5, n 100 + quench, finite;
+    refusals with --sampler ode and with --corrector.
+- **Sweep on K16 early 32x32** (after the test; noise start = the same start states as the SDE/ODE samples so far):
+  - ODE lambda 0.8 / 0.9 / 1.1 / 1.25 + quench;
+  - SDE G = 0.25 / 0.5 + quench.
+  - Sampling  4288049 4288050 4288051 4288052 4288053 4288054; Inception **4288055**, gallery **4288056**
+    (`galleries/2026-11-20_celeba32-grey_K16_early16x16+8x8_SDE-reduced-noise-and-PF-ODE-force-scale_noise-start_quench1/`).
+  - References: K16 SDE + quench 22.11, ODE + quench 25.86.
+- **Test 4288048 (22:22):**
+  - (1) PASSED. Exact Gaussian: final variance 1.515 / 1.515 / 1.519 at G = 0.25 / 0.5 / 1 and 1.517 for the ODE
+    (target 1.5, errors 1.0-1.3%); ODE at lambda 1.2: 0.49 (colder, less expansion).
+  - (2) PASSED. On the K16 model the G = 1, lambda = 1 drift equals the reverse-SDE drift to 2e-16; lambda and G
+    scaling exact.
+  - (3) failed in the test itself. The scratch run linked the model files by absolute host paths, which do not
+    exist inside the container, so the sampler refused a run without DONE (fourth test-script bug today).
+  - Rerun of part 3 with relative links: **4288058**. The sweep jobs 4288049-4288054 now wait on it (afterok).
+- **Test part 3, rerun 4288058 (22:27):** end to end PASSED.
+  - ODE at lambda 1.2 and G = 0.5, n 100, each + quench: files written, finite. Std 0.70 for the cold ODE against
+    0.91 at G = 0.5: colder means less spread, as expected.
+  - The two refusal checks "failed" in the test itself (pipefail again); checked directly by srun: both refused
+    with the --noise-scale message, no files written.
+  - The sweep jobs 4288049-4288054 were released at 22:35.
+
+### Overnight plan 2026-11-20/21 (the user: "I let you work on this overnight")
+
+- Collect and log as results arrive, looking at every gallery:
+  - ODE / noise sweep on K16 (~01:00);
+  - per-set trained knots on K64 (linear 5/9/9, 3/5/5; step 5/9/9, 9/17/17);
+  - K16 with 64 patch states; no Q anywhere;
+  - the K16 staircase runs (on device and exact, 32x32 by morning, 64x64 later).
+- Follow-ups only within these questions:
+  - if G = 0.25 comes close to the SDE, also G = 0.1;
+  - if a force scale helps the ODE, its neighbours;
+  - the best ODE / low-noise setting also on the K16 64x64 model (sampling only).
+- Fix broken chains (test-script bugs, failed dependencies). No new research directions; code changes only to fix
+  today's new options, each with a test; at most about 10 GPUs; no deletions.
+- In the morning: a summary at the end of this notebook, MODEL_AND_CODE.md updated, the overview figure redrawn
+  with the new rows.
+
+### Results collected 2026-11-21 10:10 (the overnight runs; no overnight follow-up)
+
+- **Note:** the overnight plan above was not carried out. My last turn ended without a watcher or wake-up armed,
+  so the session was never woken; the jobs ran on their own and are evaluated here.
+- **K16 with 64 patch states, no Q (Inception 4287721, gallery 4287722), 32x32 early, quench 1:**
+
+  | model | couplings per slice | FID |
+  |---|---|---|
+  | K64, 32 states (reference) | 1.23 M | 21.72 |
+  | K16, 32 states | 1.13 M | 22.11 |
+  | **K16, 64 patch states** | ~2.4 M | **20.20** (best without corrector at 32x32) |
+  | K64, patch Q off (global Q kept) | 0.68 M | 29.85 |
+  | K64, no Q anywhere | ~0.61 M | 31.09 |
+
+  - More patch states help (-1.9); the global unit stays small.
+  - Q: the patch Q is worth +8.1, the global Q only +1.2 more. Gallery: same faces; without Q the texture is
+    grainier and harsher.
+- **Per-set trained knots, K64 (Inception 4287627, gallery 4287628):** trained linear 5/9/9 25.11 (post-hoc
+  21.67); trained linear 3/5/5 31.76 (post-hoc 5/5/5: 25.51); trained step 5/9/9 31.28 (post-hoc step 33.22);
+  trained step 9/17/17 25.59.
+  - All knot-trained models sit about 3.5 or more behind the 100-slice model, whatever the grid (shared 9:
+    24.83; per-set 5/9/9: 25.11; step 9/17/17: 25.59).
+  - Per-set training does not beat post-hoc thinning at 5/9/9. Training only helped where post-hoc knots were
+    badly placed (shared grid).
+- **ODE temperature / reduced noise, K16 32x32 (Inception 4288055, gallery 4288056), all + quench:**
+  - SDE G = 1: 22.11; G = 0.5: 24.19; G = 0.25: 24.94; ODE (G = 0): 25.86. The noise helps gradually: half the
+    noise recovers half the gap.
+  - ODE force scale: lambda 0.8 / 0.9 / 1.1 / 1.25 give 264 / 163 / 49.3 / 81.4. **The ODE is extremely sensitive
+    to the force scale; lambda = 1 is far the best.** No temperature knob helps; the flow has to be exact.
+- **K16 staircase 9/9/9 (per-set step), 32x32 (Inception 4287886, gallery 4287887):**
+
+  | K16 32x32 | FID |
+  |---|---|
+  | 100 slices, exact | 22.11 |
+  | post-hoc linear knots 9 | 23.09 |
+  | trained step 9/9/9, exact (4287883, 1.6 h) | 25.88 |
+  | trained step 9/9/9, **on device** (4287882, 5.4 h) | **42.61** |
+
+  - Gallery: the exact staircase is close to 100 slices, slightly blockier. On device: the same faces, but blurred
+    and flat in detail.
+  - Per-slice validation loss against the 100-slice model:
+    - exact staircase: +0 to +6 down to t = 3.5, +12 to +25 at t = 3-2.5, +265 at the 8x8 switch-on (t = 2.22),
+      +50 to +60 down to t = 1, then **+379 at t = 0.45, +855 at 0.2, +12,092 at t = 0**. The last piece of each
+      set cannot follow the parameters, which change fastest near t = 0.
+    - on device: like exact down to t ~ 2, then increasingly worse: +192 (t = 1.46), +502 (0.96), +1,962 (0.45),
+      +4,412 (0.2), +18,773 (0).
+  - **Missing control:** K16 on device with 100 slices (no knots). Without it the on-device loss cannot be split
+    into on-device statistics as such vs on-device together with knot training. (K784 on device, 100 slices, lost
+    only 0.7 FID on 11-18.)
+- **64x64 K16 staircase:** exact (4287885) done at 05:50, Inception **4289662** submitted now. On device
+  (4287884): at segment 83-87 of 22 after 11.3 h, about 2-3 h of training left, then sampling (~3 h); Inception
+  4287888 and gallery 4287889 follow automatically.
+- **Is the on-device loss a knot problem?** Per-slice validation loss, on device minus exact:
+
+  | t | K784, 100 slices (11-18; FID cost only +0.7) | K16, staircase 9/9/9 |
+  |---|---|---|
+  | 0.96 | +28 | +455 |
+  | 0.45 | +93 | +1,583 |
+  | 0.2 | +274 | +3,557 |
+  | 0 | +1,004 | +6,681 |
+
+  About 15x more loss with knots. Suspect: on-device statistics together with the knot training (visit counts and
+  sampled losses while chunks cycle through the slices of a window), or K16 itself.
+- **Submitted 10:40** (the user: "our whole punch line is on device training ... K16 with 64 patch states -> can we
+  run this with on device training as well?"), both 32x32, 100 slices, on device:
+  - K16 32 states: **4289675** (the control for the staircase);
+  - K16 64 states: **4289676**.
+  - Inception **4289677**, gallery **4289678**
+    (`galleries/2026-11-21_celeba32-grey_K16_32-and-64-patch-states_on-device-vs-exact_100-slices-vs-step-9-9-9_noise-start_quench1/`).
+- **64x64 K16 exact staircase 9/9/9 (Inception 4289662, 10:15):** 61.44 against 48.63 for 100 slices (+12.8; at
+  32x32 +3.8). The staircase costs far more at 64x64. With the near-t = 0 losses at 32x32 this argues for more
+  arrays at small t, or linear crossfades instead of steps, before the step version is used at 64x64.
+
+## LOCK-IN FOR THE PAPER (2026-11-21 ~10:50; the user's lock-in list. No new exploratory runs after this.)
+
+- **Model** (the same for every data set): K16 global Potts unit, 64 states per patch unit, Q and per-pixel units,
+  100 slices, linear interpolation.
+  - 28x28 / 32x32: 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22 (CelebA-32 exact: 20.20,
+    Inception 4287721).
+  - 64x64: 32x32 every 8 px from t = 4.49 + 16x16 every 4 px from t = 2.22, 64 states.
+- **Runs**, seed 1, for MNIST ten digits, Fashion ten classes, CelebA-32, CelebA-64: (1) exact statistics, Adam;
+  (2) on device, S = 64; (3) on device, S = 16. On device = the configuration of 4289676 (every hidden unit sampled,
+  jackknife, visit-count rule for global and patch states, same-draw counts). CelebA-32 exact = the existing 20.20
+  run; CelebA-32 on device S = 64 = 4289676 (checked: --hidden-samples 64).
+- **Queue cleaned:** cancelled 4287888 / 4287889 (64x64 staircase evaluation) and 4289678 (extra gallery). Left
+  running: 4287884 (64x64 on-device staircase) and 4289675 (K16 32-state on device, 100 slices); its result shows
+  up in the gate job 4289677 as context.
+- **Gates:**
+  - (a) On device for the other data sets only if Inception 4289677 shows K16 on device within about 1 FID of exact
+    on CelebA-32 (20.20).
+  - (b) MNIST on device only if the exact MNIST model is not clearly worse than K784 + 7x7. Reference: 27.7 after
+    the quench, equilibrated start; the same model from the noise start, as the lock-in samples: 27.86.
+  - No tuning.
+- **Stage 1, submitted 10:50:**
+
+  | data set | pipeline (train + 2000 SDE samples + quench 1) | corrector set (2:0.16, quench 1) | Inception | classifier FID |
+  |---|---|---|---|---|
+  | MNIST | **4289729** | 4289732 | 4289737 | 4289738 |
+  | Fashion | **4289730** | 4289733 | 4289739 | 4289740 |
+  | CelebA-64 | **4289731** (160 G, 2 days: 64 states double the 60 G / 7.8 h of the 32-state run) | 4289734 | 4289741 | - |
+  | CelebA-32 (exact exists) | - | 4289735 | 4289742 (with ODE 4289736 and on-device 4289676) | - |
+
+  - Run names: `{mnist28_d0123456789,fashion28_c0123456789,celeba32g}_K16_ema_potts_quad_local_quartic_r1_lin_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1`,
+    `celeba64g_K16_..._patch32s8S64on10+patch16s4S64on55_seed1`; on device: `..._S64jk_occ-patchocc_seed1` /
+    `..._S16jk_occ-patchocc_seed1`.
+  - Evaluation script: scratchpad `eval_lock.sh DATASET inc|cls|gal`. It takes every set that exists (exact,
+    S64, S16; SDE as sampled and quenched, corrector, knots, ODE), plus the old best model of the data set as a
+    reference row.
+- **To follow after the gates:** on device S = 64 / S = 16 (incl. CelebA-32 S = 16); corrector sets for them;
+  post-hoc knots 5/9/9 (wl, bl constant) on each S = 64 model; ODE + quench on CelebA-32 S = 64; galleries per data
+  set; then the second wave (seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the S = 64
+  models).
