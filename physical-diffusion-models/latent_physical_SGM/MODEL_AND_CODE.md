@@ -119,9 +119,14 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 
 | Data | Model | Inception FID, quench 1 (n = 2000) | Classifier FID |
 |---|---|---|---|
-| MNIST, ten digits | K6144 + 7x7 every 3 px, equil start | 18.8 (FID_inf 15.9) | 3.87 |
-| Fashion, ten classes | K1536 + 8x8 every 2 px, equil start, 3 seeds | 25.9 +- 0.04 (21.3) | 2.71 +- 0.07 |
-| CelebA 32x32 grey | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22 + 8-cluster label** (`--patch 16:4:32 --patch-on-slice 10 --patch2 8:2:32 --patch2-on-slice 55 --cond 8 --cond-on global,patch`; 2026-11-19) | 21.06 (17.3); **with `--corrector 2:0.16`: 20.57 (16.8), best** (2026-11-20) | - |
+| MNIST, ten digits | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22, 64 patch states, noise start** (locked patches with a larger global unit; `--K 784 --patch 16:4:64 --patch-on-slice 10 --patch2 8:2:64 --patch2-on-slice 55`; 2026-11-21) | 10.01 (4.44); **with `--corrector 2:0.16`: 9.19 (3.57), best** | 6.23; corrector 5.06 |
+| MNIST, ten digits | locked recipe K16 + the same patches, noise start (2026-11-21) | 14.39 (8.13); corrector 12.00 (4.83) | 14.23; corrector 12.27 |
+| MNIST, ten digits | K6144 + 7x7 every 3 px, equil start (previous best) | 18.8 (FID_inf 15.9) | 3.87 |
+| Fashion, ten classes | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22, 64 patch states, noise start** (2026-11-21) | **21.32 (9.78), best**; corrector 21.82 (9.79) | 2.77; corrector 2.32 |
+| Fashion, ten classes | locked recipe K16 + the same patches, noise start (2026-11-21) | 26.00 (15.66); corrector 25.80 (14.62) | 5.97; corrector 4.88 |
+| Fashion, ten classes | K1536 + 8x8 every 2 px, equil start, 3 seeds (previous best) | 25.9 +- 0.04 (21.3) | 2.71 +- 0.07 |
+| CelebA 32x32 grey | **locked recipe: K16 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22, 64 patch states**, noise start (2026-11-20; Inception 4287721) | **20.20 (12.3), best single model without label** | - |
+| CelebA 32x32 grey | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22 + 8-cluster label** (`--patch 16:4:32 --patch-on-slice 10 --patch2 8:2:32 --patch2-on-slice 55 --cond 8 --cond-on global,patch`; 2026-11-19) | 21.06 (17.3); with `--corrector 2:0.16`: 20.57 (16.8) (2026-11-20) | - |
 | CelebA 32x32 grey | K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, `--corrector 2:0.16` (1.23 M couplings per slice; 2026-11-20) | 20.73 (17.1) | - |
 | CelebA 32x32 grey | K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, 3 seeds (1.23 M couplings per slice) | 21.86 ± 0.15 | - |
 | CelebA 32x32 grey | K1536 + 8x8 every 2 px + 16x16 every 4 px, noise start, `--corrector 2:0.16` (best, 2026-11-17) | 21.50 (18.0) | - |
@@ -297,6 +302,13 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 | 11-21 | `--visible harmonic`: only the linear self spring k_lin x^2 / 2 + bias per pixel (k_duff = k_6 = 0, held at exactly zero, their gradients zeroed); k_lin starts at 1 and is not floored, so confinement against positive squared-pixel couplings Q of the hidden units is not guaranteed (watch the samples' divergence count); refused unless `--pair-terms none` or `lin` | `train_latent` | test 4290730: quartic path old vs new bitwise (3 slices, both patch sets); refusals; k_duff / k_6 / pair groups exactly 0 in all 100 slices; confinement margins; sampling. Backup `train_latent_pre_harmonic.py` |
 
 ## 4. Known pitfalls
+
+- **Corrector sampling of K784 models needs 64 GB host memory** (2026-11-21: `--corrector 2:0.16` on MNIST / Fashion
+  K784 + 16x16/8x8 patches ran out of memory at the default 32 GB of `run_gpu_neuronic.sh`, jobs 4290138 / 4290145;
+  64 GB ran in 1 h). K16 / K128 fit in 32 GB.
+- **The job wrappers must be submitted with `sbatch`.** `bash jobs/run_cpu_neuronic.sh ...` runs the job on the login
+  node (it did once for two small gallery renders, 2026-11-21). Inside an evaluation script that is itself submitted
+  with sbatch, `bash jobs/run_*_neuronic.sh` is correct (it runs in the allocation).
 
 - **GPU memory for K >= 3072 (sampling).** The default sampler holds the float64 parameter history several times
   (K3072 on CelebA-32: 5.0-5.6 GB constants). Use `XLA_PYTHON_CLIENT_ALLOCATOR=platform`, `--chunk 25`, 160 GB host

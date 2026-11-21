@@ -6479,7 +6479,22 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
   quench 1 4290854, ODE + quench 1 4290855. Full CelebA-32 lock-in table (exact, S64, S16, corrector, knots, ODE):
   Inception **4290856**; gallery (real, exact, S64, S16) 4290857. The earlier Inception 4289742 still runs after
   4289676 with the sets that exist then. CelebA-64 on device (S = 64, S = 16) still waits for gate (a).
-- **To follow after the gates:** on device S = 64 / S = 16 (incl. CelebA-32 S = 16); corrector sets for them;
-  post-hoc knots 5/9/9 (wl, bl constant) on each S = 64 model; ODE + quench on CelebA-32 S = 64; galleries per data
-  set; then the second wave (seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the S = 64
-  models).
+- **Best-MNIST gallery (2026-11-21 17:30, job 4290806; the user: "where can I see that samples"):**
+  `galleries/2026-11-21_mnist_K784+16x16-8x8-patches-64-states_exact_corrector2x0.16_quench1_best-MNIST/` (the 9.19
+  set; rows on the same draws: K784 with corrector, K784 quench only, K16 with corrector, old best). Clean strokes,
+  mostly clear digits, a handful of failures. Several samples are close to their nearest training image (not pixel
+  copies); a proper memorisation check (sample-to-train distances vs held-out test-to-train) was offered, the user:
+  "I think this is fine for now".
+- **Comparing with Wang & Achour (discussion 2026-11-21 ~13:00):** both report Inception FID; theirs states no n or
+  implementation. Inception FID on MNIST weighs faint pixel noise heavily (real test images + N(0, 0.01^2) noise:
+  38.5; our K16 before / after the quench 50.6 / 14.4 with images that look alike) and is biased at small n (real vs
+  real 11.1 at n = 1000, 3.7 at n = 2000), so their 27.6 and our numbers compare only roughly; report n, the
+  reference set (train), the implementation (TTUR graph) and FID_inf. An independent cross-check (pytorch-fid on the
+  same files) was offered, not run.
+- **Status 2026-11-21 18:00 (what is still to come):**
+  - Gate (a) (Inception 4289677, about 19:30); after it, CelebA-64 on device S = 64 / S = 16 (the only lock-in runs
+    not yet submitted).
+  - Running: MNIST / Fashion K16 and K784 on device (8 runs), CelebA-32 S = 16, CelebA-64 exact (sampling), CelebA-32
+    K784 exact, harmonic no-spring run; all evaluation jobs chained.
+  - Second wave, after the first results: seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the
+    S = 64 models. Reporting: one table per data set (exact, S64, S16, corrector, knots, ODE).
