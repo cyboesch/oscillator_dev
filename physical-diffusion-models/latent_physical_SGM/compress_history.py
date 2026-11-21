@@ -104,6 +104,18 @@ def compress(X, t, mode, shared=None):
         idx = _choose_knots(na, B, "knots")
         R = _interp_rows(A, tt, idx)
         stored = idx.size * P
+    elif kind == "steps":
+        # 2026-11-20: piecewise constant in t (switched coupling sets instead of a crossfade). The same B kept slices
+        # as knots:B (evenly spaced); the first active slice is its own piece, and every later piece (k_j-1, k_j] is
+        # held at the mean of its slices (the least-squares constant). In the 100-slice format the sampler then
+        # switches between pieces over one slice interval (its linear interpolation between neighbouring slices).
+        B = min(int(arg), na)
+        idx = _choose_knots(na, B, "knots")
+        R = np.empty_like(A)
+        R[0] = A[0]
+        for a, b in zip(idx[:-1], idx[1:]):
+            R[a + 1:b + 1] = A[a + 1:b + 1].mean(axis=0)
+        stored = idx.size * P
     elif kind == "knotsopt":
         B = min(int(arg), na)
         keep = [0, na - 1]
@@ -136,19 +148,19 @@ def compress(X, t, mode, shared=None):
         R = mu + (U[:, :r] * S[:r]) @ Vt[:r]
         stored = (r + 1) * P + r * na
     else:
-        raise ValueError(f"mode {mode!r}: knots:B, knotsopt:B, knotsarc:B, hat:B, cheb:B, svd:R, knots:all or "
-                         f"svd:full")
+        raise ValueError(f"mode {mode!r}: knots:B, steps:B, knotsopt:B, knotsarc:B, hat:B, cheb:B, svd:R, knots:all "
+                         f"or svd:full")
     out = X.copy()
     out[k0:] = R
     err = float(np.linalg.norm(R - A) / max(np.linalg.norm(A), 1e-300))
-    knot_t = tt[idx] if kind.startswith("knots") else None
+    knot_t = tt[idx] if kind.startswith("knots") or kind == "steps" else None
     return out, stored, na, err, knot_t
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--run", required=True)
-    ap.add_argument("--mode", required=True, help="knots:B | knotsopt:B | knotsarc:B | hat:B | cheb:B | svd:R | knots:all | svd:full")
+    ap.add_argument("--mode", required=True, help="knots:B | steps:B | knotsopt:B | knotsarc:B | hat:B | cheb:B | svd:R | knots:all | svd:full")
     ap.add_argument("--group-modes", default="", help="per-group overrides, e.g. 'wl=svd:4,bl=svd:4'")
     ap.add_argument("--out-name", default="")
     ap.add_argument("--dry-run", action="store_true", help="only the error report; no run directory is written")

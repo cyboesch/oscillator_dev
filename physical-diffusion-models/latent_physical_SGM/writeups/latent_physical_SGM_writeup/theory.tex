@@ -11,7 +11,8 @@
 
 \title{Physical diffusion models with fast latent units:\\ model, local training and measured statistics}
 \author{Working note, branch \texttt{latent\_physical\_SGM}}
-\date{9 November 2026; Section~\ref{sec:cond} (clamped label, guidance) added 18 November 2026}
+\date{9 November 2026; Section~\ref{sec:cond} (clamped label, guidance) added 18 November 2026;
+      Section~\ref{sec:det} (flow ODE, denoising rule) added 20 November 2026}
 
 \begin{document}
 \maketitle
@@ -300,7 +301,7 @@ hidden averages, but with sampled hidden states the difference of two independen
 signal; force matching is therefore the rule for a device.
 
 %======================================================================================================================
-\section{Training on a device: measured hidden statistics}
+\section{Training on a device: measured hidden statistics}\label{sec:measured}
 
 \subsection{Plug-in bias}
 A device cannot compute $p_m$ or $m_j$; it reads the hidden units $S$ times while the pixels are clamped and
@@ -361,6 +362,119 @@ this is the visible model with parameters $2\theta-\theta_{\rm lin}$. With hidde
 duplicate every hidden unit (two replicas at $T$ with the trained couplings), which gives $-2T\sum_j\log Z_j$
 exactly; alternatives are the doubled energy at hidden temperature $2T$, or an amplified back-action force. In
 simulation the drift $\vx-2\grad F$ is used directly.
+
+%======================================================================================================================
+\section{A deterministic variant: flow ODE and the denoising rule}\label{sec:det}
+\emph{Added 20 November 2026. A derivation: the denoising rule is not implemented and not tested.}
+
+The sampler above needs noise on the pixels, and the learning rule of
+Sections~\ref{sec:training} and~\ref{sec:measured} reads the fluctuations of the hidden units. This section asks
+whether both can be avoided.
+
+\paragraph{Generation: the flow ODE.} The same marginals $p_t$ are transported by the probability-flow ODE. In
+reversed time,
+\begin{equation}
+  \frac{d\vx}{d\tau}=\vx-\grad F_{\theta(\tau)}(\vx),
+\end{equation}
+i.e.\ pixels without noise in the potential $F-\tfrac12\|\vx\|^2$ (\texttt{sample\_latent.py --sampler ode}). $F$
+enters once, not twice, so one copy of every hidden unit with the trained couplings suffices: no replicas. The
+flow ODE changes the sampler only. Both samplers need the same $F_{\theta(t)}$, learned on samples of $p_t$, so the
+ODE does not by itself give a deterministic learning rule.
+
+\paragraph{Where the learning rule uses noise.}
+\begin{itemize}
+\item \emph{In the data.} Slice $t$ is trained on noised images $\vx_t\sim p_t$. This holds for every diffusion or
+  flow-matching model, whatever the sampler. It is data preparation: the teacher can add the noise digitally before
+  it clamps the pixels.
+\item \emph{In the hidden units.} The implicit objective contains $\Delta F$, a trace over all pixel directions. With
+  $\mathcal L\equiv T\Delta-\grad F\cdot\grad$, the generator of the Langevin dynamics in $F$,
+  \begin{gather}
+    \partial_\theta J_T=-\frac1{T^2}\,\E\big[\mathcal L\,\partial_\theta F\big],\label{eq:generator}\\
+    \text{for example}\quad
+    \partial_{b_m}J_T=\frac1{T^2}\,\E\big[T\Delta p_m-\bm\psi\cdot\grad p_m\big]=\frac{\langle p_mc_m\rangle}{T^3}\notag
+  \end{gather}
+  (the contrastive-divergence form of Section~\ref{sec:training} is the same statement). The drift part is a
+  first-order response of $p_m$ to a displacement of the pixels along $\bm\psi$. The Laplacian part is a sum over
+  $N$ directions, and there are three ways to obtain it: from the thermal fluctuations of the hidden units at one
+  clamped configuration (the rule of Section~\ref{sec:training}, in which $\|\bm G_m-\bar{\bm G}\|^2$, $V$ and the
+  third cumulant are fluctuation statistics); from $N$ displacements of the clamp per image; or from random
+  displacement patterns (sliced score matching), which moves the noise into the probe.
+\end{itemize}
+The rule with one clamped configuration and no displacement therefore needs fluctuating hidden units.
+
+\paragraph{The denoising objective.} The Laplacian disappears if the noise that was added to the image serves as
+the target (denoising score matching, Vincent 2011). Given the training image $\vx_0$, the forward process gives
+$\vx_t\sim\mathcal N\big(e^{-t}\vx_0,\,T(1-e^{-2t})\big)$. Define the target force and the force error
+\begin{equation}
+  \bm\psi^*=\frac{\vx_t-e^{-t}\vx_0}{1-e^{-2t}},\qquad \bm e\equiv\bm\psi(\vx_t)-\bm\psi^*,\qquad
+  J^{\rm dn}_T(\theta)=\E_{\vx_0,\vx_t}\Big[\frac{\|\bm e\|^2}{2T^2}\Big]=J_T(\theta)+\text{const}.
+  \label{eq:denoising}
+\end{equation}
+$-\bm\psi^*$ is a spring that pulls the pixels towards the shrunk training image $e^{-t}\vx_0$, with stiffness
+$1/(1-e^{-2t})$; the temperature cancels. The model's mean force $-\bm\psi$ is fitted to this spring force, averaged
+over the images that lead to $\vx_t$. The two objectives differ by a constant, so their gradients agree in
+expectation over $(\vx_0,\vx_t)$, not sample by sample. They are the same function of $\theta$ up to that constant,
+so they have the same minimiser for any model family. The denoising rule is therefore not expected to change the
+learned score or the sample quality of either sampler; it changes the noise of the gradient estimate and what a
+device must measure.
+
+\paragraph{The rule.} $\partial_\theta J^{\rm dn}_T=\E[\bm e\cdot\partial_\theta\bm\psi]/T^2$, with the derivatives
+of $\bm\psi$ of Section~\ref{sec:training}:
+\begin{align}
+  \text{visible:}\quad&\partial_{\theta_k}J^{\rm dn}_T=\frac{\langle\bm e\cdot\grad\phi_k\rangle}{T^2},\\
+  \text{Potts:}\quad&\partial_{b_m}J^{\rm dn}_T=-\frac{\langle p_m\,(\bm G_m-\bar{\bm G})\cdot\bm e\rangle}{T^3},\\
+  &\partial_{W_{mi}}J^{\rm dn}_T=-\Big\langle p_m\Big[\frac{x_i\,(\bm G_m-\bar{\bm G})\cdot\bm e}{T^3}+\frac{e_i}{T^2}\Big]\Big\rangle,\\
+  &\partial_{Q_{mi}}J^{\rm dn}_T=-\Big\langle p_m\Big[\frac{x_i^2\,(\bm G_m-\bar{\bm G})\cdot\bm e}{T^3}+\frac{2x_ie_i}{T^2}\Big]\Big\rangle,\\
+  \text{Ising:}\quad&\partial_{W_{ji}}J^{\rm dn}_T=-\frac1{T^2}\Big\langle m_je_i+\frac{x_i}{T}\,v_j\,\bm W_j\cdot\bm e\Big\rangle,\qquad
+  \partial_{b_j}J^{\rm dn}_T=-\frac{\langle v_j\,\bm W_j\cdot\bm e\rangle}{T^3}.
+\end{align}
+Compared with Section~\ref{sec:training}: $c_m\to-(\bm G_m-\bar{\bm G})\cdot\bm e$, and the pixel signal
+$2(G_{mi}-\bar G_i)-\psi_i\to-e_i$. The terms $\|\bm G_m-\bar{\bm G}\|^2$, $V$ and $s_m-\bar s$, the $2/T$ of the
+$\bm Q$ rule and the third cumulant $k_3$ are gone. Patch units and per-pixel units follow the same formulas, with
+their own statistics and the total force error on their pixels. It is still a three-factor rule. The state-level
+factor is now the force error projected back onto the state through its own couplings: the delta rule of a network
+with one hidden layer.
+
+\paragraph{On a device.} Per training image: clamp the pixels at $\vx_t$; read the clamp force $\bm\psi$ and the
+hidden outputs $p_m$; form $\bm e$ (the teacher knows $\vx_0$ and $\vx_t$); displace the clamp by
+$\pm\varepsilon\bm e$ and read the fields. Because $a_m$ is quadratic in $\vx$,
+\begin{equation}
+  \frac{a_m(\vx_t+\varepsilon\bm e)-a_m(\vx_t-\varepsilon\bm e)}{2\varepsilon}=\bm G_m\cdot\bm e
+\end{equation}
+exactly, for any $\varepsilon$, and $\bar{\bm G}\cdot\bm e=\sum_kp_k\,\bm G_k\cdot\bm e$. One pair of displacements
+serves every state of every hidden unit, and nothing else in the rule is non-local. The displacement is finite: it
+is a read-out of a projection, not a nudge whose small-amplitude response is measured.
+\begin{itemize}
+\item \emph{Deterministic hidden units.} The hidden units may be elements with analogue outputs
+  $p_m=e^{a_m/T}/\sum_ke^{a_k/T}$ that pull on the pixels with the mean force $\sum_mp_m\bm G_m$; $T$ is then a
+  gain, not a temperature. Together with the flow ODE no part of the machine needs noise. (The generation code
+  already evaluates $p_m$ and the mean force in this way.)
+\item \emph{Thermal hidden units.} The same rule holds with measured statistics:
+  $p_m(\bm G_m-\bar{\bm G})\cdot\bm e$ is the covariance, over the reads, of ``state $m$ is active'' with the unit's
+  force fluctuation projected on $\bm e$. The loss is still quadratic and its gradient cubic in the sample means,
+  so the jackknife of Section~\ref{sec:measured} applies unchanged; the plug-in bias of the loss becomes
+  $+V/(2ST^2)$.
+\end{itemize}
+
+\paragraph{Price.}
+\begin{itemize}
+\item The teacher must know $\vx_0$ next to $\vx_t$. It does if it prepares the noised clamp itself.
+\item One displacement of the clamp per image replaces the fluctuation statistics. The property of
+  Section~\ref{sec:training}, one clamped configuration at which nothing moves, is lost.
+\item $\bm\psi^*$ is a single draw around its conditional mean, with variance $T/(1-e^{-2t})$ per pixel given
+  $\vx_0$. The gradient carries this extra noise; it is largest in the slices near $t=0$.
+\item The slice at $t=0$ has no target if $\vx_0$ is the stored training image. The stored images contain pixel
+  noise of standard deviation 0.01 (variance $s^2$ in normalised units). Conditioning on the image $\tilde\vx_0$
+  before that noise gives $\bm\psi^*=T\,(\vx_t-e^{-t}\tilde\vx_0)/\sigma_t^2$ with
+  $\sigma_t^2=e^{-2t}s^2+T(1-e^{-2t})$, which is finite at $t=0$. The pixel noise is one fixed draw per image now;
+  for this target it should be drawn afresh for every batch.
+\end{itemize}
+
+\paragraph{Status (20 November 2026).} The derivatives of $\bm\psi$ and of $\Delta F$ behind~\eqref{eq:generator}
+and behind the rule above were checked numerically (\texttt{check\_device\_rule.py}, job 4287868); the
+equality~\eqref{eq:denoising} is Vincent's. The code (\texttt{latent\_model.py}) implements the implicit objective
+and CD-1 only. To do: check the two gradients against each other in expectation on a toy model, then one training
+run with exact and with sampled hidden statistics.
 
 %======================================================================================================================
 \section{A clamped per-image label: conditioning and guidance}\label{sec:cond}

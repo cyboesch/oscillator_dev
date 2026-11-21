@@ -612,7 +612,85 @@ Claude's judgement, asked for by the user on 2026-11-17. It is an opinion, not a
      diffusion model decides class and detail (Biroli et al. 2024; Sclocchi et al. 2024; Kamb & Ganguli 2024; from
      memory, to verify), which gives the machine-learning reader a reason to care beyond hardware.
 
+### Update 2026-11-20: ICML or a physics journal?
+
+Asked by the user on 2026-11-20. Again Claude's judgement.
+
+- **Results since 11-17 that change the estimate.**
+  - Training fully from sampled statistics works on the recipe: CelebA-32, K784 + 8x8 + 16x16, S = 64 for every
+    hidden unit with the visit-count rule gives 23.59, against 22.85 with exact statistics and Adam (notebook
+    11-18; Inception 4268089). Lever 1 above, on one data set.
+  - The parameter count fell. K64 with an early 16x16 set, an 8x8 set and the corrector gives 20.73 at 1.23 M
+    couplings per slice. Keeping a few time knots per parameter set stores 10.7 M numbers instead of 83.2 M with no
+    loss (21.67 against 21.72); the same rule at 64x64 stores 42.7 M instead of 331.8 M (notebook 11-20, morning
+    summary). Lever 2 above, on CelebA.
+  - Revised estimate for ICML: 30 to 40%, if priority A is finished on the new recipe.
+- **Recommendation: a physics journal for the full story** (PRX or PRX Intelligence first).
+  1. The results that set the work apart are results about a physical system: training from measured statistics,
+     generation as a protocol of physical operations, and a time schedule that reduces to a few coupling sets
+     cross-faded in t. A physics referee weighs these; a machine-learning reviewer weighs the FID against digital
+     models, where the work loses by construction.
+  2. The weaknesses at ICML are structural (quality by digital standards, small grey data, known components). The
+     weakness at a physics journal is the missing experiment, and proposals of physical learning machines tested in
+     simulation have appeared in PRX (from memory, to verify).
+  3. The story has six parts (model, rule, protocol, mechanism, measured statistics, compression). Eight pages
+     keep three of them.
+  4. The recipe still changes every night. A journal has no deadline on 22 January; ICML would freeze a recipe that
+     is nine weeks from settled, and MNIST and Fashion have not been rerun with it.
+  5. ICML proceedings are archival. An acceptance uses these results up, and a later journal paper must be a
+     different paper.
+- **The case for ICML.** A decision in about four months instead of six to ten; a deadline; the competing papers
+  (Wang & Achour, DTM) are read by that community; a rejection costs four months and one rewrite. It is the right
+  choice if the aim is to be noticed by the machine-learning community.
+- **PRX Intelligence** is open for submissions and waives its publication charge for submissions received before
+  2027-01-01 (APS pages, read 2026-11-20). Check that hardware for AI is within its scope.
+- **Note.** Sections 2 to 6 of this file predate the results of 11-18 to 11-20 (small global unit, early coarse
+  patches, clamped label, time compression, trained knots). They need an update before they are used.
+
+### Update 2026-11-20 (2): a crossbar mapping, or more hidden-unit comparisons?
+
+Asked by the user on 2026-11-20: work out a crossbar circuit that could implement the model, or keep the Potts unit
+idealised and add comparisons with Ising units and exponential family harmoniums. Claude's judgement.
+
+- **Recommendation.** The crossbar mapping, at the level of architecture plus measured tolerances, not a
+  transistor-level design. It answers the first objection at either venue ("no hardware has such a unit"). Fold
+  the Ising comparison into it as one experiment. Use exponential family harmoniums as the framing of the model,
+  not as further experiments.
+- **Is it possible? In principle yes: each operation maps onto a known primitive.**
+
+  | Model operation | Crossbar primitive |
+  |---|---|
+  | fields a_m = b_m + W_m.x + Q_m.x^2 | forward read of a conductance array (signed weights as differential pairs); a second set of input lines carries x^2, from one squaring circuit per pixel |
+  | hidden average p = softmax(a / T) | an analog softmax element. Elfadel & Wyatt (NIPS 1993) show a reciprocal, passive multiterminal resistive element that computes softmax; this is the summed-out Potts unit as a circuit |
+  | a sampled Potts state | a winner-take-all circuit with noise |
+  | force on pixel i, sum_m p_m (W_mi + 2 Q_mi x_i) | transposed read of the same array (the same conductances, so the coupling is reciprocal), plus one multiplier per pixel for the Q term |
+  | factor 2 of the reverse process | a gain of 2 on the transposed read; no replicas needed when the circuit computes the average |
+  | time dependence | the 11-20 result: 5 to 9 fixed arrays per parameter set, mixed by two time-dependent gains (linear interpolation of couplings = linear interpolation of fields and forces at given p). No reprogramming during generation |
+  | learning rule | per clamped sample, two rank-one updates (a state signal times a pixel signal) and a decay gated by p_m; with a sampled state only the winner's row changes. The projections in c_m are extra forward reads of the nudge vectors |
+  | pixels | capacitors with a cubic nonlinear conductance (the quartic well), resistors to the 8 neighbours (the springs), and an injected noise current (the bath) |
+
+  Precedent in `HARDWARE_NOTES.md`: NeuRRAM ran a dense 794 x 120 RBM with forward and transposed reads.
+- **Why the current model suits it better than the one of 11-17.** The patches are the model and they are local
+  (169 patch units of 32 states at 32x32, each wired to 64 pixels); the global unit can be 16 to 64 states; the
+  schedule is a handful of fixed arrays. 10.7 M stored couplings are within the size of built arrays.
+- **What is not known, and decides feasibility: precision.** The softmax must resolve field differences of order T
+  on fields of 10^2 to 10^3 T (`HARDWARE_NOTES.md` estimates 9 to 11 bits by reasoning); resistive cells give
+  about 4 to 6. The simulation can measure it: experiment B4 (couplings at 4 / 6 / 8 bits, static errors of 1 to
+  10%, read noise on the fields), plus the distribution of the gap between the two largest fields over t. Add one
+  retraining with the static errors in place, since on-device training should absorb them.
+- **Also for the mapping:** Ising patch units with the current recipe on CelebA-32 (`--patch-kind ising`; so far
+  one four-digit run, within 0.9 classifier FID of Potts). Binary units are the simplest hardware, and the patches
+  are now most of the model.
+- **Exponential family harmoniums as framing.** The model is a harmonium with multinomial hidden units and visible
+  statistics (x, x^2), plus visible-visible springs, trained by score matching per noise level. The local rule of
+  `DESIGN.md` 2 needs only the cumulants of a hidden unit, so it holds for any hidden unit that couples through one
+  statistic, including a real double-well oscillator. Experiments on further families are not worth their cost:
+  Gaussian hidden units are the harmonic modes (no gain, 11-13), and the others have no hardware counterpart.
+
 ## 12. Updates
 
 - 2026-11-17: first version.
 - 2026-11-17: section 11 added (chances at ICML and what moves them).
+- 2026-11-20: section 11, update on the venue (ICML or a physics journal) and the revised estimate.
+- 2026-11-20: section 11, second update (crossbar mapping against more hidden-unit comparisons).
+- 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.

@@ -95,6 +95,10 @@ PANELS = [
          ("4285111", "K64+early16x16_corrector2_quench1")),
         ("K784 + early 16x16 + 8x8 + label, 2 corrector steps", ("4285111", "K784+early16x16+label8_corrector2"),
          ("4285111", "K784+early16x16+label8_corrector2_quench1")),
+        # 2026-11-20: the same K64 model with its history compressed to 5 / 9 / 9 time knots (10.7 M stored)
+        ("K64 + early 16x16 + 8x8, knots 5/9/9", ("4286278", "knots559"), ("4286278", "knots559_quench1")),
+        ("K64 + early 16x16 + 8x8, knots 5/9/9 + corrector", ("4286278", "knots559_corrector2"),
+         ("4286278", "knots559_corrector2_quench1")),
     ]),
     # CelebA 64x64 grey (added 2026-11-19): noise start; 8x8 patches are too slow at 64x64, so 16x16 / 32x32
     ("CelebA 64x64 grey (noise start)", "4274103", None, [
@@ -112,6 +116,10 @@ PANELS = [
          ("4285112", "K64+early32x32+label8_quench1")),
         ("K64 + early 32x32 + 16x16, 2 corrector steps", ("4285144", "K64+early32x32_corrector2"),
          ("4285144", "K64+early32x32_corrector2_quench1")),
+        # 2026-11-20: history compressed to 5 / 9 / 9 time knots (42.7 M stored instead of 331.8 M)
+        ("K64 + early 32x32 + 16x16, knots 5/9/9", ("4286279", "knots559"), ("4286279", "knots559_quench1")),
+        ("K64 + early 32x32 + 16x16, knots 5/9/9 + corrector", ("4286279", "knots559_corrector2"),
+         ("4286279", "knots559_corrector2_quench1")),
     ]),
 ]
 _cache = {}
@@ -154,7 +162,7 @@ def main():
                          "ytick.color": INK, "text.color": INK})
     n_rows = [len(m) for _, _, _, m in PANELS]           # 2 x 2 grid; row heights follow the longer panel of the row
     hr = [max(n_rows[0:2]), max(n_rows[2:4])]
-    fig, axes = plt.subplots(2, 2, figsize=(14.0, 0.42 * sum(hr) + 4.4), facecolor=SURFACE,
+    fig, axes = plt.subplots(2, 2, figsize=(15.5, 0.42 * sum(hr) + 4.4), facecolor=SURFACE,
                              gridspec_kw={"height_ratios": hr})
     axes = axes.ravel()
     table = []
@@ -204,12 +212,14 @@ def main():
              "Quench: the same samples relaxed for 1 time unit at zero temperature under the t = 0 energy. CelebA: "
              "aligned faces, centre crop, grey; 8x8 patches every 2 px, 4x4 every 2 px, 16x16 every 4 px, 32x32 every 8 px "
              "(64x64 only); 32 states per patch unit.\n"
-             "Corrector: 2 Langevin corrector steps per knot. On-device training: hidden statistics from 64 sampled states, "
+             "Corrector: 2 Langevin corrector steps per knot ('+ corrector': the same). On-device training: hidden statistics from 64 sampled states, "
              "visit-count rule. 8-cluster label: a clamped k-means label on the hidden biases, drawn per sample.\n"
+             "Knots 5/9/9: the trained 100-slice parameter history kept at 5 slices (global unit) and 9 (each patch "
+             "set), linear in t between them, per-pixel units constant: 7.8x fewer stored numbers (post hoc, no retraining).\n"
              "The CelebA training images carry the paper's 1% pixel noise and score 11.1 themselves at 32x32 (real test "
              "images: 6.4). Wang & Achour (arXiv 2606.27294): best KuraSHIL oscillator model; their sample count and FID "
              "code are not stated; they report no CelebA result.", fontsize=7, color=INK2)
-    fig.tight_layout(rect=(0, 0.06, 1, 0.965))
+    fig.tight_layout(rect=(0, 0.07, 1, 0.965))
     for ext in ("png", "pdf"):
         p = os.path.join(OUTDIR, f"inception_fid_mnist_fashion.{ext}")
         fig.savefig(p, dpi=200, facecolor=SURFACE)

@@ -5798,3 +5798,307 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
   - Scripts: scratchpad `compress_knots_counterpart.sh`, `eval_knots.sh`, `test_knots.sh`.
 - **Also still running:** the corrector on the compressed 5 / 9 / 9 models; Inception **4285861** (32x32) and
   **4285862** (64x64, ~11:00).
+- **Test 4285924 FAILED, because of the test, not the code (found 11:10).**
+  - Test 2 treated every group that is all zero at the start knot and non-zero at the end knot as a set switching
+    on there, and required zeros in between. Q is exactly zero at slice 0 (hidden units frozen at slice 0), so the
+    crossfade of Q over slices 1-9 failed that check.
+  - Re-checked on the saved run (short srun): every group, Q included, equals the crossfade to 1.4e-15; the patch
+    sets are zero before their switch-on.
+  - The other checks passed: (0) knot placement; (1) old vs new code bitwise; (2) switch-on knots train only the new
+    set; (4) sampling finite.
+  - Test (3) proved nothing: the killed run had saved no slices after 100 s.
+  - Released the three trainings at 11:12 (`scontrol update Dependency=`). They have run since about 11:12.
+  - Proper resume test, mid-interval (slices 40-99 deleted from a copy, resume at 33, compare bitwise):
+    **4286222**.
+- **Corrector on the compressed 5 / 9 / 9 histories (Inception 4285861 / 4285862, galleries 4285863 / 4285864):**
+
+  | | 100 slices | 5 / 9 / 9 knots | 100 slices + corrector | 5 / 9 / 9 + corrector |
+  |---|---|---|---|---|
+  | CelebA-32 (83.2 M / 10.7 M stored) | 21.72 | 21.67 | 20.73 | **24.69** (worse) |
+  | CelebA-64 (331.8 M / 42.7 M stored) | 49.21 | 47.99 | 43.10 | **40.88** (new best at 64x64) |
+
+  - Opposite signs at the two sizes. Galleries: with the corrector, the compressed models draw the same faces as
+    the 100-slice ones, but brighter: whiter backgrounds, harsher dark features. The share of near-black pixels
+    drops: 32x32 4.2% vs 9.8% (real 11.8); 64x64 3.9% vs 9.0% (real 12.6).
+  - Reading: the corrector equilibrates at each t to what the parameters say, and between knots the interpolated
+    parameters were never trained, so it amplifies the interpolation error. At 64x64, where the models lack
+    contrast, the push helps; at 32x32 it overshoots. Trained knots should not have this problem: test the corrector
+    on them too.
+- **Overview figure updated (2026-11-20 ~11:45; plot jobs 4286280, then the replot).** New rows:
+  - 32x32 and 64x64: "knots 5/9/9" and "knots 5/9/9 + corrector".
+  - Their as-sampled FIDs had never been measured: Inception **4286278** (32x32) and **4286279** (64x64) score all
+    four sets as sampled and quenched.
+  - Labels shortened and the figure widened to 15.5 in: the right panels' axis labels had been cut off. Checked.
+    Backup `plot_inception_fid_pre_knots.py`.
+
+  | set | as sampled | quench 1 |
+  |---|---|---|
+  | 32x32 100 slices | 86.3 | 21.72 |
+  | 32x32 knots 5/9/9 | **53.7** | 21.67 |
+  | 32x32 100 slices + corrector | 72.3 | 20.73 |
+  | 32x32 knots 5/9/9 + corrector | **42.8** | 24.69 |
+  | 64x64 100 slices | 120.0 | 49.21 |
+  | 64x64 knots 5/9/9 | 103.9 | 47.99 |
+  | 64x64 100 slices + corrector | 98.9 | 43.10 |
+  | 64x64 knots 5/9/9 + corrector | 89.8 | **40.88** |
+
+  - **New observation: the compressed models are much better before the quench** (32x32: 86 -> 54; with corrector
+    72 -> 43). As-sampled FID is dominated by the grain the reverse SDE leaves at t = 0. A guess, not tested: the
+    last slices before t = 0 are the least converged (slice 99 still improves by ~600 loss units over the second
+    half of its steps). Their slice-to-slice noise is averaged away by the knots, and the per-pixel units are held
+    constant. The quench removes the grain either way, so the quenched FIDs are close.
+
+### Model size, round 2: K32, and fewer patch states at 64x64 (submitted 2026-11-20 ~12:00; the user: "I want to understand how much smaller we can make this")
+
+- Already known at 32x32 (overnight sweep, early 16x16, quench 1): K64 21.72, K16 22.11, 16 patch states 25.75,
+  8 patch states 34.42. New runs (seed 1, best setup = early coarse patches, plain sampler + quench 1, no corrector):
+
+  | size | run | pipeline (train + 2000 samples + quench) |
+  |---|---|---|
+  | 32x32 | K32, 32 patch states | **4286481** |
+  | 32x32 | K32, 16 patch states | **4286482** |
+  | 64x64 | K32, 32 patch states | **4286483** (~7.5 h, 96 G) |
+  | 64x64 | K16, 32 patch states | **4286484** |
+  | 64x64 | K64, 16 patch states | **4286485** |
+  | 64x64 | K64, 8 patch states | **4286486** |
+
+- Evaluation over the sets that exist, including the earlier runs (scratchpad `eval_size2.sh`):
+  - Inception: **4286487** (32x32) / **4286489** (64x64);
+  - galleries: 4286488 / 4286490
+    (`galleries/2026-11-20_celeba{32,64}-grey_model-size_K64-K32-K16_patch-states-32-16-8_..._noise-start_quench1/`).
+
+### Step-wise constant parameters instead of linear interpolation (submitted 2026-11-20 12:45; the user: "instead of using a linear interpolator, use just step wise constant parameters ... in practice this would be easier")
+
+- Hardware motivation: B coupling sets switched B times (program, hold, switch: a staircase annealing schedule)
+  instead of a crossfade, which needs two banks with complementary gains or continuous reprogramming.
+- Expected: a step is a zeroth-order approximation of theta(t), error ~ dt |d theta/dt|; linear is first order,
+  error ~ dt^2 |d^2 theta/dt^2|. So steps need more pieces for the same accuracy, and every switch kicks the samples
+  off the new distribution.
+- **Code:** `compress_history.py --mode steps:B` (backup `compress_history_v5.py`). The same B knot slices as
+  knots:B. The first active slice is its own piece; each later piece (k_j-1, k_j] is held at the mean of its slices
+  (the least-squares constant). In the 100-slice format the sampler switches between pieces over one slice interval
+  (dt = 0.05): a fast switch.
+- **Jobs:**
+  - compression **4286502**: tests steps:3 on synthetic histories, a set switched on mid-way, and steps:100
+    reproducing the run exactly; then steps 5 / 9 / 17 / 34 and the 5 / 9 / 9 per-set recipe with wl / bl
+    constant;
+  - sampling 4286503-4286507 (after the knot pipelines, to keep about 10 GPUs);
+  - Inception **4286508**, gallery **4286509**
+    (`galleries/2026-11-20_celeba32-grey_K64+early16x16_time-basis_linear-knots-vs-step-constant-pieces_noise-start_quench1/`).
+- Linear counterparts (re-scored in the same job): knots 34 / 17 / 9 / 5 = 21.71 / 21.87 / 22.35 / 25.03;
+  5 / 9 / 9 recipe = 21.67.
+- **Compression 4286502 done (12:36):** tests passed:
+  - steps:3 pieces on synthetic data;
+  - a set switched on mid-way;
+  - steps:100 and the run's own steps:100 reproduce exactly.
+
+  Stored: steps 5 / 9 / 17 / 34 = 6.3 / 11.3 / 21.4 / 42.7 M; 5 / 9 / 9 recipe 10.7 M (the same as linear).
+- **Trained step version:** `train_latent.py --knot-interp step` (with --time-knots; backup
+  `train_latent_pre_knotinterp.py`).
+  - Every slice of an interval (k_j, k_j+1] uses the knot P_j+1 itself (w = 1), so each piece is one parameter set
+    trained on the plain losses of its slices.
+  - Recorded in config.json as 'knot_interp' only for step. The linear path differs by two conditionals.
+- **Test 4286513:**
+  - (0) step without --time-knots is refused;
+  - (1) linear knot run, old vs new code, bitwise over 100 slices;
+  - (2) step run: every slice equals its piece, the pieces differ;
+  - (3) sampling.
+- **Pipelines** (after the test with afterok, and after the post-hoc step samplings to keep about 10 GPUs):
+  **4286514** (9 pieces), **4286515** (6), **4286516** (5). Run names `..._knots{9,6,5}step_seed1`.
+- **Evaluation:** Inception **4286517**, gallery **4286518**: trained linear vs trained step at the same knots
+  (`galleries/2026-11-20_celeba32-grey_K64+early16x16_trained-at-time-knots-9-6-5_linear-vs-step-constant_noise-start_quench1/`).
+- Resume test of the linear knots, second try **4286495**. The first try 4286222 failed in the test itself: the
+  copied run kept its name in config.json, which the config check refuses.
+
+### Results (2026-11-20 evening): trained knots, step-constant pieces, tests
+
+- **Tests:**
+  - **Resume test 4286495 PASSED:** resumed at slice 33 after slices 40-99 were deleted, bitwise equal to the
+    uninterrupted run.
+  - **Step test 4286513:** tests 1-3 PASSED (linear path old vs new bitwise over 100 slices; every step slice equals
+    its piece; sampling). Test 0 "failed" in the test itself: under `pipefail` the intended exit code 1 of the
+    refused run failed the pipe although grep found the message. A direct check (srun) shows the refusal works.
+  - Trained step pipelines released at 18:20 (`scontrol update Dependency=`).
+- **Eval-script bug:** `eval_size2.sh` overwrote its own mode argument with `set --` in a loop, so Inception 4286487
+  made the 32x32 gallery instead of scoring. Fixed (MODE saved first). 32x32 Inception resubmitted as **4287589**;
+  the queued 64x64 Inception 4286489 was cancelled and resubmitted as **4287590**. Gallery 4286490 was not affected.
+- **Trained knots vs post hoc at the same knots (Inception 4285934, gallery 4285935).** One grid for all sets with
+  the switch-on slices forced in, so per set: 9 -> 9/8/4, 6 -> 6/5/3, 5 -> 5/4/2.
+
+  | knots (per set) | stored | trained | post hoc, same knots | near-black px % (trained / post hoc; real 11.8) |
+  |---|---|---|---|---|
+  | 100 slices | 83.2 M | 21.72 | - | 9.2 |
+  | 5/9/9 per set + wl/bl constant (post hoc) | 10.7 M | - | **21.67** | 5.9 |
+  | 9 (9/8/4) | 7.4 M | **24.83** | 29.21 | 10.8 / 1.8 |
+  | 6 (6/5/3) | 5.0 M | **30.23** | 42.40 | 9.1 / 0.1 |
+  | 5 (5/4/2) | 3.8 M | 109.1 | 86.7 | 4.6 / 0.0 |
+
+  - **Training the knots keeps the contrast; post hoc at the same knots loses it.**
+    - Gallery: trained 9 and trained 6 show the same faces as the 100-slice model at full contrast.
+    - Post hoc 9 is greyer, post hoc 6 washed out, post hoc 5 a uniform grey mean face.
+    - Training gains 4.4 FID at 9 knots and 12 at 6.
+  - **The shared grid is the limit, not the training.** These grids give the 8x8 set only 4 / 3 / 2 knots.
+    - Post hoc, 9 even knots per group score 22.35; the shared grid at 9 scores 29.21.
+    - Trained 5 (8x8 set a single ramp from t = 2.22 to 0) keeps faces and contrast but is covered in blotchy
+      texture artifacts. FID 109 ranks it below the grey blobs of post hoc 5 (86.7).
+  - Next for trained knots: give the 8x8 set enough knots. Either a shared grid denser at small t (global knots
+    are cheap, 147 k each against 698 k for an 8x8 knot), or per-set grids, which need intervals that do not line
+    up (more code).
+- **Step-constant vs linear, post hoc (Inception 4286508, gallery 4286509):**
+
+  | sets (B) | stored | linear | step | step - linear |
+  |---|---|---|---|---|
+  | 34 | 42.7 M | 21.71 | 22.36 | +0.6 |
+  | 17 | 21.4 M | 21.87 | 23.49 | +1.6 |
+  | 9 | 11.3 M | 22.35 | 26.96 | +4.6 |
+  | 5 | 6.3 M | 25.03 | 37.84 | +12.8 |
+  | 5/9/9 per set, wl/bl constant | 10.7 M | 21.67 | 33.22 | +11.6 |
+
+  - As expected for a zeroth-order approximation: **steps need about 4x the sets of linear for the same FID** (step
+    34 = linear 9: 22.36 vs 22.35). The near-black share falls with fewer pieces (step 5: 0.0%), again lost contrast.
+  - Trained step pieces (pipelines 4286514-4286516, Inception 4286517) will show how much of this training recovers.
+
+### Trained knots with one knot grid per parameter set (submitted 2026-11-20 ~19:00; the user: "yes" to per-set grids)
+
+- **Code:** `train_latent.py --time-knots-sets global=B1,patch1=B2,patch2=B3` (backup
+  `train_latent_pre_knotsets.py`; also with `--knot-interp step`).
+  - Each set's knots are spaced evenly over its own range, the same knots as compress_history knots:B per group:
+    - global (theta, W, b, Q, wl, bl) 5: slices 0 25 50 74 99;
+    - 16x16 9: 10 21 32 43 54 66 77 88 99;
+    - 8x8 9: 55 61 66 71 77 83 88 93 99.
+  - The union of the knots cuts t into segments. In each segment, every set's open knot (the next after its last
+    finished one) trains jointly through the crossfades. Training runs on all slices from the start of the
+    earliest open interval to the segment end; slices behind a set's finished knots enter with that set fixed. Each
+    knot thus trains over its whole interval, and the intervals need not line up.
+  - Steps per segment = the usual steps of its new slices. A patch set's first knot trains alone at its switch-on
+    slice. Slices are written after all knots are trained, so a resumed run retrains from slice 1.
+  - The runner gets a per-group base + w (P - anchor) (`knot="perset"`). The shared-grid path only gained a
+    `base=None` argument.
+- **Test 4287622:**
+  - (1) old vs new code bitwise for a shared --time-knots run and a plain run;
+  - (2) per-set linear: every slice equals its set's crossfade (< 1e-12), with the expected knots; per-set step:
+    every slice equals its piece exactly; patch sets zero before switch-on; slice 60's knots recorded;
+  - (3) a run cut at slice 40 retrains from slice 1, bitwise equal;
+  - (4) sampling.
+- **Trainings** (afterok on the test):
+  - linear 5/9/9 **4287623** (~10.7 M; post-hoc 21.67 with wl/bl constant);
+  - linear 3/5/5 **4287624** (~6.0 M);
+  - step 5/9/9 **4287625** (post-hoc step 33.22);
+  - step 9/17/17 **4287626** (~20 M).
+  - Run names `..._knots-g5-p9-p9[step]_seed1` etc.
+- **Evaluation** with the post-hoc references: Inception **4287627**, gallery **4287628**
+  (`galleries/2026-11-20_celeba32-grey_K64+early16x16_trained-per-set-time-knots_linear-and-step_vs_posthoc_noise-start_quench1/`).
+- **Test 4287622 PASSED (19:15):**
+  - (1) shared --time-knots and plain runs, old vs new code bitwise;
+  - (2) per-set linear slices = crossfades to 2.8e-15; step slices = pieces exactly; patch sets zero before
+    switch-on; slice 60 between global 50-74, 16x16 54-66, 8x8 55-61;
+  - (3) a run cut at slice 40 resumes at slice 1 and ends bitwise equal;
+  - (4) sampling.
+  - The four per-set trainings 4287623-4287626 are now queued for a GPU.
+- **Model size, 32x32 (Inception 4287589; gallery 4286487/4286488):** all with early 16x16 + 8x8, seed 1, quench 1.
+
+  | global states K | patch states S | Inception FID |
+  |---|---|---|
+  | 64 | 32 | 21.72 |
+  | **32** | 32 | **21.70** |
+  | 16 | 32 | 22.11 |
+  | 64 | 16 | 25.75 |
+  | **32** | 16 | **26.26** |
+  | 64 | 8 | 34.42 |
+
+  - **K32 = K64** (21.70 vs 21.72), and K16 costs only +0.4: the global unit is not where the model's capacity lies.
+  - Halving the patch states costs +4 at any K, a quarter +12.7. The patch units carry the model, so further
+    reductions belong in time (knots) rather than in the patch states.
+
+### K16 with 64 patch states, and no Q couplings (submitted 2026-11-20 ~19:30; the user: "run 16 global and 64 for the patches ... set Q = 0 again with the new setup. what is the price we pay?")
+
+- Both at 32x32 with early 16x16 + 8x8, seed 1, quench 1.
+  - **K16, 64 patch states:** pipeline **4287719**. About 2.4 M couplings per slice, against 1.23 M for K64 with 32
+    states.
+  - **No Q anywhere** (K64, 32 states, without --quad, so no global Q and no patch Qp): pipeline **4287720**. About
+    0.61 M per slice. Known already: patch Q off, global Q kept: 29.85 (+8.1); at equal size, 16 states with Q:
+    25.75.
+- Inception **4287721** and gallery **4287722** with K64 / K32 / K16 at 32 states and the patch-Q-off run as references
+  (`galleries/2026-11-20_celeba32-grey_early16x16+8x8_K16-with-64-patch-states_and_without-Q-couplings_noise-start_quench1/`).
+- **Model size, 64x64 (Inception 4287590; gallery 4286490).** All with 32x32 patches from t = 4.49 + 16x16 from
+  t = 2.22, seed 1, quench 1, no corrector.
+
+  | global states K | patch states S | Inception FID |
+  |---|---|---|
+  | 64 | 32 | 49.21 |
+  | 32 | 32 | 49.31 |
+  | **16** | 32 | **48.63** |
+  | 64 | 16 | 57.67 |
+  | 64 | 8 | 66.38 |
+
+  - The same picture as at 32x32. **K16 = K32 = K64** within about 1 sd (48.63 / 49.31 / 49.21), so the global unit
+    can go to K16.
+  - The patch states cannot be cut: 16 states +8.5, 8 states +17 (at 32x32: +4.0 / +12.7).
+
+### Locked-in small models trained on device at 9 step-constant knots per set (submitted 2026-11-20 ~21:00; the user: "lock in K16, 32 patches ... train the two best small models on device at few knots. maybe do 9/9/9 ... the staircase time evolution ... is more relevant")
+
+- **Models:** K16 + early coarse patches, 32 states. 32x32: 16x16 from t = 4.49 + 8x8 from 2.22 (100 slices: 22.11).
+  64x64: 32x32 from 4.49 + 16x16 from 2.22 (100 slices: 48.63).
+- **Time:** `--time-knots-sets global=9,patch1=9,patch2=9 --knot-interp step`, i.e. 9 coupling arrays per set,
+  switched as a staircase, each trained on the slices it covers. 9/9/9 instead of 5/9/9: global knots are cheap
+  (147 k each vs 410 k / 698 k for a patch knot), so about 11.4 M stored instead of 10.7 M (32x32), with equal
+  counts per set.
+- **On device:** `--hidden-samples 64 --hidden-jackknife --hidden-norm occupancy --patch-occupancy --occ-same-draws`
+  (as the 11-18 fully on-device K784 run: 23.59 vs 22.85 exact).
+- **Code change:** the visit-count rule is now allowed with --time-knots / --time-knots-sets, with the visit counts
+  measured on the parameters in use at the slice (crossfade or piece), not on the trained knot alone. Backup
+  `train_latent_pre_knotocc.py`. **Test 4287881:**
+  - old vs new code bitwise for a plain on-device run and an exact per-set step run;
+  - on-device per-set step 9/9/9: every slice equals its piece;
+  - on-device shared-grid linear: exact crossfade;
+  - sampling.
+- **Runs** (afterok on the test; exact-statistics twins to separate the on-device cost from the knot cost):
+
+  | size | statistics | pipeline | time limit |
+  |---|---|---|---|
+  | 32x32 | on device | **4287882** | 1 day (K784 on device took 6.4 h) |
+  | 32x32 | exact | **4287883** | |
+  | 64x64 | on device | **4287884** | 3 days, 96 G (exact 64x64 trains ~5 h; on device several times slower) |
+  | 64x64 | exact | **4287885** | 96 G |
+
+  Run names `celeba{32,64}g_K16_..._[S64jk_occ-patchocc_]knots-g9-p9-p9step_seed1`.
+- **Evaluation:** Inception **4287886** / **4287888**, galleries 4287887 / 4287889
+  (`galleries/2026-11-20_celeba{32,64}-grey_K16_patch-states32_early-coarse-patches_on-device_step-9-9-9-time-knots_noise-start_quench1/`).
+  References: K16 100 slices, and K16 post-hoc linear knots 9 (32x32: 23.09).
+- Caveat: per-set runs write their slices only after all knots are trained, and a resubmitted run retrains from
+  slice 1. Fine within the time limits, but a node failure in the 64x64 on-device run would cost the whole run.
+
+### Probability-flow ODE, second try (submitted 2026-11-20 ~21:15; the user: "the flow ODE ... so much simpler hardware wise. are we sure that we integrate the flow ODE correctly with correct factor 2 in comparison with the SDE?")
+
+- **Check of the factor 2: correct.**
+  - Forward process (paper `sample_forward_process`, beta = sigma_final = 1, D = T = 0.02):
+    dx = -x dt + sqrt(2T) dW.
+  - The model's score is -grad F / T, so: reverse SDE dx = [x - 2 grad F] dtau + sqrt(2T) dW; PF-ODE
+    dx/dtau = x - grad F.
+  - `sample_latent.make_drift` uses `scale = 2` (SDE) / `1` (ODE) on every force term. The visible part is
+    -grad E(x; scale theta - theta_lin), with E(x; theta_lin) = |x|^2 / 2 giving the +x. No diffusion for the ODE.
+  - Gaussian check: v_t = e^{-2t} s0^2 + T (1 - e^{-2t}); the ODE drift x (1 - T / v_t) gives dv/dt = -2 (v - T),
+    exactly the forward process. Tsit5 at rtol 1e-7: integration error negligible.
+- **History:** the ODE was tried only on 11-15 (MNIST / Fashion K784 + patches, no quench): classifier FID +11.9 /
+  +2.6 worse than the SDE, noisy broken shapes. Never on CelebA, never quenched, never with knots.
+- **Why it can be worse with a correct drift:**
+  - The SDE = ODE transport + Langevin at T, and the Langevin part keeps the samples on the model's p_t; the ODE
+    accumulates every score error.
+  - Our slices are fitted independently, so the family p_t is not exactly consistent with its own transport.
+  - The flow expands from variance T = 0.02 to the data's ~1 (normalised pixels).
+- **Runs** (32x32, noise start = the SDE runs' start states, `--sampler ode --quench 1`):
+
+  | model | ODE sampling |
+  |---|---|
+  | K64 early, 100 slices | 4287931 |
+  | K64 early, post-hoc 5/9/9 | 4287932 |
+  | K16 early, 100 slices | 4287933 |
+  | K64 trained 9 knots, linear | 4287934 |
+  | K64 trained 9 pieces, step | 4287935 |
+
+  The idea behind the knot rows: a smoother, jointly trained family may suit the ODE better.
+- **Evaluation:** Inception **4287936** (SDE and ODE, each as sampled and quenched); gallery **4287937** (ODE q1 vs
+  SDE q1 per model; `galleries/2026-11-20_celeba32-grey_early16x16+8x8_PF-ODE-vs-SDE_K64-K16-knots_noise-start_quench1/`).
+- **Next (proposed, after these):** a force scale lambda for the ODE (x - lambda grad F, a sampling temperature);
+  the reduced-noise family dx = [x - (1 + g^2) grad F] dtau + g sqrt(2T) dW, g = 0 / 0.25 / 0.5 / 1; an ODE
+  predictor with corrector holds.

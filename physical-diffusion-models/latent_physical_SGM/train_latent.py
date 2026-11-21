@@ -458,6 +458,25 @@ def parse():
                          "patch set trains, alone at that slice (its usual steps; the other sets stay at the knot). "
                          "The slices are saved as usual (the crossfade), so sampling, compression and evaluation are "
                          "unchanged. Recorded in config.json ('time_knots': the knot slices; absent without it)")
+    ap.add_argument("--knot-interp", choices=["linear", "step"], default="linear",
+                    help="with --time-knots (2026-11-20): 'linear' (default) the crossfade above; 'step' piecewise "
+                         "constant: every slice of an interval (k_j, k_j+1] uses the interval's knot P_j+1 itself "
+                         "(w = 1), so P_j+1 is trained on the plain losses of its slices and the slices are saved as "
+                         "copies of it (the sampler switches between pieces over one slice interval). Recorded in "
+                         "config.json as 'knot_interp' only for 'step'")
+    ap.add_argument("--time-knots-sets", default="",
+                    help="(2026-11-20) like --time-knots, but every parameter set has its own knots: e.g. "
+                         "'global=5,patch1=9,patch2=9', B_S knots per set spaced evenly in slice index over the set's "
+                         "own range (first slice 0 for the global set = theta, W, b, Q, wl, bl; the switch-on slice for "
+                         "a patch set; last 99), the same knots as compress_history.py knots:B per group. The union of "
+                         "all knots cuts the time into segments; segment by segment, every set's open knot (the next "
+                         "one after its last finished knot) trains jointly through the crossfades on all slices from "
+                         "the earliest open interval's start to the segment's end (slices already behind a set's "
+                         "finished knots enter with that set fixed), the segment's steps = the usual steps of its new "
+                         "slices; a set's knot is finished when the walk reaches it. Slice 0 trains as before; a patch "
+                         "set's first knot (its switch-on slice) trains alone there. Slices are written after all "
+                         "knots are trained (a resumed run retrains from slice 1). With --knot-interp step. Recorded "
+                         "in config.json as 'time_knots_sets'")
     return ap.parse_args()
 
 
@@ -863,8 +882,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
     before (the knot path is a separate jitted function).
     """
     value_and_grad = jax.value_and_grad(loss_fn)
-    if knot and (cd1_grad is not None or hidden_norm == "occupancy" or floor > 0):
-        raise ValueError("knot (--time-knots): not with CD-1, hidden_norm occupancy or the floor")
+    if knot and (cd1_grad is not None or floor > 0):
+        raise ValueError("knot (--time-knots): not with CD-1 or the floor")
     adam = optax.scale_by_adam()          # b1 0.9, b2 0.999, eps 1e-8: the direction of optax.adam
     if hidden_norm == "group":            # --hidden-norm group: the hidden groups without per-element normalisation
         adam = scale_by_adam_grouped(lm.HIDDEN_KEYS)
@@ -928,7 +947,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         idx = jr.categorical(key, A / lm.TEMP, axis=-1, shape=(floor_samples,) + A.shape[:-1])
         return jnp.bincount(idx.ravel(), length=A.shape[-1]).astype(A.dtype) / idx.size
 
-    def one_step(carry, t_curr, lrs, dt, xs=None, data=None, labels=None, anchor=None, w=None, decay_div=None):
+    def one_step(carry, t_curr, lrs, dt, xs=None, data=None, labels=None, anchor=None, w=None, decay_div=None,
+                 base=None):
         params, adam_state, key, step, best_params, best_loss, best_epoch, ema = carry
         if xs is None:
             key, k_epoch, k_release = jr.split(key, 3)            # same split as run_optimization (third key unused there)
@@ -945,9 +965,15 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
         if loss_key and cd1_grad is not None:                     # both draw randomness: split the third key
             k_loss, k_cd1 = jr.split(k_release)
         vg = value_and_grad
-        if knot:                                                  # --time-knots: the loss at the crossfade of the
+        p_occ = params                                            # parameters the visit counts are measured on
+        if knot == "perset":                                      # --time-knots-sets: per group base + w (P - anchor)
+            vg = jax.value_and_grad(lambda P, *a: loss_fn(jax.tree_util.tree_map(
+                lambda b0, ww, an, p: b0 + ww * (p - an), base, w, anchor, P), *a))
+            p_occ = jax.tree_util.tree_map(lambda b0, ww, an, p: b0 + ww * (p - an), base, w, anchor, params)
+        elif knot:                                                # --time-knots: the loss at the crossfade of the
             vg = jax.value_and_grad(lambda P, *a: loss_fn(        # frozen knot (anchor) and the trained one
                 jax.tree_util.tree_map(lambda an, p: an + w * (p - an), anchor, P), *a))
+            p_occ = jax.tree_util.tree_map(lambda an, p: an + w * (p - an), anchor, params)
         if loss_key:                                              # hidden statistics sampled with the third key
             loss, grads = vg(params, X, k_loss)
         else:
@@ -958,11 +984,11 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
             grads = dict(grads, theta=(jnp.where(k6_m, 0.0, grads["theta"]) if theta_masks
                                        else grads["theta"].at[k6].set(0.0)))
         if occupancy:
-            occ = (lm.loss_draw_occupation(params, X, lm.TEMP, k_loss, floor_samples, dtype=occ_dtype)
+            occ = (lm.loss_draw_occupation(p_occ, X, lm.TEMP, k_loss, floor_samples, dtype=occ_dtype)
                    if occ_same_draws
-                   else occupation(params, X, k_floor))
+                   else occupation(p_occ, X, k_floor))
             if patch_occ:                         # --patch-occupancy: the patch states' occupations too ({} before switch-on)
-                occ_p = lm.patch_occupation(params, X, lm.TEMP, k_loss if occ_same_draws else k_floor,
+                occ_p = lm.patch_occupation(p_occ, X, lm.TEMP, k_loss if occ_same_draws else k_floor,
                                             floor_samples, dtype=occ_dtype)
                 occ = {"b": occ, **occ_p}
             direction, adam_state = adam.update(grads, adam_state, occ, p_unit)
@@ -1013,8 +1039,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
 
     if knot:                              # --time-knots: the same scan with the crossfade arguments
         @partial(jax.jit, static_argnums=3)
-        def _run_knot(carry, t_curr, lrs, n, dt, data, labels, anchor, w, decay_div):
-            kw = dict(anchor=anchor, w=w, decay_div=decay_div)
+        def _run_knot(carry, t_curr, lrs, n, dt, data, labels, anchor, w, decay_div, base=None):
+            kw = dict(anchor=anchor, w=w, decay_div=decay_div, base=base)
             if not chunk_batches:
                 return jax.lax.scan(lambda c, _: one_step(c, t_curr, lrs, dt, data=data, labels=labels, **kw),
                                     carry, None, length=n)
@@ -1029,8 +1055,8 @@ def build_runner(loss_fn, data_train, n_vis=lm.N, ema_steps=1000.0, visible="sex
             return jax.lax.scan(lambda c, xs: one_step(c, t_curr, lrs, dt, xs, **kw), carry[:2] + (key,) + carry[3:],
                                 (Xs, k_releases))
 
-        def run_knot(carry, t_curr, lrs, n, dt, anchor, w, decay_div):
-            return _run_knot(carry, t_curr, lrs, n, dt, data_dev, labels_dev, anchor, w, decay_div)
+        def run_knot(carry, t_curr, lrs, n, dt, anchor, w, decay_div, base=None):
+            return _run_knot(carry, t_curr, lrs, n, dt, data_dev, labels_dev, anchor, w, decay_div, base)
 
         return run_knot, adam
     return run, adam
@@ -1239,16 +1265,43 @@ def main():
     knots = None                                 # --time-knots (2026-11-20): the knot slices
     if args.time_knots:
         if (args.select != "ema" or args.hidden_fixed or args.harmonic or args.split_dead or args.ising_reseed
-                or args.ising_weak_boost != 1.0 or args.hidden_rule != "exact" or args.hidden_norm == "occupancy"
+                or args.ising_weak_boost != 1.0 or args.hidden_rule != "exact"
                 or args.hidden_floor > 0 or args.hidden_samples_late or args.init_from or args.init_slices
                 or args.max_slices < lm.N_TIME_STEPS):
             raise ValueError("--time-knots: needs --select ema and all 100 slices; not with --hidden-fixed, "
                              "--harmonic, --split-dead, --ising-reseed / --ising-weak-boost, --hidden-rule cd1, "
-                             "--hidden-norm occupancy, --hidden-floor, --hidden-samples-late or --init-from")
+                             "--hidden-floor, --hidden-samples-late or --init-from")
         on_slices = ([K_on] if patch is not None else []) + [x["on"] for x in xsets]
         knots = parse_time_knots(args.time_knots, lm.N_TIME_STEPS, on_slices)
         if args.val_every:                       # learning curves are per slice; the knots train per interval
             args.val_every = 0
+    pknots = None                                # --time-knots-sets (2026-11-20): the knots of every parameter set
+    if args.time_knots_sets:
+        if args.time_knots or args.cond or args.select != "ema" or args.hidden_fixed or args.harmonic \
+                or args.split_dead or args.ising_reseed or args.ising_weak_boost != 1.0 or args.hidden_rule != "exact" \
+                or args.hidden_floor > 0 or args.hidden_samples_late \
+                or args.init_from or args.init_slices or args.max_slices < lm.N_TIME_STEPS:
+            raise ValueError("--time-knots-sets: not with --time-knots or --cond; otherwise as --time-knots")
+        first_of = {"global": 0}
+        if patch is not None:
+            first_of["patch1"] = K_on
+        for x in xsets:
+            first_of[x["name"]] = x["on"]
+        want = dict(kv.split("=", 1) for kv in args.time_knots_sets.split(","))
+        if set(want) != set(first_of):
+            raise ValueError(f"--time-knots-sets {args.time_knots_sets}: give a knot count for exactly the sets "
+                             f"{sorted(first_of)}")
+        pknots = {}
+        for S, f in first_of.items():
+            B = int(want[S])
+            if not 2 <= B <= lm.N_TIME_STEPS - f:
+                raise ValueError(f"--time-knots-sets: {S}={B} must lie in 2..{lm.N_TIME_STEPS - f}")
+            pknots[S] = sorted({f + int(v) for v in np.round(np.linspace(0, lm.N_TIME_STEPS - 1 - f, B))})
+        if args.val_every:
+            args.val_every = 0
+    if args.knot_interp != "linear" and not (args.time_knots or args.time_knots_sets):
+        raise ValueError("--knot-interp step needs --time-knots or --time-knots-sets")
+    knot_step = args.knot_interp == "step"      # --knot-interp step: piecewise constant (w = 1 in every interval)
     geom = None
     if patch is not None:
         geom = lm.PatchGeometry(lm.problem_geometry(args.problem)[0], patch[0], patch[1])
@@ -1306,6 +1359,10 @@ def main():
         config["patch2_on_slice"] = K_on2
     if knots is not None:                        # --time-knots only: other configs as before
         config["time_knots"] = [int(k) for k in knots]
+    if knot_step:                                # --knot-interp step only: other configs as before
+        config["knot_interp"] = "step"
+    if pknots is not None:                       # --time-knots-sets only: other configs as before
+        config["time_knots_sets"] = {S: [int(v) for v in ks] for S, ks in pknots.items()}
     if args.cond:                                # --cond only: other configs as before
         config["cond"] = int(args.cond)
         config["cond_on"] = ",".join(cond_on)
@@ -1364,6 +1421,10 @@ def main():
             diff["patch_fixed_scale"] = (old.get("patch_fixed_scale", 1.0), args.patch_fixed_scale)
         if old.get("time_knots") != config.get("time_knots"):   # both directions
             diff["time_knots"] = (old.get("time_knots"), config.get("time_knots"))
+        if old.get("knot_interp", "linear") != args.knot_interp:   # both directions
+            diff["knot_interp"] = (old.get("knot_interp", "linear"), args.knot_interp)
+        if old.get("time_knots_sets") != config.get("time_knots_sets"):   # both directions
+            diff["time_knots_sets"] = (old.get("time_knots_sets"), config.get("time_knots_sets"))
         if diff:
             raise RuntimeError(f"existing run {out_dir} has a different config: {diff}")
         if old.get("sha256") != code_sha:
@@ -1472,6 +1533,15 @@ def main():
                              occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws, zero_slices=zero_slices,
                              occ_dtype=cdt, patch_occ=args.patch_occupancy, cond_labels=cond_labels,
                              n_cond=args.cond, **lean)
+    run_perset = None
+    if pknots is not None:                        # --time-knots-sets: per-group crossfade arguments
+        run_perset, _ = build_runner(loss_fn, data_train, n_vis, args.ema_steps, args.visible, vis.P,
+                                     cd1_grad=cd1_grad, cd1_releases=args.cd1_releases,
+                                     loss_key=args.hidden_samples > 0, floor=args.hidden_floor,
+                                     floor_samples=args.hidden_samples, hidden_norm=args.hidden_norm,
+                                     occ_beta=args.occ_beta, occ_same_draws=args.occ_same_draws,
+                                     zero_slices=zero_slices, occ_dtype=cdt, patch_occ=args.patch_occupancy,
+                                     cond_labels=cond_labels, n_cond=args.cond, knot="perset", **lean)
     run_knot = None
     if knots is not None:                         # --time-knots: the same runner with the crossfade arguments
         run_knot, _ = build_runner(loss_fn, data_train, n_vis, args.ema_steps, args.visible, vis.P,
@@ -1899,6 +1969,8 @@ def main():
     done = 0
     while os.path.exists(os.path.join(slice_dir, f"slice_{done:03d}.npz")):
         done += 1
+    if pknots is not None and 1 < done < n_slices:   # --time-knots-sets: the slices are written after all knots are
+        done = 1                                       # trained; a partial run retrains from slice 1
     if knots is not None and 0 < done < n_slices:   # --time-knots: resume after the last saved knot (an interval's
         done = max(kk for kk in knots if kk <= done - 1) + 1   # slices exist only after its knot is trained)
     optimization_key, _reverse_key, _noise_key = jr.split(jr.PRNGKey(args.seed), 3)   # the paper's master split (seed 1)
@@ -2065,11 +2137,140 @@ def main():
         carry = init_carry(anchor, adam, key)
         out = {kk: [] for kk in sl}
         for kk in order:
-            w = float((taus[ka] - taus[kk]) / (taus[ka] - taus[kb]))
+            w = 1.0 if knot_step else float((taus[ka] - taus[kk]) / (taus[ka] - taus[kb]))
             carry, l = run_knot(carry, float(taus[kk]), lrs_s[kk], 100, 0.0, anchor, w, float(len(sl)))
             out[kk].append(l)
         out = {kk: np.concatenate([np.asarray(l) for l in v]) for kk, v in out.items()}
         return carry[7], out, time.time() - t_start
+
+    def set_of_group(g):
+        """--time-knots-sets: the parameter set of a group (patch1/2/3 for a patch set's groups, else global)."""
+        for pre in ("Wp", "bp", "Qp", "Bpc"):
+            if g.startswith(pre) and g[len(pre):] in ("", "2", "3"):
+                return "patch" + (g[len(pre):] or "1")
+        return "global"
+
+    def switch_on_init(S):
+        """--time-knots-sets: a patch set's starting values at its switch-on (as the slice loop's switch-on)."""
+        if S == "patch1":
+            out = {"Wp": jnp.asarray(Wp0), "bp": jnp.asarray(bp0)}
+            if pquad:
+                out["Qp"] = jnp.zeros_like(out["Wp"])
+            return out
+        x = next(x for x in xsets if x["name"] == S)
+        out = {x["kw"]: jnp.asarray(x["W0"]), x["kb"]: jnp.asarray(x["b0"])}
+        if pquad:
+            out[x["kq"]] = jnp.zeros_like(out[x["kw"]])
+        return out
+
+    def knot_w(S, a, b, kk):
+        return 1.0 if knot_step else float((taus[a] - taus[kk]) / (taus[a] - taus[b]))
+
+    def set_value(closed, S, kk):
+        """Set S at slice kk from its finished knots (kk must not lie beyond its last finished knot); None before its
+        switch-on."""
+        ks = pknots[S]
+        if kk < ks[0]:
+            return None
+        if kk in closed[S]:
+            return closed[S][kk]
+        j = int(np.searchsorted(ks, kk))
+        a, b = ks[j - 1], ks[j]
+        w = knot_w(S, a, b, kk)
+        A, Bv = closed[S][a], closed[S][b]
+        return Bv if knot_step else {g: A[g] + w * (Bv[g] - A[g]) for g in A}
+
+    def train_all_knots(p0, key):
+        """--time-knots-sets: every set's knots, trained segment by segment (see --time-knots-sets). p0: slice 0's
+        parameters (the global set's first knot). Returns ({set: {knot slice: {group: array}}}, {slice: losses},
+        seconds)."""
+        t_start = time.time()
+        sets = list(pknots)
+        grid = sorted(set().union(*[set(v) for v in pknots.values()]))
+        closed = {S: {} for S in sets}
+        closed["global"][0] = {g: v for g, v in p0.items() if set_of_group(g) == "global"}
+        anchor_k = {"global": 0}
+        target = {}                               # set -> (knot slice, {group: array}): the open knots
+        losses = {kk: [] for kk in range(1, lm.N_TIME_STEPS)}
+        for ci, cn in zip(grid[:-1], grid[1:]):
+            for S in sets:                        # a patch set switched on here: its first knot trains alone
+                if S != "global" and pknots[S][0] == ci:
+                    p_c = {}
+                    for S2 in anchor_k:           # the other sets at slice ci (open ones at their current knot)
+                        if ci <= anchor_k[S2]:
+                            p_c.update(set_value(closed, S2, ci))
+                        else:
+                            a, (b, T) = anchor_k[S2], target[S2]
+                            w = knot_w(S2, a, b, ci)
+                            p_c.update(T if knot_step else {g: closed[S2][a][g] + w * (T[g] - closed[S2][a][g])
+                                                            for g in T})
+                    new = switch_on_init(S)
+                    p_c.update(new)
+                    lrs_c = slice_lrs(ci, p_c)[0]
+                    lrs_c = {g: (v if g in new else (jnp.zeros_like(v) if hasattr(v, "shape") else 0.0))
+                             for g, v in lrs_c.items()}
+                    key, kc = jr.split(key)
+                    carry = init_carry(p_c, adam, kc)
+                    n_c = slice_steps(ci, args.steps_scale, steps_sched, time_grid)
+                    n_full, rem = divmod(n_c, 100)
+                    for _ in range(n_full):
+                        carry, l = run(carry, float(taus[ci]), lrs_c, 100, 0.0)
+                        losses[ci].append(l)
+                    if rem:
+                        carry, l = run(carry, float(taus[ci]), lrs_c, rem, 0.0)
+                        losses[ci].append(l)
+                    closed[S][ci] = {g: carry[7][g] for g in new}
+                    anchor_k[S] = ci
+                    log(logf, f"--time-knots-sets: {S} switched on at slice {ci} (t = {taus[ci]:.4f}); its first knot "
+                              f"trained alone there, {n_c} steps")
+            for S in anchor_k:                    # open knots: the next knot after the last finished one
+                if S not in target:
+                    a = anchor_k[S]
+                    target[S] = (pknots[S][pknots[S].index(a) + 1], dict(closed[S][a]))
+            lo = min(anchor_k.values()) + 1
+            window = list(range(lo, cn + 1))
+            new_sl = list(range(ci + 1, cn + 1))
+            P0 = {g: v for S in target for g, v in target[S][1].items()}
+            cache = {}
+            for kk in window:                     # base, anchor and weight of every group at slice kk
+                base, anc, wd = {}, {}, {}
+                for S in target:
+                    if kk <= anchor_k[S]:         # behind the set's finished knots (or before its switch-on): fixed
+                        v = set_value(closed, S, kk)
+                        for g in target[S][1]:
+                            base[g] = v[g] if v is not None else jnp.zeros_like(P0[g])
+                            anc[g], wd[g] = base[g], 0.0
+                    else:                         # inside the set's open interval: crossfade to its open knot
+                        a, b = anchor_k[S], target[S][0]
+                        for g in target[S][1]:
+                            base[g] = anc[g] = closed[S][a][g]
+                            wd[g] = knot_w(S, a, b, kk)
+                cache[kk] = (base, anc, wd, slice_lrs(kk, P0)[0])
+            total = sum(slice_steps(kk, args.steps_scale, steps_sched, time_grid) for kk in new_sl)
+            n_cycles = max(1, int(round(total / (100.0 * len(window)))))
+            rng = np.random.default_rng([int(args.seed), int(ci)])
+            order = [kk for _ in range(n_cycles) for kk in rng.permutation(window).tolist()]
+            key, ks = jr.split(key)
+            carry = init_carry(P0, adam, ks)
+            for kk in order:
+                base, anc, wd, lrs_k = cache[kk]
+                carry, l = run_perset(carry, float(taus[kk]), lrs_k, 100, 0.0, anc, wd, float(len(new_sl)), base)
+                losses[kk].append(l)
+            res = carry[7]
+            for S in list(target):
+                b, T = target[S]
+                target[S] = (b, {g: res[g] for g in T})
+                if b == cn:                       # the walk reached this knot: finished
+                    closed[S][cn] = target[S][1]
+                    anchor_k[S] = cn
+                    del target[S]
+            log(logf, f"--time-knots-sets: segment {ci}-{cn} (t = {taus[ci]:.3f}-{taus[cn]:.3f}): window slices "
+                      f"{lo}-{cn}, {len(order) * 100:,} steps; finished knots now "
+                      + ", ".join(f"{S} {anchor_k[S]}" for S in anchor_k))
+        out = {kk: np.concatenate([np.asarray(l) for l in v]) for kk, v in losses.items() if v}
+        return closed, out, time.time() - t_start
+
+    pk_closed = None
 
     # ---- slices -----------------------------------------------------------------------------------------------
     held = {} if args.assemble == "memory" and n_slices == lm.N_TIME_STEPS else None   # this job's slices (assembly)
@@ -2087,8 +2288,8 @@ def main():
                 log(logf, f"slices {k_a + 1}-{k_b}: knot at slice {k_b} (t = {taus[k_b]:.4f}) trained jointly on "
                           f"{k_b - k_a} slices from the frozen knot at slice {k_a} (t = {taus[k_a]:.4f}): "
                           f"{sum(v.size for v in knot_losses.values()):,} steps in {knot_secs:.0f} s")
-            w_knot = float((taus[k_a] - taus[k]) / (taus[k_a] - taus[k_b]))
-            params = dict(knot_target) if k == k_b else {
+            w_knot = 1.0 if knot_step else float((taus[k_a] - taus[k]) / (taus[k_a] - taus[k_b]))
+            params = dict(knot_target) if (k == k_b or knot_step) else {
                 g: knot_anchor[g] + w_knot * (knot_target[g] - knot_anchor[g]) for g in knot_anchor}
         keys_before = set(params)                # (--time-knots: the sets switched on at this slice are the new keys)
         if args.hidden_fixed:                    # hidden couplings = this slice's closed-form reference, not trained
@@ -2127,6 +2328,17 @@ def main():
                 log(logf, f"slice {k}: patch units {x['n']} {lm.patch_spec_str(x['spec'])} switched on at {lam_p:g} x "
                           f"the reference at t = {t_curr:.4f}")
                 params = with_cond(params)
+        if pknots is not None and k > 0:         # --time-knots-sets: the slice from every set's trained knots
+            if pk_closed is None:                # first slice after slice 0 (also on a resume): train all knots
+                p0 = {g: v for g, v in params.items() if set_of_group(g) == "global"}
+                pk_closed, pk_losses, pk_secs = train_all_knots(p0, optimization_subkey)
+                log(logf, f"--time-knots-sets: all knots trained in {pk_secs:.0f} s; "
+                          + "; ".join(f"{S} {pknots[S]}" for S in pknots))
+            params = {}
+            for S in pknots:
+                v = set_value(pk_closed, S, k)
+                if v is not None:
+                    params.update(v)
         if args.hidden_fixed and patch is not None and k >= K_on:   # frozen patch units (2026-11-16): every patch
             params = dict(params)                # set = this slice's closed-form k-means reference (scale 1)
             Wr, br = (a[0] for a in patch_ref(clus, [t_curr], lm.TEMP, scale=args.patch_fixed_scale))
@@ -2197,6 +2409,12 @@ def main():
             best_loss, best_epoch = float(np.min(losses)), int(np.argmin(losses))
             t_train = knot_secs / len(knot_losses)
             run_k = run
+        elif pknots is not None and k > 0:       # --time-knots-sets: trained with the segments
+            losses = pk_losses[k]
+            n_steps = int(losses.size)
+            best_loss, best_epoch = float(np.min(losses)), int(np.argmin(losses))
+            t_train = pk_secs / len(pk_losses)
+            run_k = run
         else:
             carry = init_carry(params, adam, optimization_subkey)
             losses = []
@@ -2256,6 +2474,12 @@ def main():
                "select": args.select, "seconds": t_train, "steps_per_s": n_steps / t_train,
                **({"steps_factor": steps_factor(steps_sched, k)} if steps_sched else {}),
                "job": os.environ.get("SLURM_JOB_ID", "manual"), "code_sha256": code_sha}
+        if pknots is not None and k > 0:         # --time-knots-sets: per set, the knots around the slice
+            rec["knots_per_set"] = {}
+            for S, ks in pknots.items():
+                if k >= ks[0]:
+                    j = int(np.searchsorted(ks, k))
+                    rec["knots_per_set"][S] = ([int(k), int(k)] if ks[j] == k else [int(ks[j - 1]), int(ks[j])])
         if knots is not None and k > 0:          # --time-knots: the slice's place between its knots
             rec.update(knot_interval=[int(k_a), int(k_b)], knot_w=w_knot,
                        knot_trained="switch-on set alone" if k in knot_new else "with its interval")
