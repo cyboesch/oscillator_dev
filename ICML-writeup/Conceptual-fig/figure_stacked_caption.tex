@@ -1,0 +1,19 @@
+% Caption synchronized with the installed overview figure in main.tex.
+\begin{figure}[tp]
+\centering
+\includegraphics[width=\textwidth]{fig_overview_stacked.pdf}
+\caption{\textbf{Local learning and generation with an oscillator network.}
+(a) Nonlinear oscillators with tunable couplings interact with a thermal bath at temperature $T$.
+The two networks show schematic coupling settings at $s=\tau$ (left) and $s=0$ (right). Spring thickness represents the coupling parameters.
+(b) At each positive noise time $t$, the full network is clamped to a corrupted data sample $\mathbf{x}_t$.
+Parameter-local updates use either force matching or CD1.
+Force matching uses measured local forces and analytic derivatives of the energy features; bars indicate fixed coordinates during force measurement.
+CD1 uses local feature differences $\phi_i(\mathbf{x}_t^-)-\phi_i(\mathbf{x}_t)$ after a short stochastic release of the full network under $\widehat E$ for time $\delta$.
+The released state is held fixed when forming the update.
+Repeating the updates over samples and noise times gives the learned schedule $\theta^*(t)$.
+(c) Starting from Gaussian noise, the network evolves under the reverse energy $U=2\widehat E-\lVert\mathbf{x}\rVert^2/2$ while an external controller replays $\theta^*(\tau-s)$ in reverse time $s$.
+The digit images show the learned reverse dynamics at $s=0.00$, $3.25$, $3.75$, $4.25$, and $5.00$.
+The network and parameter curves are schematic.
+OpenAI Codex (GPT-6) assisted with the drawing code.}
+\label{fig:overview}
+\end{figure}
