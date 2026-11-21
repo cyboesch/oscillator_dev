@@ -157,32 +157,28 @@ crossbar hardware.
 % ---------------------------------------------------------------- Figure 1 ---
 \begin{figure*}[t]
   \centering
-  \begin{minipage}[c]{0.36\textwidth}
-    \centering
-    \includegraphics[width=\linewidth]{Conceptual-fig/figure_stacked.pdf}
-  \end{minipage}\hfill
-  \begin{minipage}[c]{0.62\textwidth}
-    \placeholderbox{\linewidth}{2.25in}{%
-      \textbf{Figure 1 placeholder: to be redrawn from the figure on the left}
-      (\texttt{Conceptual-fig/figure\_stacked.tex}).\par\smallskip
-      Target shape: full text width, about 2.3\,in high, three panels side by
-      side.\par\smallskip
-      \textbf{(a) Physical network.} Visible oscillators with nearest-neighbour
-      springs, now with the hidden layer above them: one global Potts unit
-      coupled to all pixels, Potts units on overlapping patches (coarse and
-      fine), one bistable unit per pixel.\par\smallskip
-      \textbf{(b) Local learning.} Clamp the visible units to a noised image;
-      the fast hidden units settle; read the clamp forces and \Slarge{} sampled
-      hidden states; update each coupling from the two ends it connects. Drop
-      the CD1 branch of the old figure.\par\smallskip
-      \textbf{(c) Generation.} Replay the learned couplings in reverse time;
-      coarse patches switch on first, fine patches later; final quench. Use a
-      face trajectory in place of the digit.}
-  \end{minipage}
+  % Source: Conceptual-fig/figure_hidden.tex (compile with Conceptual-fig/compile_fig.sh);
+  % frames from Conceptual-fig/make_frames.py.
+  \includegraphics[width=\textwidth]{Conceptual-fig/figure_hidden.pdf}
   \caption{\textbf{A physical diffusion model with fast hidden units.}
-    \todo{caption after the redraw. (a) network with hidden units; (b) local
-    learning at clamped data from sampled hidden states; (c) generation by
-    replaying the learned couplings, followed by a quench.}}
+    (a)~Pixel oscillators, coupled to their neighbours by springs, interact
+    with a thermal bath at temperature $T$. Hidden Potts units (rounded boxes;
+    the filled dot is the active state) are coupled to all pixels (global unit,
+    purple) or to the pixels of one patch, at a coarse (red) and a fine (yellow)
+    scale. They equilibrate fast and are never controlled directly.
+    (b)~Learning at one noise level. The pixels are clamped to a noised image
+    $\x_t$ and the hidden units settle. Each coupling is updated from quantities
+    at its two ends: the clamp force on its pixel and $S$ sampled states of its
+    hidden unit. No free-running phase is needed. Repeating this over images and
+    noise levels gives the schedule $\bm{\theta}^{*}(t)$.
+    (c)~Generation. Starting from noise, an external controller replays
+    $\bm{\theta}^{*}(\tau-s)$ in reverse time $s$. The bars, in the colours of
+    (a), show when each hidden unit acts: the global unit throughout, the coarse
+    patch units from $s\approx0.5$, the fine ones from $s\approx2.8$. A final quench with
+    the bath switched off removes the thermal noise. The images are one
+    generated $32\times32$ face; the network drawings are schematic.
+    \todo{the frames are from the K64 model with 32 patch states: re-render
+    from the locked model, and add the frame after the quench.}}
   \label{fig:concept}
 \end{figure*}
 
@@ -250,6 +246,17 @@ crossbar hardware.
         Patch sets $g$: a Potts unit with $M=\Mpatch$ states on each
         overlapping patch $p$; a coarse set and a fine set.
         One bistable unit per pixel.
+  \item \textbf{Relation to dense associative memories; say it here, early.}
+        The global term of \eqref{eq:free-energy} is the log-sum-exp energy of
+        a dense associative memory
+        \citep{krotov2016dense,demircigil2017model,ramsauer2021hopfield} in its
+        form with fast hidden units \citep{krotov2021large}, here at finite
+        temperature and with $K$ templates per noise level. The exact score of
+        a noised training set has the same form with one memory per training
+        image
+        \citep{ambrogioni2024search,hoover2023memory,pham2026emergence}.
+        Our model replaces these $N$ stored memories by $K\ll N$ learned ones
+        ($K=\Kglobal$) and adds local memories on patches.
   \item \textbf{Why these units, one sentence each.} A Potts unit is a mixture
         of templates (a product of independent binary units is not); patches
         carry local structure that whole-image templates lack; the coarse set
@@ -486,6 +493,11 @@ crossbar hardware.
   \item \textbf{Noise is needed.} The probability-flow ODE is worse
         (\FIDablExactOde{} against \FIDcelebLowExact) and sensitive to the scale
         of the force.
+  \item \textbf{Time dependence is needed} (control on an earlier model,
+        Appendix~\ref{app:model-search}): Langevin dynamics under the final
+        energy alone falls into a blank state. Qualitative parallel: a
+        higher-order associative memory at finite temperature fails to retrieve
+        when started far from every memory \citep{rooke2026stochastic}.
   \item Could move to the appendix if space is short; keep one sentence here.
 \end{plan}
 
@@ -513,6 +525,18 @@ crossbar hardware.
 \budget{0.6 page; high level, no circuit design}
 
 \begin{plan}
+  \item \textbf{A circuit for the bipartite structure exists; lead with it.}
+        \citet{bacvanski2025dense} design and simulate an analog dense
+        associative memory: visible and hidden neurons joined by one resistive
+        crossbar used in both directions, a softmax over the hidden neurons
+        built from bipolar transistors, and hidden neurons about ten times
+        faster than the visible ones, which gives the same log-sum-exp energy
+        on the visible neurons. It is the deterministic limit of one of our
+        Potts units with stored weights.
+  \item \textbf{What our model needs beyond that circuit.} A noise source for
+        the pixels (the bath); couplings that change in time; the quadratic
+        couplings $Q$; signed couplings (their conductances are non-negative);
+        the learning rule.
   \item \textbf{Each operation is a known analog primitive.}
         Fields: forward read of a conductance array (crossbar)
         \citep{wan2022neurram}.
@@ -561,8 +585,20 @@ crossbar hardware.
         \citep{hinton2002training}; exponential family harmoniums
         \citep{welling2004exponential}, of which our model is a member with
         visible--visible springs; score matching for such models
-        \citep{hyvarinen2005estimation,hyvarinen2007connections,swersky2011autoencoders,vincent2011connection};
-        dense associative memories \citep{krotov2021large}.
+        \citep{hyvarinen2005estimation,hyvarinen2007connections,swersky2011autoencoders,vincent2011connection}.
+  \item \textbf{Dense associative memories and diffusion models.} The score of
+        a diffusion model is the gradient of a dense-associative-memory energy
+        \citep{hoover2023memory,ambrogioni2024search}; as the training set
+        grows, such models pass from retrieving stored images, through
+        spurious states, to generalisation \citep{pham2026emergence}. These
+        works read trained neural diffusion models as memories of the training
+        data. We build the energy explicitly, with few learned templates, and
+        show that templates held at data prototypes are far worse than learned
+        ones (Appendix~\ref{app:model-search}).
+        Analog circuits for dense associative memories
+        \citep{bacvanski2025dense} and the thermodynamic cost of retrieval at
+        finite temperature \citep{rooke2026stochastic} treat stored memories
+        and retrieval; we treat learning and generation.
   \item \textbf{Diffusion models.} \citet{song2019generative,ho2020denoising};
         the final denoising step and the stochastic sampler are known practice,
         here as physical operations.
@@ -586,7 +622,8 @@ crossbar hardware.
   \item \textbf{Conclusion.} Three sentences: what the model is, that it trains
         from sampled statistics without loss, what it reaches.
   \item \textbf{Outlook.} A circuit-level study; explicit hidden dynamics;
-        colour.
+        colour; the work and entropy production of the generation protocol,
+        for which the framework of \citet{rooke2026stochastic} applies.
 \end{plan}
 
 % ============================== END OF THE 8-PAGE MAIN TEXT ==================
@@ -687,8 +724,11 @@ crossbar hardware.
         couplings $Q$, switch-on times of the patch sets.
   \item Fewer coupling sets in time: linear knots and step-wise constant
         pieces.
-  \item What did not help: binary global units, frozen prototypes, shared
-        Gaussian modes.
+  \item The associative-memory limit: templates held at data prototypes
+        (frozen) against learned templates; on an earlier, larger model.
+  \item Control: Langevin dynamics under the final energy only, without the
+        time-dependent protocol.
+  \item What did not help: binary global units, shared Gaussian modes.
 \end{plan}
 
 \section{Mapping to Hardware}

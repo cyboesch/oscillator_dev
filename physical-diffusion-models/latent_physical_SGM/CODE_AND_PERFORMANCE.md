@@ -6302,6 +6302,56 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
   - Evaluation script: scratchpad `eval_lock.sh DATASET inc|cls|gal`. It takes every set that exists (exact,
     S64, S16; SDE as sampled and quenched, corrector, knots, ODE), plus the old best model of the data set as a
     reference row.
+- **Stage 1 results, MNIST and Fashion exact (2026-11-21 12:45):** all n = 2000 from the noise start, seed 1.
+  Inception = FID against train, Inception 4289737 (MNIST) / 4289739 (Fashion). Classifier FID, confident share and
+  k-NN precision / recall: 4289738 / 4289740. Old best = K784 + 7x7 patch (MNIST) or K784 + 8x8 every 2 px
+  (Fashion), both 32 states from t = 2.22, same sampler.
+
+  | MNIST ten digits | Inception (sd) | FID_inf | classifier FID | confident | precision F | recall F |
+  |---|---|---|---|---|---|---|
+  | real images (floor) | 3.70 | 1.11 | 1.69 | 97.8% | 0.87 | 0.88 |
+  | old best K784 + 7x7, SDE + quench 1 | 27.86 (0.36) | 24.13 | **7.66** | **88.8%** | **0.81** | 0.80 |
+  | K16 / 64 states exact, SDE as sampled | 50.56 | 58.93 | 15.74 | 71.4% | 0.63 | 0.87 |
+  | K16 / 64 states exact, SDE + quench 1 | 14.39 (0.61) | 8.13 | 14.23 | 71.5% | 0.61 | 0.89 |
+  | K16 / 64 states exact, corrector 2:0.16 + quench 1 | **12.00** (0.27) | **4.83** | 12.27 | 73.4% | 0.61 | **0.90** |
+
+  | Fashion ten classes | Inception (sd) | FID_inf | classifier FID | confident | precision F | recall F |
+  |---|---|---|---|---|---|---|
+  | real images (floor) | 7.17 | 2.09 | 0.40 | 73.8% | 0.88 | 0.87 |
+  | old best K784 + 8x8, SDE + quench 1 | 26.35 (0.36) | 13.71 | **3.17** | **62.7%** | **0.82** | 0.73 |
+  | K16 / 64 states exact, SDE as sampled | 53.26 | 37.28 | 7.38 | 47.2% | 0.79 | 0.75 |
+  | K16 / 64 states exact, SDE + quench 1 | 26.00 (0.51) | 15.66 | 5.97 | 49.9% | 0.70 | 0.80 |
+  | K16 / 64 states exact, corrector 2:0.16 + quench 1 | **25.80** (0.46) | 14.62 | 4.88 | 50.3% | 0.72 | **0.81** |
+
+  - **Gate (b), MNIST:** on the gate's metric (Inception, 27.7 / 27.86) K16 exact is far better (14.39; 12.00
+    with the corrector). On the classifier it is clearly worse: FID 14.2 vs 7.7, 72% vs 89% confident digits,
+    precision 0.61 vs 0.81 (recall a little higher). Galleries
+    (`galleries/2026-11-21_mnist_interim_K16-64-patch-states-exact-vs-K784-patch7x7-old-best_noise-start_quench1`,
+    `..._fashion_interim_...`): K16 strokes are cleaner (no specks or grain, which is what Inception rewards), but
+    more samples are not a clear digit. Fashion: Inception equal (26.00 vs 26.35), classifier worse (5.97 vs 3.17).
+    Reported to the user; MNIST on device goes with gate (a) unless the user says to hold it.
+  - **Decision (the user, 2026-11-21 ~13:00):** "lets stick to the Inception FID. there is no point of satisfying
+    a metric that only us uses". Inception FID is the gate and headline metric (it is what Wang & Achour and the
+    literature report). The classifier FID and class shares stay in the tables as a supplementary column only.
+    Gate (b) passed; MNIST on device goes with gate (a).
+  - Class shares stay balanced (MNIST 6-15% per digit; the '3' and '5' a little high, '6' low).
+- **MNIST and Fashion on device submitted before gate (a) (2026-11-21 13:30; the user: "why not submit the Fashion
+  MNIST and MNIST training with K16 and the 64 patches? why wait?").** If gate (a) fails, these are reported and can
+  be cancelled. Each chain runs by Slurm dependencies: pipeline (train + 2000 SDE samples + quench 1; 64 G, 24 h) ->
+  corrector set; S = 64 also -> post-hoc knots 5/9/9 (`compress_history.py --mode knots:9 --group-modes
+  theta=knots:5,W=knots:5,b=knots:5,Q=knots:5,wl=svd:0,bl=svd:0`) -> SDE + quench 1 of the compressed run; then
+  Inception, classifier FID and gallery over all sets (exact, S64, S16, corrector, knots). Submission script:
+  scratchpad `lock_submit_ondevice.sh` (+ `lock_compress.sh`).
+
+  | data set | S | pipeline | corrector | knots 5/9/9: compress / sample | Inception / classifier / gallery |
+  |---|---|---|---|---|---|
+  | MNIST | 64 | **4290098** | 4290099 | 4290100 / 4290101 | 4290104 / 4290105 / 4290106 |
+  | MNIST | 16 | **4290102** | 4290103 | - | (same) |
+  | Fashion | 64 | **4290107** | 4290108 | 4290109 / 4290110 | 4290113 / 4290114 / 4290115 |
+  | Fashion | 16 | **4290111** | 4290112 | - | (same) |
+
+  Resources: the CelebA-32 on-device run (4289676) uses 8.8 G RSS and about 7-8 h; MNIST / Fashion have fewer patch
+  units (16 + 121 vs 25 + 169). Disk: 203 G free (81% of 1 T), about 3 G per run.
 - **To follow after the gates:** on device S = 64 / S = 16 (incl. CelebA-32 S = 16); corrector sets for them;
   post-hoc knots 5/9/9 (wl, bl constant) on each S = 64 model; ODE + quench on CelebA-32 S = 64; galleries per data
   set; then the second wave (seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the S = 64

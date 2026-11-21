@@ -1,9 +1,15 @@
-\begin{thebibliography}{28}
+\begin{thebibliography}{36}
 \providecommand{\natexlab}[1]{#1}
 \providecommand{\url}[1]{\texttt{#1}}
 \expandafter\ifx\csname urlstyle\endcsname\relax
   \providecommand{\doi}[1]{doi: #1}\else
   \providecommand{\doi}{doi: \begingroup \urlstyle{rm}\Url}\fi
+
+\bibitem[Ambrogioni(2024)]{ambrogioni2024search}
+Ambrogioni, L.
+\newblock In search of dispersed memories: Generative diffusion models are
+  associative memory networks.
+\newblock \emph{Entropy}, 26\penalty0 (5):\penalty0 381, 2024.
 
 \bibitem[{[authors to fill in]}(2025)]{firstpaper2025}
 {[authors to fill in]}.
@@ -11,6 +17,12 @@
   models.
 \newblock \emph{arXiv preprint arXiv:2506.19136}, 2025.
 \newblock check: paste the correct entry.
+
+\bibitem[Bacvanski et~al.(2025)Bacvanski, You, Hopfield, and
+  Krotov]{bacvanski2025dense}
+Bacvanski, M.~G., You, X., Hopfield, J., and Krotov, D.
+\newblock Dense associative memories with analog circuits.
+\newblock \emph{arXiv preprint arXiv:2512.15002}, 2025.
 
 \bibitem[Chong \& Forsyth(2020)Chong and Forsyth]{chong2020effectively}
 Chong, M.~J. and Forsyth, D.
@@ -24,6 +36,14 @@ De, A.
 \newblock Symmetric equilibrium propagation for thermodynamic diffusion
   training.
 \newblock \emph{arXiv preprint arXiv:2604.23806}, 2026.
+
+\bibitem[Demircigil et~al.(2017)Demircigil, Heusel, L{\"o}we, Upgang, and
+  Vermet]{demircigil2017model}
+Demircigil, M., Heusel, J., L{\"o}we, M., Upgang, S., and Vermet, F.
+\newblock On a model of associative memory with huge storage capacity.
+\newblock \emph{Journal of Statistical Physics}, 168\penalty0 (2):\penalty0
+  288--299, 2017.
+\newblock check: first names.
 
 \bibitem[Dillavou et~al.(2026)Dillavou, Guzman, Liu, and
   Durian]{dillavou2026imperfection}
@@ -64,6 +84,13 @@ Ho, J., Jain, A., and Abbeel, P.
 \newblock Denoising diffusion probabilistic models.
 \newblock In \emph{Advances in Neural Information Processing Systems}, 2020.
 
+\bibitem[Hoover et~al.(2023)Hoover, Strobelt, Krotov, Hoffman, Kira, and
+  Chau]{hoover2023memory}
+Hoover, B., Strobelt, H., Krotov, D., Hoffman, J., Kira, Z., and Chau, D.~H.
+\newblock Memory in plain sight: Surveying the uncanny resemblances of
+  associative memories and diffusion models.
+\newblock \emph{arXiv preprint arXiv:2309.16750}, 2023.
+
 \bibitem[Hyv{\"a}rinen(2005)]{hyvarinen2005estimation}
 Hyv{\"a}rinen, A.
 \newblock Estimation of non-normalized statistical models by score matching.
@@ -86,6 +113,11 @@ Jelin{\v{c}}i{\v{c}}, Lockwood, Garlapati, Schillinger, Chuang, Verdon, and
 \newblock \emph{arXiv preprint arXiv:2510.23972}, 2025.
 \newblock check: first names.
 
+\bibitem[Krotov \& Hopfield(2016)Krotov and Hopfield]{krotov2016dense}
+Krotov, D. and Hopfield, J.~J.
+\newblock Dense associative memory for pattern recognition.
+\newblock In \emph{Advances in Neural Information Processing Systems}, 2016.
+
 \bibitem[Krotov \& Hopfield(2021)Krotov and Hopfield]{krotov2021large}
 Krotov, D. and Hopfield, J.~J.
 \newblock Large associative memory problem in neurobiology and machine
@@ -103,6 +135,31 @@ LeCun, Y., Bottou, L., Bengio, Y., and Haffner, P.
 Liu, Z., Luo, P., Wang, X., and Tang, X.
 \newblock Deep learning face attributes in the wild.
 \newblock In \emph{IEEE International Conference on Computer Vision}, 2015.
+
+\bibitem[Pham et~al.(2026)Pham, Raya, Negri, Zaki, Ambrogioni, and
+  Krotov]{pham2026emergence}
+Pham, B., Raya, G., Negri, M., Zaki, M.~J., Ambrogioni, L., and Krotov, D.
+\newblock Emergence of diffusion models from associative memory through
+  memorization and generalization.
+\newblock \emph{Nature Communications}, 2026.
+\newblock in press, doi:10.1038/s41467-026-78727-y; check volume and article
+  number.
+
+\bibitem[Ramsauer et~al.(2021)Ramsauer, Sch{\"a}fl, Lehner, Seidl, Widrich,
+  Gruber, Holzleitner, Adler, Kreil, Kopp, Klambauer, Brandstetter, and
+  Hochreiter]{ramsauer2021hopfield}
+Ramsauer, H., Sch{\"a}fl, B., Lehner, J., Seidl, P., Widrich, M., Gruber, L.,
+  Holzleitner, M., Adler, T., Kreil, D., Kopp, M.~K., Klambauer, G.,
+  Brandstetter, J., and Hochreiter, S.
+\newblock Hopfield networks is all you need.
+\newblock In \emph{International Conference on Learning Representations}, 2021.
+\newblock check: first names.
+
+\bibitem[Rooke et~al.(2026)Rooke, Krotov, Balasubramanian, and
+  Wolpert]{rooke2026stochastic}
+Rooke, S., Krotov, D., Balasubramanian, V., and Wolpert, D.
+\newblock Stochastic thermodynamics of associative memory.
+\newblock \emph{arXiv preprint arXiv:2601.01253}, 2026.
 
 \bibitem[Scellier \& Bengio(2017)Scellier and Bengio]{scellier2017equilibrium}
 Scellier, B. and Bengio, Y.

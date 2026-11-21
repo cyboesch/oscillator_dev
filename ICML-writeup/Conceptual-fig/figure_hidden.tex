@@ -1,0 +1,312 @@
+% Conceptual figure of the ICML write-up: a physical diffusion model with fast hidden units.
+% Built from figure_stacked.tex (16 November 2026): same colours, fonts, symbols and line weights.
+% Layout: (a) network and (b) local learning side by side, (c) generation as a full-width strip.
+% Final size in the paper: \textwidth = 171.5 mm, i.e. this canvas (236 mm) scaled by 0.727,
+% so the 11 TeX pt lettering comes out at about 8 pt.
+%
+% The PNG frames are written by make_frames.py from a real reverse-SDE trajectory and are
+% embedded unchanged; no generative image model was used. The network drawings are schematic.
+%
+% Compile:  sbatch compile_fig.sh     (or: pdflatex figure_hidden.tex)
+\documentclass{article}
+% page = picture (236 mm x 105.5 mm) plus a 2 mm border; no standalone class needed
+\usepackage[paperwidth=240mm,paperheight=110mm,margin=2mm]{geometry}
+\usepackage{graphicx}
+\usepackage[T1]{fontenc}
+\usepackage{helvet}
+\usepackage{amsmath,amssymb}
+% newtxmath as in figure_stacked.tex where it is installed; Times-like math otherwise
+\IfFileExists{newtxmath.sty}{\usepackage{newtxmath}}{\usepackage{mathptmx}}
+\usepackage{bm}
+\usepackage{tikz}
+\renewcommand{\familydefault}{\sfdefault}
+\usetikzlibrary{arrows.meta,calc,decorations.pathmorphing}
+\pagestyle{empty}
+\setlength{\parindent}{0pt}
+
+\definecolor{ink}{HTML}{202326}
+\definecolor{muted}{HTML}{65696D}
+\definecolor{hair}{HTML}{B6B8BA}
+\definecolor{steel}{HTML}{787C7F}
+\definecolor{cyan}{HTML}{477B8B}
+% One colour per hidden unit; the same colours mark the bars of panel c.
+\definecolor{globalcol}{HTML}{7B5C8D}   % global unit: plum
+\definecolor{coarsecol}{HTML}{B4664B}   % coarse patch units: rust
+\definecolor{finecol}{HTML}{C29A38}     % fine patch units: ochre
+
+\newcommand{\bodyfont}{\fontsize{11}{12.7}\selectfont}
+\newcommand{\smallfont}{\fontsize{9.5}{11}\selectfont}
+\newcommand{\headfont}{\bodyfont\bfseries}
+\tikzset{
+  every node/.style={font=\bodyfont,text=ink,inner sep=0pt},
+  flow/.style={draw=ink,line width=.55pt,-{Stealth[length=1.5mm,width=1.0mm]}},
+  learning flow/.style={draw=ink,line width=.85pt,-{Stealth[length=1.9mm,width=1.4mm]}},
+  spring/.style={draw=steel,line width=.65pt,decorate,
+    decoration={zigzag,segment length=1.0mm,amplitude=.42mm,pre length=.55mm,post length=.55mm}},
+  guide/.style={draw=hair,line width=.45pt},
+  % couplings between hidden units and pixels
+  hidden link/.style={draw=hair,line width=.4pt},
+  global link/.style={draw=globalcol!55,line width=.4pt},
+  coarse link/.style={draw=coarsecol!75,line width=.45pt},
+  fine link/.style={draw=finecol,line width=.45pt},
+}
+
+% Every pixel is the same continuous oscillator coordinate.
+\newcommand{\oscillator}[2]{%
+  \draw[ink,fill=white,line width=.6pt] (#1,#2) circle[radius=1.95mm];
+  \fill[cyan] (#1,#2) circle[radius=.65mm];
+}
+
+% Hidden Potts unit: a box of states, exactly one of them active (filled).
+% #1 outline colour, #2 colour of the active state, #3 outline width (pt),
+% #4,#5 centre; #6 number of states drawn; #7 index of the active state.
+\newcommand{\pottsunitcol}[7]{%
+  \begin{scope}[shift={(#4,#5)}]
+    \pgfmathsetmacro{\halfw}{1.25*#6+.55}
+    \draw[#1,fill=white,line width=#3pt,rounded corners=.9mm]
+      (-\halfw,-2.05) rectangle (\halfw,2.05);
+    \foreach \j in {1,...,#6} {
+      \pgfmathsetmacro{\dx}{2.5*(\j-(#6+1)/2)}
+      \ifnum\j=#7
+        \fill[#2] (\dx,0) circle[radius=.82mm];
+      \else
+        \draw[steel,line width=.45pt] (\dx,0) circle[radius=.70mm];
+      \fi
+    }
+  \end{scope}}
+% Generic hidden unit (panel b): #1,#2 centre; #3 states; #4 active state.
+\newcommand{\pottsunit}[4]{\pottsunitcol{ink}{cyan}{.6}{#1}{#2}{#3}{#4}}
+
+\newcommand{\scheduleicon}[2]{%
+  \begin{scope}[shift={(#1,#2)}]
+    \draw[hair,line width=.4pt] (0,-2.5)--(0,3.5)--(11,3.5);
+    \draw[cyan,line width=.85pt,line cap=round]
+      (.7,2.7) .. controls (2,-.8) and (6,1.3) .. (8,.4)
+      .. controls (9,-.1) and (9.5,-1.7) .. (10.4,-2.0);
+    \draw[muted,line width=.75pt,line cap=round]
+      (.7,-2.0) .. controls (2.0,.3) and (5.7,-.5) .. (7.2,.5)
+      .. controls (8.7,1.0) and (9.4,2.3) .. (10.4,2.8);
+  \end{scope}}
+
+\newcommand{\panelheading}[3]{%
+  \node[anchor=west,font=\headfont] at (#1,#2) {#3};}
+
+% Miniature pixel network used for the clamped state.
+\newcommand{\smallnetwork}[2]{%
+  \begin{scope}[shift={(#1,#2)}]
+    \tikzset{small spring/.style={draw=steel,line width=.35pt,decorate,
+      decoration={zigzag,segment length=.65mm,amplitude=.14mm,
+      pre length=.2mm,post length=.2mm}}}
+    \foreach \r in {0,1,2} {
+      \foreach \c in {0,1,2} {
+        \pgfmathsetmacro{\px}{4*\c-.8*\r}
+        \pgfmathsetmacro{\py}{2.5*\r}
+        \draw[small spring] (\px+.7,\py)--(\px+3.3,\py);
+      }
+    }
+    \foreach \r in {0,1} {
+      \foreach \c in {0,1,2,3} {
+        \pgfmathsetmacro{\px}{4*\c-.8*\r}
+        \pgfmathsetmacro{\py}{2.5*\r}
+        \draw[small spring] (\px-.22,\py+.65)--(\px-.58,\py+1.85);
+      }
+    }
+    \foreach \r in {0,1,2} {
+      \foreach \c in {0,1,2,3} {
+        \pgfmathsetmacro{\px}{4*\c-.8*\r}
+        \pgfmathsetmacro{\py}{2.5*\r}
+        \begin{scope}[shift={(\px,\py)},scale=.34]
+          \oscillator{0}{0}
+        \end{scope}
+      }
+    }
+  \end{scope}}
+
+\begin{document}
+\noindent
+% zero-height box: the picture hangs from the top of the text area, so there is exactly one page
+% (\topskip is left at its default; changing it makes LaTeX emit an empty second page)
+\vbox to 0pt{\vskip-\topskip\hbox{%
+\begin{tikzpicture}[x=1mm,y=-1mm]
+  \path[use as bounding box] (0,0) rectangle (236,105.5);
+
+  % ===========================================================================
+  % A. Physical network: pixel oscillators and the hidden units above them.
+  % ===========================================================================
+  \panelheading{0}{2.5}{a\quad\mdseries Physical network}
+  \draw[muted,line width=.5pt] (2,8) rectangle (78,48);
+  \node at (6.5,12.5) {$T$};
+
+  % Pixel (c,r) sits at (24+9c-1.5r, 31+5.8r).
+  % Patches: the pixels one patch unit is coupled to (coarse: 3x3, fine: 2x2).
+  \fill[coarsecol!13,rounded corners=1.2mm]
+    (21.9,28.2)--(45.5,28.2)--(41.1,45.4)--(17.5,45.4)--cycle;
+  \fill[finecol!30,rounded corners=1.2mm]
+    (39.8,28.7)--(54.4,28.7)--(51.8,39.1)--(37.2,39.1)--cycle;
+
+  % Couplings of the hidden units: global to every pixel, patch units to their patch.
+  \foreach \r in {0,1,2} {
+    \foreach \c in {0,1,2,3} {
+      \draw[global link] (37.5,14.55)--({24+9*\c-1.5*\r},{31+5.8*\r});
+    }
+  }
+  \foreach \r in {0,1,2} {
+    \foreach \c in {0,1,2} {
+      \draw[coarse link] (17,24.05)--({24+9*\c-1.5*\r},{31+5.8*\r});
+    }
+  }
+  \foreach \r in {0,1} {
+    \foreach \c in {2,3} {
+      \draw[fine link] (55,24.05)--({24+9*\c-1.5*\r},{31+5.8*\r});
+    }
+  }
+
+  % Pixel layer with time-evolving springs (as the s = 0 network of the earlier figure).
+  \begin{scope}[shift={(21,31)}]
+    \tikzset{network spring/.style={draw=steel,line width=\wire pt,decorate,
+      decoration={zigzag,segment length=.9mm,amplitude=\coil mm,
+      pre length=.4mm,post length=.4mm}}}
+    \foreach \r/\c/\weight in {
+      0/0/11,0/1/4,0/2/15,1/0/3,1/1/12,1/2/2,2/0/9,2/1/6,2/2/14} {
+      \pgfmathsetmacro{\wire}{.40+.045*\weight}
+      \pgfmathsetmacro{\coil}{.19+.024*\weight}
+      \pgfmathsetmacro{\px}{3+9*\c-1.5*\r}
+      \pgfmathsetmacro{\py}{5.8*\r}
+      \draw[network spring] (\px+1.6,\py)--(\px+7.4,\py);
+    }
+    \foreach \r/\c/\weight in {
+      0/0/16,0/1/5,0/2/8,0/3/7,1/0/10,1/1/0,1/2/13,1/3/1} {
+      \pgfmathsetmacro{\wire}{.40+.045*\weight}
+      \pgfmathsetmacro{\coil}{.19+.024*\weight}
+      \pgfmathsetmacro{\px}{3+9*\c-1.5*\r}
+      \pgfmathsetmacro{\py}{5.8*\r}
+      \draw[network spring] (\px-.4,\py+1.45)--(\px-1.1,\py+4.35);
+    }
+    \foreach \r in {0,1,2} {
+      \foreach \c in {0,1,2,3} {
+        \pgfmathsetmacro{\px}{3+9*\c-1.5*\r}
+        \pgfmathsetmacro{\py}{5.8*\r}
+        \begin{scope}[shift={(\px,\py)},scale=.8]
+          \oscillator{0}{0}
+        \end{scope}
+      }
+    }
+  \end{scope}
+
+  % Hidden layer: one colour per unit (global, coarse patch, fine patch).
+  \pottsunitcol{globalcol}{globalcol}{.9}{37.5}{12.5}{6}{4}
+  \pottsunitcol{coarsecol}{coarsecol}{.9}{17}{22}{4}{2}
+  \pottsunitcol{finecol}{finecol}{.9}{55}{22}{4}{3}
+
+  \node[anchor=west,text=muted] at (47.5,12.5) {Global unit};
+  \node[anchor=west,text=muted,align=left] at (62.5,22) {Patch\\units};
+  \node[anchor=west,text=muted,align=left] at (57.5,39.2) {Pixel\\oscillators};
+  \node[text=muted,fill=white,inner xsep=1mm] at (40,48) {Thermal bath};
+
+  \draw[spring,line width=.45pt] (3,53.2)--(10,53.2);
+  \node[anchor=west] at (12,53.2) {Time-evolving couplings};
+
+  % ===========================================================================
+  % B. Local learning at clamped data.
+  % ===========================================================================
+  \panelheading{86}{2.5}{b\quad\mdseries Local learning}
+
+  % The pixels are clamped to a noised image; the hidden units stay free and settle.
+  \foreach \x in {92.2,98.2,104.2,110.2} {
+    \draw[hidden link] (100,13.05)--(\x,17.6);
+  }
+  \pottsunit{100}{11}{5}{2}
+  \begin{scope}[shift={(90,31)},xslant=.25]
+    \node[anchor=north west,transform shape] at (0,0)
+      {\includegraphics[width=23.1mm,height=12.6mm]{images/clamp_noised.png}};
+  \end{scope}
+  \foreach \x in {89.8,95.8,107.8} {
+    \draw[white,line width=2pt] (\x,39.8)--(\x,27.8);
+    \draw[cyan,line width=1.05pt,-{Stealth[length=1.8mm,width=1.3mm]}]
+      (\x,39.8)--(\x,27.8);
+  }
+  \begin{scope}[shift={(100,22)},scale=1.5]
+    \smallnetwork{-5.2}{-2.5}
+  \end{scope}
+  \node[anchor=north] at (101.5,45.3) {Clamp pixels};
+  \node[anchor=north,text=muted] at (101.5,49.9) {$\bm x_t\sim p_t$};
+
+  % What is read while the pixels are clamped.
+  \draw[muted,line width=.65pt] (128,9) rectangle (184,46.5);
+  \node at (156,13.6) {Read locally};
+
+  \oscillator{142}{27}
+  \draw[ink,line width=.65pt,line cap=round] (139.3,24)--(144.7,24);
+  \draw[ink,line width=.65pt,line cap=round] (139.3,30)--(144.7,30);
+  \node[text=cyan] at (142,20.6) {$\widehat F_{i}$};
+  \node[anchor=north,align=center] at (142,34.2) {Clamp\\forces};
+
+  \pottsunit{170}{22.5}{5}{4}
+  \draw[hair,line width=.4pt] (163.6,32.3)--(176.4,32.3);
+  \foreach \j/\h in {1/1.1,2/.5,3/1.9,4/4.6,5/.8} {
+    \pgfmathsetmacro{\bx}{170+2.5*(\j-3)}
+    \fill[cyan] (\bx-.7,32.3) rectangle (\bx+.7,32.3-\h);
+  }
+  \node[anchor=north,align=center] at (170,34.2) {$S$ sampled\\states};
+
+  % Update of one coupling from the two ends it connects.
+  \oscillator{203}{25}
+  \draw[spring,line width=.85pt] (205.1,25)--(211.5,25);
+  \pottsunit{216}{25}{3}{2}
+  \node[text=cyan] at (208.3,18.4) {$\theta_{mi}$};
+  \draw[flow,draw=cyan] (208.3,20.5)--(208.3,23.3);
+  \node[anchor=north,align=center] at (210.5,30.6) {Update\\coupling};
+  \draw[learning flow] (210.5,40.6)--(210.5,43.8);
+  \scheduleicon{205}{48}
+  \node[anchor=west] at (218.5,48.6) {$\bm\theta^*(t)$};
+
+  \draw[learning flow] (118.5,25)--(127,25);
+  \draw[learning flow] (185,25)--(197.5,25);
+
+  % ===========================================================================
+  % C. Generation: replay of the learned couplings, then a quench.
+  %    Reverse time s = tau - t; x(s) = 30 + 36 s on the canvas.
+  % ===========================================================================
+  \panelheading{0}{64.5}{c\quad\mdseries Generate}
+  \scheduleicon{50}{64}
+  \node[anchor=west] at (64,64.5) {External replay $\bm\theta^*(\tau-s)$};
+
+  % Time axis.
+  \draw[muted,line width=.55pt] (30,74.4)--(210,74.4);
+  \draw[flow,draw=cyan] (210,74.4)--(232.6,74.4);
+  \node[anchor=west] at (233.4,74.4) {$s$};
+  \foreach \s/\lab in {0/{$s=0$},1/{$1$},2/{$2$},3/{$3$},4/{$4$},5/{$s=\tau$}} {
+    \pgfmathsetmacro{\tx}{30+36*\s}
+    \draw[muted,line width=.55pt] (\tx,73.4)--(\tx,75.4);
+    \node[anchor=south,text=muted] at (\tx,72.7) {\lab};
+  }
+  \foreach \s in {3.5,4.5} {
+    \pgfmathsetmacro{\tx}{30+36*\s}
+    \draw[muted,line width=.45pt] (\tx,73.8)--(\tx,75.0);
+  }
+  \node[anchor=south,text=cyan] at (223.5,72.7) {quench};
+
+  % When each hidden unit acts, in the colours of panel a:
+  % global from the start, coarse patches from t = 4.49 (s = 0.51), fine patches from t = 2.22 (s = 2.78).
+  \fill[globalcol,rounded corners=.35mm] (30,77.45) rectangle (228,78.95);
+  \fill[coarsecol,rounded corners=.35mm] (48.4,80.85) rectangle (228,82.35);
+  \fill[finecol,rounded corners=.35mm] (130.1,84.25) rectangle (228,85.75);
+  \node[anchor=east,font=\smallfont] at (28.5,78.2) {global unit};
+  \node[anchor=east,font=\smallfont] at (46.9,81.6) {coarse patches};
+  \node[anchor=east,font=\smallfont] at (128.6,85.0) {fine patches};
+
+  % One generated trajectory (frames written by make_frames.py).
+  \foreach \stime/\cx in {0.00/30,2.00/102,3.00/138,3.50/156,4.00/174,4.50/192,5.00/210} {
+    \node[anchor=north] at (\cx,89.0)
+      {\includegraphics[width=15.6mm]{images/frame_s\stime.png}};
+  }
+  % The frame after the quench appears as soon as images/frame_quench.png exists
+  % (make_frames.py writes it when the run has a quenched file of the same trajectories).
+  % Until then a dashed slot marks its place.
+  \IfFileExists{images/frame_quench.png}{%
+    \node[anchor=north] at (227.7,89.0)
+      {\includegraphics[width=15.6mm]{images/frame_quench.png}};}{%
+    \draw[cyan,line width=.5pt,dash pattern=on 1mm off .8mm] (219.9,89.0) rectangle (235.5,104.6);
+    \node[text=cyan,font=\smallfont,align=center] at (227.7,96.8) {after\\quench};}
+\end{tikzpicture}}\vss}
+\end{document}

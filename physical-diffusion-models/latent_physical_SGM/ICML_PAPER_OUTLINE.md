@@ -885,6 +885,35 @@ prior work ("no hidden units"; from a summary, to verify).
 - **To do before writing related work:** read Wang & Deng, De and Gower in full (the reports here cover them only
   in part), the APS abstract, and search arXiv by author for follow-ups.
 
+### Addition 2026-11-21: three papers on dense associative memories (in `relevant-papers/`)
+
+Read on 2026-11-21 (the first two in part, the third from its abstract and introduction).
+
+- **Bacvanski, You, Hopfield, Krotov, "Dense Associative Memories with Analog Circuits", arXiv 2512.15002.**
+  The largest overlap, in architecture and hardware. Visible and hidden neurons joined by one resistive crossbar
+  used in both directions; a softmax over the hidden neurons from bipolar transistors; hidden neurons about ten
+  times faster than the visible ones, which leaves the energy -(1/beta) log sum_mu exp[-(beta/2) |xi_mu - v|^2] on
+  the visible neurons. That is one of our Potts units summed out, in the deterministic limit, with a uniform Q.
+  Theirs: relaxation to a fixed point (inference), weights set by hand or trained digitally with backpropagation
+  through time, no noise, no time dependence, no generation, non-negative conductances; XOR, a Hamming code, a
+  small language model, validated in SPICE. **Consequences:** the bipartite architecture with fast hidden units is
+  not ours to claim (it is the Krotov-Hopfield form of a dense associative memory); and their circuit is the
+  basis to cite in "Towards Hardware".
+- **Pham, Raya, Negri, Zaki, Ambrogioni, Krotov, Nature Communications 2026 (in press)**, with Ambrogioni 2024
+  and Hoover et al. 2023. The score of a diffusion model is the gradient of a dense-associative-memory energy
+  whose memories are the training images; with more data the model passes from retrieval, through spurious
+  states, to generalisation. They read trained neural diffusion models this way. We build the energy
+  explicitly with K << N learned templates per noise level. Our frozen-against-trained runs are the direct test
+  of the stored-memory limit (CelebA-32: 147 frozen against 34 and 22 trained).
+- **Rooke, Krotov, Balasubramanian, Wolpert, "Stochastic Thermodynamics of Associative Memory", arXiv
+  2601.01253.** Least overlap in results. Binary-spin polynomial memories under Glauber dynamics at finite
+  temperature, Hebbian memories; work and entropy production of retrieval and of driving; a finite-temperature
+  failure of higher-order memories started far from every memory. For us: the framework for the energy cost of
+  the generation protocol, which we do not compute; and a qualitative parallel to our control in which Langevin
+  dynamics under the final energy alone falls into a blank state.
+- **In the write-up:** cited in Section 3.1 (relation to dense associative memories), 5.4 (time dependence),
+  6 (the circuit), 7 (related work), 8 (outlook); eight entries added to `references.bib`.
+
 ## 13. Updates
 
 - 2026-11-17: first version.
