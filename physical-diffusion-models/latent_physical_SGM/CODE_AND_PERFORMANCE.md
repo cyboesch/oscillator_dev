@@ -6102,3 +6102,42 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
 - **Next (proposed, after these):** a force scale lambda for the ODE (x - lambda grad F, a sampling temperature);
   the reduced-noise family dx = [x - (1 + g^2) grad F] dtau + g sqrt(2T) dW, g = 0 / 0.25 / 0.5 / 1; an ODE
   predictor with corrector holds.
+- **PF-ODE results (22:30; Inception 4287936, gallery 4287937).** ODE sampling takes 2-3 min per 2000 samples (SDE
+  ~25 min).
+
+  | model (32x32) | SDE | SDE + quench | ODE | ODE + quench | near-black % SDE q1 / ODE q1 (real 11.8) |
+  |---|---|---|---|---|---|
+  | K64 early, 100 slices | 86.3 | 21.72 | 121.0 | **25.22** | 9.2 / 6.6 |
+  | K64 early, post-hoc 5/9/9 | 53.7 | 21.67 | 76.3 | 25.51 | 5.9 / 4.4 |
+  | K16 early, 100 slices | 87.8 | 22.11 | 121.8 | 25.86 | 9.1 / 6.4 |
+  | K64 trained 9 knots, linear | 97.8 | 24.83 | 130.5 | 30.25 | 10.8 / 7.8 |
+  | K64 trained 9 pieces, step | 114.4 | 32.12 | 133.9 | 38.47 | 6.7 / 5.5 |
+
+  - **With the quench the ODE is only +3.5 to +3.8 behind the SDE** for the 100-slice and post-hoc models. That is
+    no longer "do not use": ODE + quench at 25.2 is about where the SDE models with late patches were (24.6-24.7).
+  - **Gallery:** real faces, not the broken shapes of MNIST on 11-15 (which had no quench). The ODE is
+    deterministic, so every model turns the same start into nearly the same face (one face per column across the
+    ODE rows). Greyer and softer than the SDE: fewer deep blacks, mid-grey backgrounds, some smudged features. The
+    near-black share is lower in every row (6.6 vs 9.2%).
+  - **The knot hypothesis does not hold:** trained knots widen the gap (+5.4 linear, +6.4 step), and post-hoc
+    knots do not narrow it. The ODE's deficit is mainly lost contrast, not inconsistency between slices.
+  - Next (proposed): a force scale lambda > 1 for the ODE (colder transport against the grey shift); the
+    reduced-noise family g = 0.25 / 0.5 (how much noise the correction needs); an ODE predictor with corrector
+    holds.
+- **Trained step pieces, shared grid (Inception 4286517, gallery 4286518):**
+
+  | knots (shared grid) | trained linear | trained step | post-hoc step, even knots per group |
+  |---|---|---|---|
+  | 9 (9/8/4 per set) | 24.83 | 32.12 | 26.96 (9 per group) |
+  | 6 (6/5/3) | 30.23 | 40.68 | - |
+  | 5 (5/4/2) | 109.1 | 61.06 | 37.84 (5 per group) |
+
+  Trained steps stay well behind trained linear (+7 at 9, +10 at 6), except at 5, where the linear 8x8 ramp
+  collapses. The shared grid starves the 8x8 set (4 knots at "9"), so the per-set step runs (5/9/9, 9/17/17, and
+  the K16 9/9/9 on-device runs) are the relevant test.
+- **On-device knot test 4287881 PASSED:**
+  - old vs new code bitwise (plain on-device run; exact per-set step run);
+  - on-device per-set step 9/9/9: every slice equals its piece; global knots 0 12 25 37 50 62 74 87 99;
+  - on-device shared linear: crossfade to 1.8e-15;
+  - sampling.
+  - The four K16 runs (4287882-4287885) are queued for GPUs.
