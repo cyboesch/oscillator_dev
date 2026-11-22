@@ -114,6 +114,161 @@ This section is the plan. Sections 1 to 6 record the state of 2026-11-17 and are
     neighbouring pixels). Two sentences in Section 5, rows in the ablation table, the same-trajectory strip in the
     appendix. Section 6: the device is not purely bipartite; it needs nearest-neighbour couplings between the
     visible units on top of the crossbar of Bacvanski et al.
+  - **Reading after the fourth row (2026-11-22; the user: "there is hardly any difference between the images").**
+    With springs 20.20, without 25.83, without springs and with a harmonic on-site term only 27.42: the same faces
+    on the same trajectories, the difference is pixel grain. Consequences: (i) the visible units can be linear and
+    uncoupled, so the device can be purely bipartite, as the Bacvanski et al. circuit; the springs are an optional
+    smoothing term (this replaces "the device is not purely bipartite" above); (ii) the oscillator network taken
+    over from the first paper is not what makes the model work, and the text and Figure 1a should not suggest it
+    is; (iii) 5 to 7 FID correspond to a difference one hardly sees, so FID differences of this size between our
+    variants are texture, and the paper should show the same-trajectory strips; (iv) the runs share the seed and
+    the k-means start of the hidden units, which is part of why the faces coincide: say so in captions. Open, not
+    requested: whether a longer quench or the corrector removes the grain without springs (sampling only).
+  - **Does the harmonic, uncoupled row trivialise the paper? (the user's worry, 2026-11-22; my assessment.)**
+    (i) Physics: not removed, relocated. With linear visible units all nonlinearity and all content sit in the
+    thermal multi-state hidden units; linear hidden units would give a Gaussian. Controls in hand: pixels only 218,
+    final energy without the time-dependent protocol fails, frozen templates 147 against 22 to 34 learned.
+    (ii) Training: not trivial (the k-means start is far from the trained model; states are lost without the
+    visit-count rule), but the model class is classical. Without visible couplings it is a restricted Boltzmann
+    machine with Gaussian visible units and categorical hidden units. Neighbour to cite and to read: Liao,
+    Kornblith, Ren, Fleet, Hinton, "Gaussian-Bernoulli RBMs Without Tears", arXiv 2210.10318 (single hidden layer,
+    4096 hidden units on MNIST, modified contrastive divergence with a Gibbs-Langevin sampler, MNIST FID 17.49 per
+    a search summary; Fashion and CelebA-32 numbers not yet read). Added to `references.bib` and related work.
+    (iii) Memorisation: capacity argues against it on faces (16 global templates for 162,770 images; the content
+    is composed from patch states), but it is not measured on the locked models, and on MNIST with K784 several
+    samples were close to their nearest training image (notebook, best-MNIST gallery; the proper check was offered
+    and deferred). Needed for the paper, a CPU job on existing samples: distance of each sample to its nearest
+    training image against the same for held-out test images, and the share of samples with nearest distance
+    below one third of the second-nearest (the criterion of Yoon et al. 2023, used in the memorisation
+    literature).
+  - **Liao et al. read in full (2026-11-22, PDF v1 of arXiv 2210.10318, 18 pages; replaces the search summary in
+    the item above).**
+    - Model: E = |(v - mu)/sigma|^2 / 2 - (v/sigma^2)^T W h - b^T h; binary hidden units, each coupled to all
+      pixels; one learned variance per pixel, the same for every hidden state; no visible-visible and no
+      hidden-hidden couplings; not convolutional. One set of couplings. Hidden units: 4096 (MNIST), 10,000
+      (Fashion, CelebA). My arithmetic: 3.2 M weights on MNIST, 7.8 M on Fashion, 30.7 M on colour CelebA-32.
+    - Training: likelihood gradient, positive minus negative phase (the Boltzmann rule, local). The negative chain
+      starts from Gaussian noise ("modified CD") and runs 100 sampling steps with 10 Langevin steps each, for every
+      update; SGD at learning rate 0.01, gradient norm clipped to 10; 3000 epochs at batch 512. No score matching.
+    - Sampling: from noise, Gibbs-Langevin (hidden units resampled, then 10 Langevin steps of the pixels at fixed
+      hidden state), step size decayed by a cosine schedule "as in score-based models"; 100 steps. One energy, no
+      time-dependent couplings.
+    - Results: MNIST FID 17.49 (their best; plain Gibbs 47.53; sample count and reference set not stated). Fashion,
+      colour CelebA-32 and "CelebA-2K-64" (2000 training images at 64x64): samples only, no FID, no memorisation
+      check. Their Fashion samples lack texture (their words); the CelebA-32 samples are smooth colour faces.
+    - Hardware: one sentence of motivation (real-valued data for stochastic binary Boltzmann machines); nothing on
+      devices, local measurement or sampled statistics.
+    - **Their rule on hardware (the user's question, 2026-11-22; my assessment).** Per update: clamp data, sample
+      the hidden units once, record v_i h_j / sigma_i^2 (positive); set the pixels to Gaussian noise, run the
+      Gibbs-Langevin sampler for 100 outer steps of 10 Langevin steps, record the same product averaged over the
+      whole chain (burn-in 0); update by the difference (their Algorithm 3). Good for hardware: a two-factor
+      Hebbian rule, simpler per coupler than ours (no sum over the unit's pixels, no clamp-force sensor); binary
+      units; one coupling set; the negative phase is the device generating. Costly: one generation run per
+      training example and update; the update is a difference of two sampled correlations, small near
+      convergence; the chain is not at equilibrium, so the learned energy is tied to this sampler and its
+      schedule; fewer chain steps are worse (their Tables 2 and 3: 50 against 100 outer steps 21.0 against 17.5;
+      1 / 5 / 10 Langevin steps 35.1 / 19.0 / 17.5). My count from their Appendix B: about 350,000 updates of 512
+      chains, 1.8e8 generation runs for MNIST. Ours: about 2.1e6 steps of 512 clamped images over the 100 noise
+      levels, 1.1e9 clamps of 16 reads, no generation run. Which is cheaper in device time depends on how many
+      hidden reads one generation run is worth; I would not put a number on it in the paper.
+    - **Against ours:** same family once our visible couplings are removed. Theirs is ahead in having one coupling
+      set and colour. Ours: no negative phase (theirs runs a full generation from noise per update), time-dependent
+      couplings as the price; Potts and patch units with local wiring; state-dependent stiffness; MNIST 10.0 exact
+      and 11.4 from samples against 17.5 (protocols differ). Stored couplings: ours 2.2 to 2.75 M per noise level
+      times 100, theirs 3 to 31 M once. "First faces" only with the qualifier "among models proposed for analog
+      hardware".
+  - **Bipartite does not mean no communication (the user's point, 2026-11-22).** Hidden units are independent given
+    the image and interact through the pixels they share; pixels are independent given the hidden states (without
+    springs) and interact through the hidden units they share. Consequences used in the text: the image is the
+    medium through which the hidden units agree (one sentence added to Section 3.1); independent pixels given the
+    hidden states is why the samples without springs have pixel grain; distant patch units agree only through
+    chains of overlapping patches or through the global unit, which fits the result that MNIST needs a large
+    global unit.
+  - **Can the FID be trusted? (the user, 2026-11-22: the MNIST digits of Liao et al. look better than ours at a
+    higher FID, 17.5 against 10.0.)** My assessment after reading `inception_fid.py`:
+    - The number is computed in the standard way (original TTUR Inception graph, pool_3, samples clipped and
+      quantised to 8 bit, full train split as reference, floor from real test images). Not yet cross-checked with
+      a second implementation (offered on 11-21, not run).
+    - It is not a measure of how clear the digits are. Own evidence: the quench alone 50.6 -> 14.4 at an unchanged
+      share of clear digits; real test images with faint noise 38.5; K16 against the old best: half the FID with
+      fewer clear digits. And FID mixes fidelity with diversity: ours has recall 0.88 and precision 0.74 (classifier
+      features); a grid shows only fidelity.
+    - FIDs of different papers are not comparable without the protocol (Liao et al. and Wang & Achour state no
+      sample count).
+    - Consequences: within the paper, at one protocol, FID differences stand (exact against sampled, ablations).
+      Against other papers: state the protocol, report precision / recall and the clear-class share for MNIST and
+      Fashion, show uncurated samples, and do not claim better digits than Liao et al. The MNIST lead over Wang &
+      Achour depends on the quench (as sampled about 50 against their 27.6; on 11-15, before the quench, ours was
+      52 to 55); on Fashion we were ahead before the quench as well (52 to 57 against 80.8).
+    - To close the question, not requested: clean-fid or pytorch-fid on the same sample files; precision and recall
+      in Inception features; and, the only rigorous comparison, the public code of Liao et al. evaluated in our
+      pipeline.
+  - **Binary hidden units again? (the user, 2026-11-22, after Liao et al.) My recommendation: no new runs; frame the
+    paper as a dense associative memory turned into a diffusion model trained by a single-phase local rule.**
+    The notebook already has both tests (2026-11-14): global binary units lose clearly to one global Potts unit
+    (ten digits, classifier FID about 51 to 53 against 22.5; four digits 66% clean against 92%); 32 independent
+    bistable units per patch come within 1 classifier FID of a 32-state Potts patch unit (7.35 against 6.42, four
+    digits, K784, 7x7 patches, n = 500; `--patch-kind ising`). Reading: mutually exclusive templates are needed at
+    the global level, independent features suffice locally. With binary units throughout, the model would be a
+    time-dependent version of the machine of Liao et al., and the link to dense associative memories and to the
+    circuit of Bacvanski et al. would be lost. Units with values 0 / 1 instead of -1 / +1 are the same model
+    family (the difference is absorbed by the on-site linear and quadratic terms); only the parametrisation of
+    training changes. In the paper: the binary-unit results as an appendix item labelled "earlier models", and one
+    sentence in the hardware section that the patch level may not need a winner-take-all. Optional, not requested:
+    one run with binary patch units on the locked CelebA-32 model.
+  - **Linear visible model with springs (the user's run, started 2026-11-22; no notebook entry yet when this was
+    written).** CelebA-32, harmonic on-site term + linear springs, hidden units as locked. It completes a 2 x 2 on
+    CelebA-32: quartic + springs 20.20; quartic, no springs 25.83; harmonic, no springs 27.42; harmonic + springs
+    pending. The user's plan: if it performs similarly, keep it as the model; otherwise stay with the quartic
+    visible units and discuss the harmonic case briefly. My additions: (i) fix "similar" beforehand: within about
+    0.5 FID of 20.2 and the same-trajectory strip indistinguishable (the quartic term was worth 1.6 without
+    springs); (ii) check that the free energy stays bounded: in the quartic model the conservative margin
+    k_i / 2 - sum of the largest positive Q on pixel i is negative from t of about 1.5 on, so there the x^4 term
+    confines; zero diverged samples of 2000 is not proof for a harmonic model; (iii) adopting it means repeating
+    the first wave (CelebA-32, MNIST, Fashion: exact, S = 64, S = 16; CelebA-64, the long one), and training from
+    sampled states and the ten-class data are untested with linear visible units: test CelebA-32 S = 16 and MNIST
+    K784 exact first; (iv) the alternative without reruns: quartic stays the main model and the linear model is
+    one ablation row, which already carries the statement that the visible units can be linear.
+  - **Decision (the user, 2026-11-22): no memorisation test and no precision / recall metrics** ("on the
+    memorization/recall. I think this is not needed"). This closes the corresponding open items above. In the
+    paper: the existing panels of samples above their nearest training images, the capacity argument, and the
+    existing classifier-based share as a supplementary appendix column; the text says "not copies of their nearest
+    training images", never "no memorisation". Still open from that list, unless the user drops it too: the
+    cross-check of the FID with a second implementation.
+  - **FIDs of other papers: out of Table 1, no ranking (2026-11-22; the user: "we are comparing apples with
+    bananas").** Checked in the Wang & Achour paper itself (`relevant-papers/2606.27294v1 (1).pdf`, text search):
+    the only statement on the metric is "We report the average Frechet Inception Distance (FID) over four random
+    seeds"; no sample count, implementation, reference set or preprocessing. In our protocol the sample count
+    alone moves the FID of real MNIST test images from 3.7 (n = 2000) to 11.1 (n = 1000), which is the size of the
+    MNIST gap (10 to 11 against 27.6). Their DTM and NLM numbers are their own re-runs "using their official source
+    code" in an iso-parameter configuration (DTM: 80x80 grid, 24 couplings per node, 4 diffusion steps, grey
+    pixels encoded by three binary units, 60 epochs), not results of the original authors. Changes made: the
+    abstract sentence "improves on earlier generative models designed for analog hardware" removed; the block
+    "Earlier models for analog hardware" removed from Table 1; Section 5.3 quotes Wang & Achour (and Liao et al.)
+    in the text for orientation, says the numbers are not comparable, and does not quote DTM / NLM. Claim 3 is now
+    stated against the floor of real images at the same sample count, plus faces "among models proposed for analog
+    hardware". A like-for-like comparison would need their sample count and FID code or their samples (ask the
+    authors); not planned.
+  - **Which model for which data set (the user's proposal, 2026-11-22; not yet decided).** K784 for every data
+    set in the main results, and one section ("Compressing the model" / "Smaller models") with K16 and the 5/9/9
+    knots on CelebA. My assessment: a good structure, with two conditions.
+    (i) The section must also say where the compression fails: on MNIST and Fashion K16 costs 4.4 and 4.7 FID and
+    clear digits, and the knots give 234 and about 90. One or two sentences, numbers in the appendix; otherwise it
+    is selective reporting.
+    (ii) 64x64: K784 there would be three new runs (exact, S = 64, S = 16), the sampled ones longer than the 3 to
+    4 days of the running K16 runs, at about 15 M couplings per noise level (my count) instead of about 9 M. I
+    would not start them: report 64x64 with K16, inside that section or marked in the table.
+    Runs the proposal needs: CelebA-32 with K784 from samples, S = 64 and S = 16, with corrector sets, and ODE +
+    quench for the sampler table (exact K784 exists: 19.43, job 4290714). Costs to state: 3.8 M couplings per noise
+    level at 32x32 instead of 2.2 M (my count), for 0.8 FID. The section can also hold the other simplifications
+    (no springs, harmonic visible units, binary patch units): one place for "what each simplification costs".
+  - **Second proposal by the user (2026-11-22): K by a coarse search, per data set; K784 for MNIST, K16 for
+    Fashion and CelebA.** My reply: the per-data-set choice by a stated rule is the best option (no new runs), but
+    Fashion belongs with MNIST: K784 is worth 4.7 FID there (21.32 against 26.00; clear-class share 62% against
+    50%), as much as on MNIST (4.4). Rule proposed for the text: the smallest K within one FID of the largest
+    tested, with the patch units fixed; this gives K784 for MNIST (K128 is 2.0 worse) and Fashion (K128 is 2.2
+    worse) and K16 for CelebA-32 (0.8 worse than K784). `main.tex` is already written this way; the rule is now
+    in the setup bullet. Awaiting the user's decision between this and "K784 everywhere".
   - **Label the pixels-only row correctly:** it is the simplified visible energy of this paper (quartic on-site
     terms, springs to 8 neighbours), not the model of the first paper (all pairs within distance 14, three pair
     terms). It must not be presented as the first paper's result.
@@ -122,6 +277,43 @@ This section is the plan. Sections 1 to 6 record the state of 2026-11-17 and are
     similar models. A likely cause: 2000 samples are fewer than the 2048 feature dimensions, so the extrapolation
     in 1/N is not in its linear range. Report the FID at fixed n with the floor of real images at the same n, and
     FID_inf only from the 10,000-sample sets.
+
+- **First wave of the lock-in runs (2026-11-22; notebook, "LOCK-IN RESULTS, first wave"; seed 1, n = 2000, noise
+  start, Inception FID).** In the paper: K16 for CelebA, K784 for MNIST and Fashion (my assumption for the tables;
+  the user ran both).
+
+  | SDE + quench 1 (with corrector) | exact | on device S = 64 | on device S = 16 |
+  |---|---|---|---|
+  | CelebA-32, K16 | 20.20 (19.95) | 21.20 (20.23) | 21.23 (20.49) |
+  | MNIST, K784 | 10.01 (9.19) | 11.37 (9.79) | 11.80 (10.17) |
+  | Fashion, K784 | 21.32 (21.82) | 23.44 (23.50) | 22.93 (23.52) |
+  | MNIST, K16 | 14.39 (12.00) | 15.22 (12.56) | 15.38 (12.79) |
+  | Fashion, K16 | 26.00 (25.80) | 28.29 (27.44) | 27.54 (26.08) |
+
+  - Galleries (`2026-11-21_celeba32_locked-recipe_..._exact-vs-on-device-S64-vs-S16_...`,
+    `2026-11-21_{mnist,fashion}_locked-patches-64-states_K16-and-K784_exact-vs-on-device-...`): looked at on
+    2026-11-22. Exact, S = 64 and S = 16 draw the same face, digit or garment on almost every trajectory. This strip
+    is the strongest figure for claim 2.
+  - **Claim 2 wording:** "within 1 to 2 FID of exact training" (0.3 to 0.6 with the corrector on CelebA and MNIST),
+    not "matches": the gaps are several bootstrap standard deviations, and Fashion is about +2 in every row.
+  - **S = 16 equals S = 64 everywhere.** The gap to exact training therefore does not come from the number of reads.
+    Figure 2 as planned (FID against S) would show two flat points per data set. Options: make the same-trajectory
+    strip the figure; or add one run with fewer reads (S = 4) to show where sampling starts to cost. Not requested.
+  - **To state in the paper:** 1 to 9 of 2000 trajectories diverged for the MNIST models trained on device (none
+    exact, none on other data); cause not known.
+  - **K:** on CelebA-32, K784 gives 19.43 against 20.20 (control); on MNIST and Fashion it is worth 4.4 and 4.7.
+    The K rows are the ablation "the global unit carries the class".
+  - **Time compression does not transfer:** post-hoc knots 5/9/9 give 23.65 on CelebA-32 on device (+2.5), 234 on
+    MNIST and 88 to 98 on Fashion. The paper must not say that a few coupling sets suffice (section 12, "what is
+    ours", item 4, is corrected by this).
+  - **Sampler ablation (CelebA-32):** as sampled 76.70 / 79.59, quench 20.20 / 21.20, corrector 19.95 / 20.23,
+    ODE + quench 22.14 / 22.93 (exact / S = 64). **Spring ablation, fourth row:** no springs and harmonic on-site
+    term only 27.42.
+  - **Still open:** CelebA-64 (exact being resampled after an out-of-memory failure; on device S = 64 about 4 days,
+    S = 16 about 3 days from 2026-11-22 10:10); the second wave (seeds 2 and 3, 10,000 samples), which should include
+    seeds of the exact runs, because the gap to exact is the claim; the parameter counts (my count 2.24 M at 32x32
+    with K16, the notebook says about 2.4 M; 2.75 M at 28x28 with K784).
+  - `results.tex` is filled with these numbers (one decimal); `main.tex` Sections 3.1, 5 and 6 are updated.
 
 ## 1. Thesis and scope
 
@@ -1068,4 +1260,23 @@ texts read).
 - 2026-11-21 (17:00): section 0, results of the global-unit test (K784 with the locked patches is best on MNIST
   and Fashion; decision pending) and of the spring ablation (20.20 / 25.83 / 218.4); notes on the label of the
   pixels-only row and on FID_inf.
+- 2026-11-22: section 0, first wave of the lock-in runs (on device 1 to 2 FID above exact, S = 16 = S = 64, K784
+  for MNIST and Fashion, post-hoc knots fail on MNIST and Fashion); `results.tex` filled, `main.tex` updated.
+- 2026-11-22 (afternoon): **decision by the user: K per data set by the stated rule** ("okay lets go with that"):
+  K784 for MNIST and Fashion, K16 for CelebA at both resolutions; smallest K within one FID of the largest tested.
+  The user also wants the result that the global unit matters on MNIST and Fashion and hardly on faces featured;
+  it is the paragraph "The global unit carries the class" in Section 5.3.
+- 2026-11-22 (afternoon): **Sections 5 to 8 of `main.tex` written as prose.** 5.1 Setup; 5.2 Training from
+  Sampled Hidden States (Table 1, Figure 2); 5.3 What the Parts of the Model Do (new Table 2: visible-energy
+  ablation and K; Figure 3; "Other models" in the text only); 5.4 The Steps of the Sampler (Table 3; the
+  time-dependence control); 5.5 Smaller Models (K16 on faces, 5/9/9 coupling sets, where both fail, binary patch
+  units); 6 Towards Hardware; 7 Related Work; 8 Limitations and Conclusion. The earlier bullets are kept in
+  `ICML-writeup/main_skeleton_bullets_sections5-8_2026-11-22.tex`. Figures 2 and 3 are provisional: four gallery
+  images copied to `ICML-writeup/figures/provisional/` (they still carry their own titles and row labels).
+  **Length:** the main text ends at the top of page 10, about 9.1 pages with the notes shown, against the limit
+  of 8; CelebA-64 and the seeds will add a few lines. Open notes in the text: seeds and sample count; CelebA-64;
+  the origin of the gap to exact training; the cause of the diverged MNIST samples; the fourth cell of the
+  visible-energy ablation (run 4297259); coupling counts from the code; the statements about Bacvanski et al.,
+  De, Gower and Wang & Deng to be checked against the full papers; the first paper's bibliography entry. Still
+  bullets: Software and Data, AI Use Statement, Impact Statement, all appendices.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.

@@ -6294,6 +6294,10 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
   | MNIST | **4289729** | 4289732 | 4289737 | 4289738 |
   | Fashion | **4289730** | 4289733 | 4289739 | 4289740 |
   | CelebA-64 | **4289731** (160 G, 2 days: 64 states double the 60 G / 7.8 h of the 32-state run) | 4289734 | 4289741 | - |
+
+  - CelebA-64 update (2026-11-22): 4289731 trained (6 h) and sampled (4 h), but the quench ran out of GPU memory;
+    4289734 / 4289741 cancelled; quench done by 4297019 (platform allocator) -> corrector 4297020 -> Inception 4297027. See
+    "LOCK-IN RESULTS, first wave".
   | CelebA-32 (exact exists) | - | 4289735 | 4289742 (with ODE 4289736 and on-device 4289676) | - |
 
   - Run names: `{mnist28_d0123456789,fashion28_c0123456789,celeba32g}_K16_ema_potts_quad_local_quartic_r1_lin_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1`,
@@ -6413,6 +6417,8 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
   | locked model with springs (the 20.20 run) | `--pair-terms lin` (radius-1 c_lin (x_i - x_j)^2, the only pair group used) | `celeba32g_K16_ema_potts_quad_local_quartic_r1_lin_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1` | exists |
   | locked model, no springs | identical flags except `--pair-terms none` (on-site quartic terms k_lin x^2 / 2 + k_duff x^4 / 4 + bias kept; global, patch and per-pixel units unchanged) | `celeba32g_K16_ema_potts_quad_local_quartic_r1_nopairs_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1` | **4290231** (12 h) |
   | pixels only (optional row) | the same visible model with springs (`--visible quartic --radius 1 --pair-terms lin`), K = 0, no `--local`, no patches: no hidden units at all | `celeba32g_K0_ema_pixels-only_quartic_r1_lin_mixst_seed1` | **4290232** (6 h) |
+  | no springs, linear self spring only (`--visible harmonic`, added 2026-11-21 17:30) | `--pair-terms none`, k_duff = 0 | `celeba32g_K16_ema_potts_quad_local_harmonic_r1_nopairs_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1` | 4290731: **27.42** (FID_inf 22.83), div 0 (Inception 4290732) |
+  | springs kept, linear self spring (`--visible harmonic --pair-terms lin`; no x^4 term anywhere; added 2026-11-22 10:40, the user: "only linear local and coupling stiffness. no duffing for the visible ones") | k_duff = 0, c_lin kept | `celeba32g_K16_ema_potts_quad_local_harmonic_r1_lin_pooled_mixst_patch16s4S64on10+patch8s2S64on55_seed1` | **4297259** (12 h); Inception 4297260 (all 5 rows), gallery 4297261 (`galleries/2026-11-21_celeba32_spring-ablation_locked-K16-64-states_self-term-quartic-vs-linear_x_springs-vs-none_plus-pixels-only_exact_noise-start_quench1`) |
 
   - Inception 4290233, gallery 4290234
     (`galleries/2026-11-21_celeba32_spring-ablation_locked-K16-64-states_with-vs-without-visible-springs_vs-pixels-only_exact_noise-start_quench1`);
@@ -6459,6 +6465,8 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
     4290734 (K784 vs K16 vs the previous K64), gallery 4290735
     (`galleries/2026-11-21_celeba32_global-unit-test_K16-vs-K784_locked-patches-16x16-8x8-64-states_exact_noise-start_quench1`);
     scratchpad `eval_c32_kglobal.sh`.
+    **Result (Inception 4290734, 23:05):** K784 19.43 (11.59), corrector 19.52 (10.71) vs K16 20.20 (12.34) / 19.95
+    (11.62): -0.8 / -0.4, a small gain (MNIST / Fashion: -4.4 / -4.7).
   - **MNIST / Fashion on device, K16 and K784** (the user chose "K784 + K16"): the held K16 runs released at 17:25
     (4290098, 4290102, 4290107, 4290111; chains as above). K784 on device with the same flags, `--K 784`:
 
@@ -6498,3 +6506,88 @@ rounds) keeps a few slices per parameter set ("knots") and interpolates linearly
     K784 exact, harmonic no-spring run; all evaluation jobs chained.
   - Second wave, after the first results: seeds 2 and 3 of S = 64 for MNIST, Fashion, CelebA-32; 10,000 samples of the
     S = 64 models. Reporting: one table per data set (exact, S64, S16, corrector, knots, ODE).
+
+### LOCK-IN RESULTS, first wave (collected 2026-11-22 10:00; jobs finished 2026-11-21 19:00 - 2026-11-22 01:30)
+
+All: seed 1, n = 2000, noise start, Inception FID against train at n = 2000 with FID_inf in brackets; "div" = samples
+that diverged (left out). K16 = the locked recipe (K16 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t =
+2.22, 64 patch states; 64x64: 32x32 / 16x16); K784 = the same patches with a 784-state global unit. On device = every
+hidden unit sampled with S states per sample, jackknife, visit-count rule for global and patch states, same-draw
+counts. Knots = post-hoc 5/9/9 (global 5, each patch set 9, wl / bl constant) of the S = 64 model, SDE + quench 1.
+
+- **Gate (a) PASSED at the edge (Inception 4289677, 19:14):** CelebA-32 K16 on device S = 64 21.20 (13.43) vs exact
+  20.20 (12.29): +1.00 ("within about 1 FID"); with the corrector +0.28 (below). Context rows: K16 32 states exact
+  22.11 / on device 22.91 (+0.80); the 9/9/9 staircase runs 25.88 / 42.61. CelebA-64 on device submitted on that basis
+  (2026-11-22 10:10, below).
+
+**CelebA-32** (Inception 4290856; K784 4290734; floor 6.43, FID_inf 2.22)
+
+| model | SDE + quench 1 | corrector 2:0.16 + quench 1 | ODE + quench 1 | knots 5/9/9 + quench 1 | as sampled (no quench) |
+|---|---|---|---|---|---|
+| K16 exact (the 20.20 run) | **20.20** (12.34) | **19.95** (11.62) | 22.14 (16.31) | - | 76.70 |
+| K16 on device S = 64 (4289676) | 21.20 (13.55) | 20.23 (11.83) | 22.93 (17.08) | 23.65 (15.10) | 79.59 |
+| K16 on device S = 16 (4290850) | 21.23 (13.45) | 20.49 (11.93) | - | - | 81.28 |
+| K784 exact (4290714; control) | 19.43 (11.59) | 19.52 (10.71) | - | - | 74.49 |
+| previous K64 + early patches, 32 states | 21.72 (14.05) | - | - | - | - |
+
+**MNIST ten digits** (Inception 4290780, classifier 4290781; floor 3.70, FID_inf 1.11; classifier FID in the last
+two columns)
+
+| model | SDE + quench 1 | corrector + quench 1 | knots 5/9/9 | classifier FID, quench 1 | classifier FID, corrector |
+|---|---|---|---|---|---|
+| K16 exact | 14.39 (8.13) | 12.00 (4.83) | - | 14.23 | 12.27 |
+| K16 on device S = 64 | 15.22 (8.86), div 2 | 12.56 (5.69), div 5 | 234.1 | 13.72 | 11.88 |
+| K16 on device S = 16 | 15.38 (9.51), div 9 | 12.79 (5.89), div 4 | - | 13.80 | 12.68 |
+| K784 exact | 10.01 (4.49) | **9.19 (3.55)** | - | 6.23 | **5.06** |
+| K784 on device S = 64 | 11.37 (5.64) | 9.79 (3.85) | 234.4 | 6.60 | 6.46 |
+| K784 on device S = 16 | 11.80 (6.33), div 1 | 10.17 (4.08), div 6 | - | 7.86 | 6.55 |
+| old best K784 + 7x7, 32 states | 27.86 (24.13) | - | - | 7.66 | - |
+
+**Fashion ten classes** (Inception 4290789, classifier 4290790; floor 7.17, FID_inf 2.09)
+
+| model | SDE + quench 1 | corrector + quench 1 | knots 5/9/9 | classifier FID, quench 1 | classifier FID, corrector |
+|---|---|---|---|---|---|
+| K16 exact | 26.00 (15.66) | 25.80 (14.62) | - | 5.97 | 4.88 |
+| K16 on device S = 64 | 28.29 (17.78) | 27.44 (15.39) | 98.0 | 6.45 | 5.38 |
+| K16 on device S = 16 | 27.54 (17.06) | 26.08 (14.10) | - | 6.08 | 4.80 |
+| K784 exact | **21.32 (9.58)** | 21.82 (9.88) | - | 2.77 | **2.32** |
+| K784 on device S = 64 | 23.44 (11.92) | 23.50 (11.08) | 88.0 | 3.54 | 3.01 |
+| K784 on device S = 16 | 22.93 (11.51) | 23.52 (11.67) | - | 3.51 | 2.97 |
+| old best K784 + 8x8, 32 states | 26.35 (13.71) | - | - | 3.17 | - |
+
+- **On device vs exact (SDE + quench 1 / corrector):** CelebA-32 +1.0 / +0.3 (S = 64), +1.0 / +0.5 (S = 16); MNIST K16
+  +0.8 / +0.6 and +1.0 / +0.8, K784 +1.4 / +0.6 and +1.8 / +1.0; Fashion K16 +2.3 / +1.6 and +1.5 / +0.3, K784 +2.1 /
+  +1.7 and +1.6 / +1.7. **S = 16 is as good as S = 64 everywhere** (within the noise; on Fashion slightly better). On
+  device the MNIST models produce a few diverged samples (1-9 of 2000; none exact).
+- **Post-hoc knots 5/9/9 fail on MNIST and Fashion** (234 on MNIST for both K16 and K784, classifier FID 431 / 485 with
+  almost no '0's; Fashion 98 / 88), while CelebA-32 costs +2.5 (23.65 vs 21.20). The compression reports
+  (4290100 / 4290776 / 4290853) show why: the visible group (theta) at 5 knots has relative error 0.35 on MNIST vs 0.12
+  on CelebA-32, the global W / b / Q 0.30-0.55 vs 0.22-0.30. The recipe was tuned on CelebA; on the ten-class data the
+  visible and global parameters change too much in time for 5 knots. Not tuned (lock-in rule).
+- **ODE + quench (CelebA-32):** exact 22.14, on device 22.93: about +2 over the SDE, as before.
+- **K784 on CelebA-32 (control):** 19.43 vs 20.20 (-0.8), with the corrector 19.52 vs 19.95 (-0.4): a small gain, far
+  less than on MNIST / Fashion (-4.4 / -4.7): on faces the global unit matters little.
+- **Spring ablation, harmonic row (Inception 4290732):** no springs and only the linear self spring (--visible
+  harmonic, run 4290731) 27.42 (22.83), div 0; vs no springs with the quartic self term 25.83 (20.32) and the locked
+  model 20.20 (12.34). Dropping the x^4 self term costs another +1.6 and, despite the negative margins seen in the
+  quartic model, no sample diverged. Gallery
+  `galleries/2026-11-21_celeba32_spring-ablation_locked-K16-64-states_with-vs-without-springs_vs-harmonic-self-spring-only_vs-pixels-only_exact_noise-start_quench1`.
+- **CelebA-64 exact (4289731): training (about 6 h) and the 2000 SDE samples (20 chunks of 100, 4 h) done; the
+  quench after them FAILED** (GPU out of memory allocating 7.2 GB, the size of hidden_history.npz with 64 patch
+  states). Corrector 4289734 and Inception 4289741 never started (cancelled). 2026-11-22 10:05, job **4297019**
+  (`XLA_PYTHON_CLIENT_ALLOCATOR=platform`, `--chunk 25`, 160 G) found the saved SDE samples and ran only the quench
+  (177 s; corrected 10:20, I first read the failure as a sampling failure). Corrector 4297020 (running), early
+  Inception (exact only) 4297027.
+- **CelebA-64 on device (submitted 2026-11-22 10:10, after gate (a)):** S = 64 pipeline **4297021** (4 days; on device
+  S = 64 took about 4x exact on CelebA-32, exact 64x64 trained about 6 h), corrector 4297022, knots 4297023 / 4297024; S =
+  16 pipeline **4297025** (3 days), corrector 4297026; all with `--chunk 25`, platform allocator, 160 G. Full CelebA-64
+  table: Inception 4297028, gallery 4297029. Scratchpad `c64_lock_ids.txt`.
+- **Galleries** (real, exact, S = 64, S = 16 on the same trajectories): `galleries/2026-11-21_celeba32_locked-recipe_K16_64-patch-states_exact-vs-on-device-S64-vs-S16_noise-start_quench1`,
+  `..._mnist_locked-recipe_...`, `..._fashion_locked-recipe_...`; K16 + K784 together:
+  `galleries/2026-11-21_{mnist,fashion}_locked-patches-64-states_K16-and-K784_exact-vs-on-device-S64-vs-S16_noise-start_quench1`.
+- **Disk 2026-11-22 10:00:** 907 G of 1 T used (89%), 118 G free; a 64x64 run takes about 14.5 G (hidden_history 7.2 G
+  **Looked at (2026-11-22):** in all three galleries, on device S = 64 and S = 16 draw nearly the same image as exact
+  training on the same trajectory in almost every column (same face / digit / garment, small differences in detail;
+  a few columns differ, e.g. MNIST K784 S = 16 column 11). On-device training learns essentially the same model;
+  a candidate paper figure.
+  + slices/ 7.2 G, which duplicate it).

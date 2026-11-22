@@ -117,8 +117,9 @@ reaches an FID of \FIDcelebLowSlarge{} on $32\times32$ CelebA, against
 \FIDcelebLowExact{} with exact hidden averages, and the same architecture
 generates MNIST, Fashion-MNIST and $64\times64$ faces
 (FID \FIDmnistSlarge, \FIDfashionSlarge{} and \FIDcelebHighSlarge).
-On MNIST and Fashion-MNIST this improves on earlier generative models designed
-for analog hardware.
+% Removed 2026-11-22: "On MNIST and Fashion-MNIST this improves on earlier
+% generative models designed for analog hardware." The FIDs of those papers are
+% reported without sample count or implementation, so the claim is not supported.
 We describe how each operation of training and generation maps onto analog
 crossbar hardware.
 \end{abstract}
@@ -220,8 +221,9 @@ divided by the temperature, is the score. Our contributions are:
         \FIDcelebLowExact{} with exact hidden averages, and generates MNIST,
         Fashion-MNIST and $64\times64$ faces
         (Section~\ref{sec:experiments}).
-        \todo{one clause on the comparison with earlier analog-hardware models
-        once the MNIST and Fashion numbers are fixed.}
+        \todo{state quality against the floor of real images at the same
+        sample count, not as a ranking against FIDs reported in other
+        papers.}
 \end{itemize}
 All results are simulations in the limit of fast hidden units. Training
 samples the hidden states; the forces at the clamp are computed exactly
@@ -309,8 +311,9 @@ We use three kinds of hidden unit:
 grid of overlapping square patches, in a coarse set and a fine set;
 (iii)~one bistable unit $\sigma_i=\pm1$ per pixel, with energy
 $-\sigma_i(\nu_i+w_ix_i)$, which can give the pixel an on-site double well.
-In our experiments $K=\Kglobal$ and $M=\Mpatch$ (Section~\ref{sec:setup}).
-\todo{$K$ on MNIST and Fashion is open: see the outline, section 0.}
+In our experiments $M=\Mpatch$, and $K=\Kglobal$ for faces and
+$K=\KglobalClasses$ for the two data sets with ten classes
+(Section~\ref{sec:setup}).
 The visible energy has the form used by \citet{firstpaper2025}, restricted to
 on-site terms and springs between the eight nearest neighbours
 $\langle ij\rangle$ of the pixel grid,
@@ -348,7 +351,10 @@ average of these forces,
   \label{eq:mean-force}
 \end{align}
 with $\bm{e}_i$ the unit vector of pixel $i$. The hidden units are neither
-controlled nor read during generation.
+controlled nor read during generation. They interact only through the pixels
+they share: a unit that changes its state moves its pixels, which changes the
+fields of every other unit coupled to them. The image is the one medium
+through which the hidden units agree.
 
 \textbf{Time dependence.}
 Every parameter in \eqref{eq:field}--\eqref{eq:free-energy} depends on the
@@ -392,8 +398,11 @@ and the patch units multiply mixtures (Section~\ref{sec:related}).
 \textbf{Size.}
 The model has \paramsCelebLow{} couplings per noise level at $32\times32$
 pixels (\paramsSmall{} at $28\times28$ and \paramsCelebHigh{} at
-$64\times64$), nearly all of them in the patch units.
-\todo{check ``nearly all in the patch units'' for the final $K$.}
+$64\times64$). With $K=\Kglobal$ nearly all of them are in the patch units;
+with $K=\KglobalClasses$ the global unit holds almost half.
+\todo{counts to confirm with the code: my count from the unit sizes is
+2.24\,M at $32\times32$ with $K=\Kglobal$ (the notebook says about 2.4\,M) and
+2.75\,M at $28\times28$ with $K=\KglobalClasses$.}
 
 \subsection{Generation}
 
@@ -619,72 +628,76 @@ gradient and a leaky count of its visits, and step by their ratio
 % =============================================================================
 \section{Experiments}
 \label{sec:experiments}
-\budget{3.0 pages, including Figures~\ref{fig:ondevice}, \ref{fig:samples} and the two tables}
+\budget{3.0 pages planned, including Figures~\ref{fig:ondevice}, \ref{fig:samples} and the tables}
 
 \subsection{Setup}
 \label{sec:setup}
-\begin{plan}
-  \item \textbf{Data.} MNIST \citep{lecun1998gradient}, Fashion-MNIST
-        \citep{xiao2017fashion}, CelebA \citep{liu2015deep} as grey centre crops
-        at $32\times32$ and $64\times64$. Pixels in $[0,1]$ with
-        $\mathcal{N}(0,0.01^{2})$ noise, one global normalisation.
-  \item \textbf{Model.} The same for all four: $K=\Kglobal$, $M=\Mpatch$,
-        \nSlices{} slices, $T=0.02$, $\tau=5$. \todo{state the one thing that
-        differs with resolution: the patch sizes.}
-  \item \textbf{Training.} Each slice separately, from $t=\tau$ down, warm
-        started from the previous slice; 512 fresh noised images per step.
-        Three runs per data set: exact hidden averages; sampled with
-        $S=\Slarge$; sampled with $S=\Ssmall$.
-  \item \textbf{Sampling.} Noise start, reverse SDE \eqref{eq:reverse}, quench.
-        \nSamples{} samples per model.
-  \item \textbf{Metric.} Inception FID against the train split
-        \citep{heusel2017gans}; the floor is the FID of real test images at the
-        same sample count. \todo{say whether FID at n or the extrapolated
-        FID$_\infty$ \citep{chong2020effectively} is reported.}
-  \item \textbf{Compute.} One GPU per run; hours in
-        Appendix~\ref{app:details}.
-\end{plan}
+
+\textbf{Data.}
+We use MNIST \citep{lecun1998gradient}, Fashion-MNIST \citep{xiao2017fashion}
+and CelebA \citep{liu2015deep}, the last as grey centre crops at $32\times32$
+and $64\times64$ pixels. Pixel values in $[0,1]$ receive Gaussian noise of
+standard deviation $0.01$ and are normalised by one mean and one standard
+deviation per data set.
+
+\textbf{Model.}
+All experiments use $T=0.02$, $\tau=5$ and \nSlices{} equally spaced noise
+levels. The patch units have $M=\Mpatch$ states; the coarse set acts for
+$t\le t_{\mathrm c}=4.49$ and the fine set for $t\le t_{\mathrm f}=2.22$. Up
+to $32\times32$ pixels the coarse patches measure $16\times16$ pixels and are
+placed every 4 pixels, the fine ones $8\times8$ every 2 pixels; at
+$64\times64$ all four numbers double. The size $K$ of the global unit is the
+one quantity chosen per data set, by a coarse search with the patch units
+fixed: $K\in\{16,128,784\}$ on MNIST and Fashion-MNIST, and $K\in\{16,784\}$
+on CelebA $32\times32$. We take the smallest $K$ within one FID of the
+largest, which gives $K=\KglobalClasses$ for MNIST and Fashion-MNIST and
+$K=\Kglobal$ for CelebA at both resolutions. This choice was made on the
+reported metric with one seed; Section~\ref{sec:quality} gives all values.
+
+\textbf{Training.}
+The noise levels are trained one at a time from $t=\tau$ down to $t=0$, each
+started from the result of the previous one, on minibatches of 512 freshly
+noised training images. The templates of the global unit start from $k$-means
+prototypes of the training images, and a patch set starts from a small
+multiple of its own when it is switched on (Appendix~\ref{app:details}). We
+compare three ways of training the same model.
+\emph{Exact:} the occupations $p_m$ in \eqref{eq:rule} are computed in closed
+form, and all parameters are updated with Adam \citep{kingma2015adam}.
+\emph{Sampled, $S=\Slarge$ and $S=\Ssmall$:} every hidden unit is read $S$
+times per clamped image, and the gradient is formed from these reads with the
+jackknife \eqref{eq:jackknife} and the visit-count rule of
+Section~\ref{sec:sampled}.
+In all three, the clamp forces and the sums over pixels are computed in exact
+arithmetic (Section~\ref{sec:onephase}).
+
+\textbf{Sampling.}
+Samples start from $\mathcal{N}(0,TI)$ and follow the reverse process
+\eqref{eq:reverse}, integrated with an adaptive stochastic solver, and then
+the quench for one unit of time. Where stated, two corrector steps follow
+every stored noise level.
+
+\textbf{Metric.}
+We report the Fr\'echet Inception distance \citep{heusel2017gans} between
+\nSamples{} generated images and the full training split. We use the original
+Inception network; the samples are clipped to $[0,1]$ and quantised to 8 bits,
+and grey images are replicated to three channels. At this sample count the FID
+has a floor: \nSamples{} real test images against the same reference give
+\floorMnist{} on MNIST, \floorFashion{} on Fashion-MNIST, and \floorCelebLow{}
+and \floorCelebHigh{} on CelebA at the two resolutions. All numbers are for
+one seed; the standard deviation over bootstrap resamples of the generated
+images is between 0.2 and 0.6.
+\todo{second wave: three seeds, also for the exact runs; decide between
+2{,}000 and 10{,}000 samples.}
 
 \subsection{Training from Sampled Hidden States}
-\begin{plan}
-  \item \textbf{Main result} (Figure~\ref{fig:ondevice},
-        Table~\ref{tab:results}): with $S=\Slarge$ the FID is within
-        \todo{x} of exact training on all four data sets
-        (CelebA $32\times32$: \FIDcelebLowSlarge{} against \FIDcelebLowExact).
-  \item \textbf{Fewer samples.} $S=\Ssmall$: \FIDcelebLowSsmall{}.
-        \todo{one sentence on where it starts to cost.}
-  \item \textbf{Same samples.} With the same start and noise, exact and sampled
-        training give the same images (strip in Figure~\ref{fig:samples} or
-        Appendix~\ref{app:more-results}).
-  \item \textbf{Seeds.} Spread over three seeds: \seedSdCelebLow{} (CelebA),
-        \seedSdMnist{} (MNIST), \seedSdFashion{} (Fashion).
-\end{plan}
-
-% ---------------------------------------------------------------- Figure 2 ---
-\begin{figure}[t]
-  \centering
-  \placeholderbox{\columnwidth}{2.1in}{%
-    \textbf{Figure 2 placeholder.}\par\smallskip
-    FID against the number of sampled hidden states.\par\smallskip
-    x-axis: $S=\Ssmall$, $S=\Slarge$, exact ($S\to\infty$).\par
-    y-axis: FID (log scale if the data sets differ much).\par
-    One line per data set: MNIST, Fashion-MNIST, CelebA $32\times32$,
-    CelebA $64\times64$; or four small panels.\par
-    Dashed line: exact training. Error bars: seeds, where run.\par\smallskip
-    Source: the lock-in runs; numbers as in Table~\ref{tab:results}.}
-  \caption{\textbf{Training from sampled hidden states matches training with
-    exact hidden averages.} \todo{caption: what is plotted, the protocol in one
-    line, the take-away.}}
-  \label{fig:ondevice}
-\end{figure}
 
 % ----------------------------------------------------------------- Table 1 ---
 \begin{table}[t]
-  \caption{\textbf{FID on four data sets} (\nSamples{} samples, quench).
-    Top: this work with exact hidden averages and with $S$ sampled hidden
-    states. Middle: earlier generative models for analog hardware
-    \todo{their sample counts are not stated; say so}.
-    Bottom: real test images.}
+  \caption{\textbf{FID with exact hidden averages and with $S$ sampled hidden
+    states per clamped image} (\nSamples{} samples, reverse process and
+    quench; one seed). $K=\KglobalClasses$ for MNIST and Fashion-MNIST,
+    $K=\Kglobal$ for CelebA. Bottom: real test images at the same sample
+    count, the floor of this protocol.}
   \label{tab:results}
   \centering
   \small
@@ -693,79 +706,180 @@ gradient and a leaky count of its visits, and step by their ratio
     \toprule
       & MNIST & Fashion & CelebA\,32 & CelebA\,64 \\
     \midrule
-    \multicolumn{5}{l}{\emph{This work}} \\
     exact averages        & \FIDmnistExact  & \FIDfashionExact  & \FIDcelebLowExact  & \FIDcelebHighExact  \\
     sampled, $S=\Slarge$  & \FIDmnistSlarge & \FIDfashionSlarge & \FIDcelebLowSlarge & \FIDcelebHighSlarge \\
     sampled, $S=\Ssmall$  & \FIDmnistSsmall & \FIDfashionSsmall & \FIDcelebLowSsmall & \FIDcelebHighSsmall \\
-    $S=\Slarge$, corrector & \FIDmnistSlargeCorr & \FIDfashionSlargeCorr & \FIDcelebLowSlargeCorr & \FIDcelebHighSlargeCorr \\
     \midrule
-    \multicolumn{5}{l}{\emph{Earlier models for analog hardware}} \\
-    Wang \& Achour        & \FIDwaMnist  & \FIDwaFashion  & -- & -- \\
-    DTM (re-run)          & \FIDdtmMnist & \FIDdtmFashion & -- & -- \\
-    NLM (re-run)          & \FIDnlmMnist & \FIDnlmFashion & -- & -- \\
+    \multicolumn{5}{l}{\emph{with corrector}} \\
+    exact averages        & \FIDmnistExactCorr  & \FIDfashionExactCorr  & \FIDcelebLowExactCorr  & \FIDcelebHighExactCorr  \\
+    sampled, $S=\Slarge$  & \FIDmnistSlargeCorr & \FIDfashionSlargeCorr & \FIDcelebLowSlargeCorr & \FIDcelebHighSlargeCorr \\
+    sampled, $S=\Ssmall$  & \FIDmnistSsmallCorr & \FIDfashionSsmallCorr & \FIDcelebLowSsmallCorr & \FIDcelebHighSsmallCorr \\
     \midrule
     real test images      & \floorMnist & \floorFashion & \floorCelebLow & \floorCelebHigh \\
     \bottomrule
   \end{tabular}
 \end{table}
 
-\subsection{Sample Quality and Comparison}
-\begin{plan}
-  \item \textbf{Samples} (Figure~\ref{fig:samples}): uncurated, next to real
-        images, from the model trained with $S=\Slarge$.
-  \item \textbf{Against earlier analog-hardware models}
-        (Table~\ref{tab:results}): MNIST \FIDmnistSlarge{} against \FIDwaMnist{}
-        \citep{wangachour2026}; Fashion-MNIST \FIDfashionSlarge{} against
-        \FIDwaFashion. Say how they are trained (adversarial loss with
-        backpropagation through the solver) and how large they are; ours is
-        larger. \todo{parameter counts of both, in the text or the table.}
-  \item \textbf{Faces.} No earlier model of this kind reports faces.
-        \todo{a digital reference on the same grey data, if run.}
-  \item \textbf{No memorisation.} Nearest-training-image distances as for real
-        test images (Appendix~\ref{app:more-results}).
-  \item \textbf{What is still wrong.} \todo{one honest sentence: contrast of
-        faces, residual malformed digits.}
-\end{plan}
+Table~\ref{tab:results} compares the three ways of training. With
+$S=\Slarge$ reads per clamped image, the FID is 1.0 above exact training on
+CelebA $32\times32$ (\FIDcelebLowSlarge{} against \FIDcelebLowExact), 1.4
+above on MNIST (\FIDmnistSlarge{} against \FIDmnistExact) and 2.1 above on
+Fashion-MNIST (\FIDfashionSlarge{} against \FIDfashionExact). These gaps
+exceed the bootstrap error, so sampled training comes close to exact training
+without reaching it. With the corrector the gap shrinks to 0.3 on CelebA and
+0.6 on MNIST, and stays at 1.7 on Fashion-MNIST.
+\todo{CelebA $64\times64$: \FIDcelebHighExact{} exact; the sampled runs are
+running.}
+
+\textbf{Sixteen reads are enough.}
+Reducing the reads from \Slarge{} to \Ssmall{} changes the FID by 0.5 or
+less, in either direction (\FIDcelebLowSsmall, \FIDmnistSsmall{} and
+\FIDfashionSsmall). The gap to exact training is therefore not set by the
+number of reads. We have not isolated its origin; besides the sampling, the
+two ways of training differ in the update of the hidden couplings, which
+uses the visit-count rule in place of Adam.
+
+\textbf{The same model is learned.}
+Figure~\ref{fig:ondevice} makes the comparison image by image. The three
+models are trained from the same initial templates and sampled with the same
+initial noise and the same noise path. In almost every column they generate
+the same face, with differences in detail; the same holds for digits and
+garments (Appendix~\ref{app:more-results}). Training from sixteen sampled
+states per hidden unit thus finds essentially the model that exact averages
+find.
+
+\textbf{Diverging samples.}
+For the MNIST model trained with $S=\Ssmall$, 1 of \nSamples{} trajectories
+diverged (6 with the corrector) and was left out of the FID. No trajectory
+diverged for any other model in Table~\ref{tab:results}.
+\todo{cause not known; check after the second wave.}
+
+% ---------------------------------------------------------------- Figure 2 ---
+\begin{figure*}[t]
+  \centering
+  \includegraphics[width=\textwidth]{figures/provisional/strip_celeba32_exact_S64_S16.png}
+  \caption{\textbf{Sampled training learns the same model as exact training.}
+    CelebA $32\times32$. Top row: real images. Below: samples of the models
+    trained with exact hidden averages, with $S=\Slarge$ and with
+    $S=\Ssmall$ sampled hidden states. Each column uses the same initial
+    noise and the same noise path in all three models, which were trained
+    from the same initial templates.
+    \todo{provisional: a gallery image with its own labels. Redraw without
+    the title, with the row labels of this caption, and add MNIST and
+    Fashion-MNIST rows if space allows.}}
+  \label{fig:ondevice}
+\end{figure*}
+
+\subsection{What the Parts of the Model Do}
+\label{sec:quality}
+
+% ----------------------------------------------------------------- Table 2 ---
+\begin{table}[t]
+  \caption{\textbf{Ablations} (FID, exact hidden averages, one seed).
+    Top: the visible energy on CelebA $32\times32$ with the hidden units
+    unchanged, and the visible energy alone. Bottom: the size $K$ of the
+    global unit with the patch units unchanged.}
+  \label{tab:ablation}
+  \centering
+  \small
+  \setlength{\tabcolsep}{4pt}
+  \begin{tabular}{lc}
+    \toprule
+    Visible energy (CelebA\,32) & FID \\
+    \midrule
+    quartic on-site term, springs (full model) & \FIDcelebLowExact \\
+    harmonic on-site term, springs             & \FIDablHarmonicSprings \\
+    quartic on-site term, no springs           & \FIDablNoSprings \\
+    harmonic on-site term, no springs          & \FIDablHarmonic \\
+    full visible energy, no hidden units       & \FIDablPixelsOnly \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{4pt}
+  \begin{tabular}{lccc}
+    \toprule
+    Global unit & MNIST & Fashion & CelebA\,32 \\
+    \midrule
+    $K=16$  & \FIDmnistSmallK & \FIDfashionSmallK & \FIDcelebLowExact \\
+    $K=128$ & \FIDmnistMidK   & \FIDfashionMidK   & -- \\
+    $K=784$ & \FIDmnistExact  & \FIDfashionExact  & \FIDcelebLowLargeK \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{The hidden units carry the content.}
+The visible energy alone, without any hidden unit, gives an FID of
+\FIDablPixelsOnly{} on CelebA $32\times32$: every trajectory ends in the same
+generic, face-like texture (Table~\ref{tab:ablation}). This is the visible
+energy of the present model, with springs to the nearest neighbours only; it
+is not the model of \citet{firstpaper2025}, which couples many more pairs.
+Adding the hidden units without the springs gives \FIDablNoSprings, and the
+full model \FIDcelebLowExact. On the same trajectories, the models with and
+without springs generate the same faces. Without springs the images carry
+grain from pixel to pixel, as expected: given the hidden states, the pixels
+are then independent, and nothing correlates the noise of neighbours.
+Replacing the quartic on-site term by a harmonic one as well gives
+\FIDablHarmonic. The three sets of images are hard to tell apart at a
+glance; the Inception features, however, are sensitive to such grain.
+\todo{the fourth cell, harmonic on-site term with springs, is running.}
+
+\textbf{The global unit carries the class.}
+The size of the global unit matters on the two data sets with ten classes
+and hardly on faces (Table~\ref{tab:ablation}). From $K=16$ to $K=784$ the
+FID falls from \FIDmnistSmallK{} to \FIDmnistExact{} on MNIST and from
+\FIDfashionSmallK{} to \FIDfashionExact{} on Fashion-MNIST, but only from
+\FIDcelebLowExact{} to \FIDcelebLowLargeK{} on CelebA. At $K=16$ the digits
+have clean strokes, yet many are not a digit: a classifier assigns 72\% of
+them to a class with confidence, against 83\% at $K=784$ and 98\% for real
+digits. We read this as follows. The patch units interact only through the
+pixels they share, so they agree locally. To which of ten classes an image
+belongs is a global decision, and it needs mutually exclusive global
+templates for every class. Aligned faces form one class with a fixed layout:
+a few global templates suffice, and the patch units carry the variation.
+In the language of associative memories, the number of global memories that
+a data set needs follows its number of global modes, not its number of
+images.
+
+\textbf{Samples.}
+Figure~\ref{fig:samples} shows uncurated samples of the models trained with
+$S=\Slarge$. Two defects remain visible. Some digits are malformed, as
+quantified above. The faces have less contrast than the data: backgrounds and
+hair are drawn towards mid-grey. The samples are not copies of their nearest
+training images (Appendix~\ref{app:more-results}), which is expected from the
+capacity: $K$ global templates stand against more than 50{,}000 training
+images.
+
+\textbf{Other models.}
+We do not rank our FIDs against those reported elsewhere.
+\citet{wangachour2026} report \FIDwaMnist{} on MNIST and \FIDwaFashion{} on
+Fashion-MNIST for an oscillator network trained adversarially by
+backpropagation through the solver, and \citet{liao2022gaussian} report 17.5
+on MNIST for a restricted Boltzmann machine with Gaussian visible units.
+Neither paper states the number of samples or the reference set, and in our
+protocol the sample count alone moves the FID of real MNIST test images from
+\floorMnist{} at 2{,}000 samples to 11.1 at 1{,}000. Among the models
+proposed for analog hardware \citep{jelincic2025dtm,wangachour2026}, none
+reports faces.
 
 % ---------------------------------------------------------------- Figure 3 ---
 \begin{figure*}[t]
   \centering
-  \placeholderbox{0.235\textwidth}{2.5in}{%
-    \textbf{MNIST}\par\smallskip real (left half)\par generated, $S=\Slarge$
-    (right half)\par\smallskip uncurated, fixed seed}\hfill
-  \placeholderbox{0.235\textwidth}{2.5in}{%
-    \textbf{Fashion-MNIST}\par\smallskip real (left half)\par generated,
-    $S=\Slarge$ (right half)\par\smallskip uncurated, fixed seed}\hfill
-  \placeholderbox{0.49\textwidth}{2.5in}{%
-    \textbf{CelebA}\par\smallskip top: $32\times32$, real and generated\par
-    bottom: $64\times64$, real and generated\par\smallskip
-    \textbf{Figure 3 placeholder.} Optional last row: the same trajectories
-    with exact averages, $S=\Slarge$ and $S=\Ssmall$.}
-  \caption{\textbf{Generated images on the three data sets,} from the model
-    trained with $S=\Slarge$ sampled hidden states. \todo{caption: uncurated;
-    which rows are real; protocol in one line.}}
+  \includegraphics[width=0.325\textwidth]{figures/provisional/grid_mnist_K784_S64.png}\hfill
+  \includegraphics[width=0.325\textwidth]{figures/provisional/grid_fashion_K784_S64.png}\hfill
+  \includegraphics[width=0.325\textwidth]{figures/provisional/grid_celeba32_K16_S64.png}
+  \caption{\textbf{Uncurated samples of the models trained from $S=\Slarge$
+    sampled hidden states:} MNIST, Fashion-MNIST and CelebA $32\times32$,
+    the first 100 of \nSamples{} samples each.
+    \todo{provisional: gallery images with their own titles. Redraw without
+    titles, with a column of real images, and add CelebA $64\times64$.}}
   \label{fig:samples}
 \end{figure*}
 
 \subsection{The Steps of the Sampler}
-\begin{plan}
-  \item \textbf{Quench.} As sampled against quenched
-        (Table~\ref{tab:sampler}): the largest single effect.
-  \item \textbf{Corrector.} Small at $32\times32$, larger at $64\times64$.
-  \item \textbf{Noise is needed.} The probability-flow ODE is worse
-        (\FIDablExactOde{} against \FIDcelebLowExact) and sensitive to the scale
-        of the force.
-  \item \textbf{Time dependence is needed} (control on an earlier model,
-        Appendix~\ref{app:model-search}): Langevin dynamics under the final
-        energy alone falls into a blank state. Qualitative parallel: a
-        higher-order associative memory at finite temperature fails to retrieve
-        when started far from every memory \citep{rooke2026stochastic}.
-  \item Could move to the appendix if space is short; keep one sentence here.
-\end{plan}
 
-% ----------------------------------------------------------------- Table 2 ---
+% ----------------------------------------------------------------- Table 3 ---
 \begin{table}[t]
-  \caption{\textbf{Sampler ablation} on CelebA $32\times32$ (FID).}
+  \caption{\textbf{Sampler ablation} on CelebA $32\times32$ (FID, one seed).}
   \label{tab:sampler}
   \centering
   \small
@@ -773,143 +887,231 @@ gradient and a leaky count of its visits, and step by their ratio
     \toprule
     Sampler & exact & $S=\Slarge$ \\
     \midrule
-    reverse SDE, as sampled       & \FIDablExactRaw       & \FIDablSlargeRaw \\
-    + quench                      & \FIDcelebLowExact     & \FIDcelebLowSlarge \\
-    + corrector and quench        & \FIDcelebLowExactCorr & \FIDcelebLowSlargeCorr \\
-    probability-flow ODE + quench & \FIDablExactOde       & \FIDablSlargeOde \\
+    reverse process, as sampled      & \FIDablExactRaw       & \FIDablSlargeRaw \\
+    + quench                         & \FIDcelebLowExact     & \FIDcelebLowSlarge \\
+    + corrector and quench           & \FIDcelebLowExactCorr & \FIDcelebLowSlargeCorr \\
+    probability-flow ODE and quench  & \FIDablExactOde       & \FIDablSlargeOde \\
     \bottomrule
   \end{tabular}
 \end{table}
+
+Table~\ref{tab:sampler} separates the steps of the sampler. The quench has by
+far the largest effect, from \FIDablExactRaw{} to \FIDcelebLowExact: at the
+end of the reverse process the pixels still carry the thermal noise of the
+bath, to which the FID is very sensitive, and switching the bath off removes
+it. The corrector adds 0.2 for the exact model and 1.0 for the sampled one.
+Replacing the reverse
+process by its deterministic counterpart, the probability-flow ODE
+\citep{song2021score}, costs about 2 FID, so the noise of the bath helps.
+
+\textbf{The time dependence is needed.}
+On an earlier MNIST model we ran Langevin dynamics under the final energy
+$F_0$ alone, from the same noise and for up to five times the duration of the
+protocol. Every chain ended in an almost blank image, and none formed a digit
+(Appendix~\ref{app:model-search}). The final landscape has no path from noise
+to data; the sequence of landscapes provides it. A related failure is known
+for higher-order associative memories at finite temperature, which do not
+retrieve when started far from every memory \citep{rooke2026stochastic}.
+
+\subsection{Smaller Models}
+\label{sec:smaller}
+
+\textbf{A smaller global unit.}
+On faces, $K=16$ in place of $K=784$ costs 0.8 FID
+(Table~\ref{tab:ablation}) and removes about two fifths of the couplings.
+\todo{coupling counts per noise level from the code; our count is 2.2\,M
+against 3.8\,M at $32\times32$.}
+
+\textbf{Fewer coupling sets in time.}
+After training, we replaced the \nSlices{} stored coupling sets by 5 for the
+global unit and 9 for each patch set, interpolated linearly in time. On
+CelebA $32\times32$, for the model trained from samples, this stores about
+seven times fewer couplings and raises the FID from \FIDcelebLowSlarge{} to
+\FIDknotsCelebLow.
+\todo{confirm ``seven times'' with the code's count.}
+
+\textbf{Neither reduction carries over to the ten-class data.}
+There, $K=16$ costs 4 to 5 FID and clear digits (Section~\ref{sec:quality}),
+and the same reduction in time fails: the FID rises to \FIDknotsMnist{} on
+MNIST and \FIDknotsFashion{} on Fashion-MNIST, because the visible and the
+global couplings change more over the noise levels than on faces. How few
+coupling sets a model needs when it is trained for few from the start is
+open.
+
+\textbf{Simpler units.}
+In an earlier model, 32 independent bistable units per patch came close to a
+Potts unit with 32 states, whereas a layer of global bistable units lost
+clearly to a global Potts unit (Appendix~\ref{app:model-search}). Together
+with Table~\ref{tab:ablation}: the global level needs mutually exclusive
+templates, the patch level works with independent features, and the visible
+units can be linear and uncoupled at the price of grain.
 
 % =============================================================================
 \section{Towards Hardware}
 \label{sec:hardware}
 \budget{0.6 page; high level, no circuit design}
 
-\begin{plan}
-  \item \textbf{A circuit for the bipartite structure exists; lead with it.}
-        \citet{bacvanski2025dense} design and simulate an analog dense
-        associative memory: visible and hidden neurons joined by one resistive
-        crossbar used in both directions, a softmax over the hidden neurons
-        built from bipolar transistors, and hidden neurons about ten times
-        faster than the visible ones, which gives the same log-sum-exp energy
-        on the visible neurons. It is the deterministic limit of one of our
-        Potts units with stored weights.
-  \item \textbf{What our model needs beyond that circuit.} A noise source for
-        the pixels (the bath); couplings that change in time; the quadratic
-        couplings $Q$; signed couplings (their conductances are non-negative);
-        the learning rule.
-  \item \textbf{Each operation is a known analog primitive.}
-        Fields: forward read of a conductance array (crossbar)
-        \citep{wan2022neurram}.
-        Hidden average: an analog softmax element \citep{elfadel1993softmax};
-        a sampled state: a winner-take-all circuit with noise.
-        Force on the pixels: transposed read of the same array, so the coupling
-        is reciprocal by construction.
-        Learning: rank-one updates per clamped image; with a sampled state only
-        the winner's row changes.
-  \item \textbf{Most of the model is local.} The patch units are wired to
-        their patch only; the global unit has \Kglobal{} states.
-  \item \textbf{Time dependence.} \nSlices{} slices are a convenience of
-        training; a few coupling sets cross-faded in time suffice at sampling.
-        \todo{one sentence with the measured numbers: 5 to 9 sets per parameter
-        group, 7.8 times fewer stored couplings, no loss, on a larger global
-        unit; Appendix~\ref{app:model-search}.}
-  \item \textbf{Not shown here.} Explicit dynamics of the hidden units at a
-        finite switching rate; the displacement measurements with read noise;
-        the precision of the couplings. \todo{one sentence each.}
-\end{plan}
+\textbf{A circuit for the hidden layer exists.}
+\citet{bacvanski2025dense} design, and simulate at circuit level, an analog
+dense associative memory: visible and hidden neurons are joined by one
+resistive crossbar that is used in both directions, a softmax over the hidden
+neurons is built from bipolar transistors, and the hidden neurons settle
+about ten times faster than the visible ones. Their visible neurons then move
+in the log-sum-exp energy that one Potts unit contributes to
+\eqref{eq:free-energy}. It is the deterministic limit of our hidden layer,
+with weights that are set by hand or trained digitally.
+\todo{check these statements against the full paper before submission.}
+
+\textbf{What our model needs beyond it.}
+First, noise: a bath for the pixels during generation, and hidden units that
+fluctuate, since the learning rule reads their fluctuations
+(Section~\ref{sec:onephase}). Second, couplings that change in time during
+generation. Third, the quadratic couplings $Q$ and couplings of both signs.
+Fourth, the measurements of Section~\ref{sec:onephase} and an update of the
+couplers of the active state.
+
+\textbf{Each operation is a known analog primitive.}
+The input fields are a forward read of a conductance array
+\citep{wan2022neurram}, and the force on the pixels is the transposed read of
+the same array, so the coupling is reciprocal by construction. The occupation
+of a Potts unit is the output of an analog softmax element
+\citep{elfadel1993softmax}, and a sampled state is the output of a
+winner-take-all circuit with noise. An update changes one row of the array,
+that of the active state.
+
+\textbf{Wiring.}
+The patch units, which hold most of the couplings when $K$ is small, are
+wired to their patch only, and the bistable units to one pixel. Only the
+global unit is wired to all pixels. The visible units can be linear and need
+no coupling among themselves (Table~\ref{tab:ablation}): the device is then
+purely bipartite, as the circuit above, and the springs between neighbouring
+pixels are an optional smoothing term.
+
+\textbf{Time dependence is the main cost.}
+We store the couplings at \nSlices{} noise levels. Fewer sets suffice on
+faces at a moderate loss, but not yet on the ten-class data
+(Section~\ref{sec:smaller}). A single energy would remove this cost, and
+restricted Boltzmann machines with one set of couplings do generate images
+\citep{liao2022gaussian}; they pay with a negative phase, a full generation
+run for every update (Section~\ref{sec:related}).
+
+\textbf{What we do not show.}
+Our simulations take the limit of fast hidden units and exact measurements.
+They do not model hidden units with a finite switching rate, noise in the
+measured forces and sums, or couplings of finite precision. The factor two of
+Section~\ref{sec:model} requires two copies of every hidden unit during
+generation, or a gain on their force.
 
 % =============================================================================
 \section{Related Work}
 \label{sec:related}
 \budget{0.8 page; this section cannot be cut}
 
-\begin{plan}
-  \item \textbf{Generative models for analog and thermodynamic hardware.}
-        Denoising thermodynamic models: a chain of Boltzmann machines with
-        latent nodes, trained with a clamped and a free phase
-        \citep{jelincic2025dtm}.
-        Oscillator networks with hidden units and four weight sets, trained
-        adversarially with backpropagation through the solver
-        \citep{wangachour2026}.
-        Langevin computers trained on the likelihood of reversed trajectories
-        \citep{whitelam2025generative}, with an online local rule and hidden
-        units on a few MNIST prototypes \citep{wangdeng2026online}.
-  \item \textbf{Equilibrium propagation for generative models.}
-        \citet{scellier2017equilibrium}; denoising score matching with
-        symmetric nudges on synthetic data \citep{de2026symmetric}; energy
-        matching at CIFAR scale in simulation \citep{gower2026potentialep};
-        flow matching on small digit images \citep{gower2026floweqprop}.
-        Difference: these compare a free and a nudged equilibrium of the whole
-        system, and the gradient is exact for vanishing nudge. Our rule is one
-        phase at full clamp and exact there; the response comes from the
-        fluctuations of thermal hidden units; and the score is the system's
-        own force.
-        \todo{check in the full texts: the statement on the nudge limit for
-        each of the three, and whether any of them reads fluctuations.}
-  \item \textbf{Energy-based models with hidden units.} Contrastive divergence
-        \citep{hinton2002training}; exponential family harmoniums
-        \citep{welling2004exponential}, of which our model is a member with
-        visible--visible springs; score matching for such models
-        \citep{hyvarinen2005estimation,hyvarinen2007connections,swersky2011autoencoders,vincent2011connection}.
-        That score matching needs no samples from the model, and that its
-        gradient for hidden units is a function of their posterior moments at
-        data, is known there as mathematics. New here: these moments as
-        fluctuation measurements on thermal hidden units, local to each
-        coupler, and training from $S$ reads.
-  \item \textbf{Dense associative memories and diffusion models.} The score of
-        a diffusion model is the gradient of a dense-associative-memory energy
-        \citep{hoover2023memory,ambrogioni2024search}; as the training set
-        grows, such models pass from retrieving stored images, through
-        spurious states, to generalisation \citep{pham2026emergence}. These
-        works read trained neural diffusion models as memories of the training
-        data. We build the energy explicitly, with few learned templates, and
-        show that templates held at data prototypes are far worse than learned
-        ones (Appendix~\ref{app:model-search}).
-        Dense associative memories with learned memories exist for
-        classification \citep{krotov2016dense}; to our knowledge not as a
-        diffusion model that generates images.
-        In machine-learning terms a learned memory energy is a mixture model,
-        and we say so: Gaussian-mixture scores trained on the denoising
-        objective are analysed in theory \citep{shah2023learning}; products
-        of Gaussian-mixture experts on filter responses are trained over all
-        noise levels for image restoration \citep{zach2024product}; mixtures
-        on overlapping patches are a classical image prior
-        \citep{zoran2011learning}. Mixing training-set patches locally
-        predicts what convolutional diffusion models generate
-        \citep{kamb2025analytic}; our patch units learn \Mpatch{} templates
-        each instead of storing patches.
-        Analog circuits for dense associative memories
-        \citep{bacvanski2025dense} and the thermodynamic cost of retrieval at
-        finite temperature \citep{rooke2026stochastic} treat stored memories
-        and retrieval; we treat learning and generation.
-  \item \textbf{Diffusion models.} \citet{song2019generative,ho2020denoising};
-        the final denoising step and the stochastic sampler are known practice,
-        here as physical operations.
-  \item \textbf{Physical learning.}
-        \citet{stern2021supervised,dillavou2026imperfection}.
-  \item \todo{read the three closest preprints in full before writing this
-        section; check for newer ones.}
-\end{plan}
+\textbf{Generative models for analog and thermodynamic hardware.}
+\citet{jelincic2025dtm} chain Boltzmann machines with latent nodes, one per
+denoising step, and train each with a clamped and a free phase.
+\citet{wangachour2026} use oscillator networks with hidden units and four
+sets of couplings, trained adversarially by backpropagation through the
+solver. \citet{whitelam2025generative} trains Langevin computers on the
+likelihood of reversed noising trajectories, and \citet{wangdeng2026online}
+turn this objective into an online local rule with hidden Langevin units, on
+a few MNIST prototypes. \citet{firstpaper2025} introduce the model we extend:
+the score as the force of a network of visible units, trained by a local rule
+at clamped data. We add hidden units, keep the single clamped phase, and
+train from sampled hidden states.
+
+\textbf{Equilibrium propagation.}
+\citet{scellier2017equilibrium} obtain gradients from the difference between
+a free and a weakly nudged equilibrium of the whole system. This has been
+applied to denoising score matching on synthetic data
+\citep{de2026symmetric}, to energy matching at the scale of CIFAR-10
+\citep{gower2026potentialep} and to flow matching on small digit images
+\citep{gower2026floweqprop}, all in simulation. Our rule has one phase at
+full clamp and is exact there; the response that a nudge measures comes from
+the fluctuations of thermal hidden units; and the score is the force of the
+system itself.
+
+\textbf{Energy-based models with hidden units.}
+Without the springs, our model at one noise level is a restricted Boltzmann
+machine with Gaussian visible units \citep{welling2004exponential}, with
+categorical hidden units and a state-dependent stiffness. Such machines are
+usually trained with contrastive divergence \citep{hinton2002training}.
+\citet{liao2022gaussian} train one with 4096 to 10{,}000 binary hidden units,
+each coupled to all pixels, and generate MNIST, Fashion-MNIST and colour
+faces from noise. Their rule, the product of the two activities at a coupler
+with data clamped minus the same product in a free run, is local and per
+coupler simpler than ours; but every update needs that free run, a chain of
+1000 Langevin steps from noise. They keep one energy and pay with a negative
+phase; we avoid the negative phase and pay with couplings that change in
+time. That score matching needs no samples from the model
+\citep{hyvarinen2005estimation,hyvarinen2007connections}, and that its
+gradient for hidden units is a function of their posterior moments at data
+\citep{swersky2011autoencoders,vincent2011connection}, is known. We add the
+reading of these moments as fluctuations of thermal hidden units, measured
+locally, and training from a few reads.
+
+\textbf{Dense associative memories and diffusion models.}
+The score of a noised training set is the force of a dense associative
+memory whose memories are the training images
+\citep{hoover2023memory,ambrogioni2024search}, and as the training set grows
+trained networks pass from retrieving these memories, through spurious
+states, to generalisation \citep{pham2026emergence}. These works interpret
+neural diffusion models. We build the generator as such a memory, with few
+learned memories per noise level; with the memories held at data prototypes
+the same energy is far worse (Appendix~\ref{app:model-search}). Memories with
+learned templates are known for classification \citep{krotov2016dense}. The
+analog circuit of \citet{bacvanski2025dense} and the thermodynamics of
+retrieval \citep{rooke2026stochastic} concern stored memories and retrieval;
+we treat learning and generation.
+In the language of machine learning, a memory with learned templates is a
+mixture model. Gaussian-mixture scores trained on the denoising objective
+are analysed in theory \citep{shah2023learning}, products of Gaussian-mixture
+experts on filter responses are trained over all noise levels for image
+restoration \citep{zach2024product}, and mixtures on overlapping patches are
+a classical image prior \citep{zoran2011learning}. Mixing training-set
+patches locally predicts what convolutional diffusion models generate
+\citep{kamb2025analytic}; our patch units learn \Mpatch{} templates each
+instead.
+
+\textbf{Diffusion models and physical learning.}
+The reverse process, the corrector and a final denoising step are standard
+\citep{song2019generative,ho2020denoising,song2021score}; here they are
+physical operations. Local learning rules for physical networks that adjust
+their own couplings have been proposed and built
+\citep{stern2021supervised,dillavou2026imperfection}.
+\todo{read De, Gower (both) and Wang \& Deng in full and correct the
+sentences above; check for newer work.}
 
 % =============================================================================
 \section{Limitations and Conclusion}
 \label{sec:conclusion}
 \budget{0.5 page}
 
-\begin{plan}
-  \item \textbf{Limitations.} A simulation in the limit of fast hidden units;
-        clamp forces and projections exact; grey images up to $64\times64$;
-        \paramsCelebLow{} couplings per slice; face contrast too low; the
-        comparison with earlier models is across different sizes and unknown
-        sample counts.
-  \item \textbf{Conclusion.} Three sentences: what the model is, that it trains
-        from sampled statistics without loss, what it reaches.
-  \item \textbf{Outlook.} A circuit-level study; explicit hidden dynamics;
-        colour; the work and entropy production of the generation protocol,
-        for which the framework of \citet{rooke2026stochastic} applies.
-\end{plan}
+\textbf{Limitations.}
+All results are simulations in the limit of fast hidden units. Only the
+hidden states are sampled; the forces at the clamp and the sums over pixels
+are computed exactly, without read noise. The images are grey and at most
+$64\times64$ pixels. The model stores \nSlices{} sets of couplings, and we
+can reduce this number only on faces. The numbers are for one seed and
+\nSamples{} samples, and we do not compare them with FIDs reported under
+other protocols. The samples show malformed digits and too little contrast
+in faces, and for one model a few trajectories diverged.
+
+\textbf{Conclusion.}
+We turned a dense associative memory into a diffusion model: a physical
+system of visible units and fast hidden Potts units whose free-energy force
+is the score, with memories that are learned at every noise level. Its
+couplings follow a local rule evaluated in a single phase at clamped data, in
+which the thermal fluctuations of the hidden units take the place of the
+second phase that other physical learning rules need. Sixteen sampled states
+per hidden unit and image are enough to learn essentially the same model as
+exact averages, on digits, garments and faces.
+
+\textbf{Outlook.}
+The next steps are a circuit-level study with explicit dynamics of the hidden
+units, measurements with noise, and colour. The work and the entropy
+production of the generation protocol can be addressed in the framework of
+\citet{rooke2026stochastic}.
 
 % ============================== END OF THE 8-PAGE MAIN TEXT ==================
 
@@ -1004,7 +1206,8 @@ gradient and a leaky count of its visits, and step by their ratio
   \item Full table: all data sets, with and without corrector, FID and
         FID$_\infty$, seeds.
   \item Class shares for MNIST and Fashion-MNIST.
-  \item Nearest training images (memorisation check).
+  \item Samples above their nearest training images (qualitative; from the
+        existing galleries).
   \item More samples; the same trajectories under exact, $S=\Slarge$ and
         $S=\Ssmall$ training.
 \end{plan}
@@ -1021,7 +1224,15 @@ gradient and a leaky count of its visits, and step by their ratio
         (frozen) against learned templates; on an earlier, larger model.
   \item Control: Langevin dynamics under the final energy only, without the
         time-dependent protocol.
-  \item What did not help: binary global units, shared Gaussian modes.
+  \item Binary instead of Potts hidden units (earlier models, labelled as
+        such). A layer of global binary units loses clearly to one global
+        Potts unit. On the patches, 32 independent bistable units per patch
+        come within one unit of our classifier-based FID of a 32-state Potts
+        unit (four digits). Reading: the global level needs mutually exclusive
+        templates, the local level works with independent features.
+        \todo{optional: one run with binary patch units on the locked model,
+        if this is to be a row for the current model.}
+  \item What did not help: shared Gaussian modes.
 \end{plan}
 
 \section{Mapping to Hardware}

@@ -1,13 +1,13 @@
 # Fdb version 4
-["bibtex main_preprint"] 1795286912.18106 "main_preprint.aux" "main_preprint.bbl" "main_preprint" 1795286913.27545 0
+["bibtex main_preprint"] 1795366345.01411 "main_preprint.aux" "main_preprint.bbl" "main_preprint" 1795366346.70564 0
   "./icml2027.bst" 1795277976.65542 27147 88eb4aed280e585571f8eac50f39a681 ""
-  "./references.bib" 1795286717.81804 14192 ba2b263ddc5b6ff50888064141d42899 ""
-  "main_preprint.aux" 1795286913.12331 10565 4e92aaa913ae69f8a56a00fb1f41794d "pdflatex"
+  "./references.bib" 1795361916.67559 14691 d23e4533a420bf466dd4182b4b424dba ""
+  "main_preprint.aux" 1795366346.5515 11780 5261816338f53c122c75c119e7636ad1 "pdflatex"
   (generated)
   "main_preprint.bbl"
   "main_preprint.blg"
   (rewritten before read)
-["pdflatex"] 1795286912.20715 "main.tex" "main_preprint.pdf" "main_preprint" 1795286913.27587 0
+["pdflatex"] 1795366345.03967 "main.tex" "main_preprint.pdf" "main_preprint" 1795366346.70604 0
   "/usr/share/texlive/texmf-dist/fonts/enc/dvips/base/8r.enc" 1685185333 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/share/texlive/texmf-dist/fonts/map/pdftex/updmap/pdftex.map" 1685185636 4887201 b2e37e43fd1e9ced8365e67a4993c3f7 ""
   "/usr/share/texlive/texmf-dist/fonts/tfm/adobe/times/ptmb7t.tfm" 1685185637 2172 fd0c924230362ff848a33632ed45dc23 ""
@@ -153,18 +153,22 @@
   "/usr/share/texlive/texmf-dist/tex/latex/url/url.sty" 1685185643 12796 8edb7d69a20b857904dd0ea757c14ec9 ""
   "/usr/share/texlive/texmf-dist/tex/latex/xcolor/xcolor.sty" 1685185643 55589 34128738f682d033422ca125f82e5d62 ""
   "/usr/share/texlive/texmf-dist/web2c/texmf.cnf" 1685185337 39615 4ca7b2be4e89b50848d4f0b4d97130bb ""
-  "/usr/share/texlive/texmf-var/web2c/pdftex/pdflatex.fmt" 1784035743.67467 1329201 351659906baf136753d5021d753bc318 ""
+  "/usr/share/texlive/texmf-var/web2c/pdftex/pdflatex.fmt" 1784035687.59414 1329201 d4eb6376216651aacf2dbf122643054d ""
   "Conceptual-fig/figure_hidden.pdf" 1795280285.56979 89788 764bbdfea7d5b14b8fe94cb41c79b91a ""
   "algorithm.sty" 1795277976.65847 2223 ada3eaa0c1bd465a639433dfafc2fc4e ""
   "algorithmic.sty" 1795277976.66106 7414 ce084815cf0aab483787dbc4bf2ace9c ""
   "fancyhdr.sty" 1795277976.66421 31715 19e60610b63819fe670dfa1cd84a4e94 ""
+  "figures/provisional/grid_celeba32_K16_S64.png" 1795366212.65154 182883 640c00056aec91405ec8119c3c688296 ""
+  "figures/provisional/grid_fashion_K784_S64.png" 1795366212.66293 137559 2fdf214be89c88c5f41f22fe61d22365 ""
+  "figures/provisional/grid_mnist_K784_S64.png" 1795366212.65728 97421 8e8222a92307b01a0992eedc3c61f6c3 ""
+  "figures/provisional/strip_celeba32_exact_S64_S16.png" 1795366212.64611 146226 d78a675277ca9bee69d3ceb4a3df6ad2 ""
   "forloop.sty" 1795277986.70598 908 78c029a8fd5af7296b326c5aada6c903 ""
   "icml2027.sty" 1795277976.65222 27344 49884590746cc47c8eb4b4e26f309e9d ""
-  "main.tex" 1795286888.45796 51736 8a51e7b49a90e63ee1906828e86d176b ""
-  "main_preprint.aux" 1795286913.12331 10565 4e92aaa913ae69f8a56a00fb1f41794d "pdflatex"
-  "main_preprint.bbl" 1795286912.19959 12260 85104d140db8c1ee42f85de9956e481b "bibtex main_preprint"
-  "main_preprint.out" 1795286912.80961 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
-  "results.tex" 1795278034.33803 4476 b998104e28a5ed47fd00ac665013d5a8 ""
+  "main.tex" 1795366329.78994 63098 32d4fcddb2aabb687385035d861c0487 ""
+  "main_preprint.aux" 1795366346.5515 11780 5261816338f53c122c75c119e7636ad1 "pdflatex"
+  "main_preprint.bbl" 1795366345.03647 12380 8277320a9d4a8d3220ef9bf8d7c46319 "bibtex main_preprint"
+  "main_preprint.out" 1795366345.62097 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
+  "results.tex" 1795366212.68463 6473 c8dbac3fed9ebc430c1f03c95ab3b80c ""
   (generated)
   "main_preprint.aux"
   "main_preprint.log"

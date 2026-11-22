@@ -17,7 +17,8 @@
 \newcommand{\nSamples}{\textcolor{tbdcolor}{\textbf{2{,}000}}} % 2,000 or 10,000: decide
 \newcommand{\Slarge}{64}      % sampled hidden states per clamped image, run 2
 \newcommand{\Ssmall}{16}      % sampled hidden states per clamped image, run 3
-\newcommand{\Kglobal}{16}     % states of the global Potts unit
+\newcommand{\Kglobal}{16}     % states of the global Potts unit, faces (CelebA)
+\newcommand{\KglobalClasses}{784} % states of the global Potts unit, MNIST and Fashion-MNIST
 \newcommand{\Mpatch}{64}      % states of each patch Potts unit
 \newcommand{\nSlices}{100}    % time slices
 
@@ -33,30 +34,30 @@
 \newcommand{\floorCelebHigh}{5.9}
 
 % ---- MNIST, ten digits --------------------------------------------------------
-\newcommand{\FIDmnistExact}{\TBD}       % exact statistics, Adam
-\newcommand{\FIDmnistSlarge}{\TBD}      % on device, S = 64
-\newcommand{\FIDmnistSsmall}{\TBD}      % on device, S = 16
-\newcommand{\FIDmnistExactCorr}{\TBD}
-\newcommand{\FIDmnistSlargeCorr}{\TBD}
-\newcommand{\FIDmnistSsmallCorr}{\TBD}
+\newcommand{\FIDmnistExact}{10.0}       % 10.01; exact statistics, Adam; K784
+\newcommand{\FIDmnistSlarge}{11.4}      % 11.37; on device, S = 64
+\newcommand{\FIDmnistSsmall}{11.8}      % 11.80; on device, S = 16 (1 of 2000 diverged)
+\newcommand{\FIDmnistExactCorr}{9.2}    % 9.19
+\newcommand{\FIDmnistSlargeCorr}{9.8}   % 9.79
+\newcommand{\FIDmnistSsmallCorr}{10.2}  % 10.17 (6 of 2000 diverged)
 
 % ---- Fashion-MNIST, ten classes -----------------------------------------------
-\newcommand{\FIDfashionExact}{\TBD}
-\newcommand{\FIDfashionSlarge}{\TBD}
-\newcommand{\FIDfashionSsmall}{\TBD}
-\newcommand{\FIDfashionExactCorr}{\TBD}
-\newcommand{\FIDfashionSlargeCorr}{\TBD}
-\newcommand{\FIDfashionSsmallCorr}{\TBD}
+\newcommand{\FIDfashionExact}{21.3}       % 21.32; K784
+\newcommand{\FIDfashionSlarge}{23.4}      % 23.44
+\newcommand{\FIDfashionSsmall}{22.9}      % 22.93
+\newcommand{\FIDfashionExactCorr}{21.8}   % 21.82
+\newcommand{\FIDfashionSlargeCorr}{23.5}  % 23.50
+\newcommand{\FIDfashionSsmallCorr}{23.5}  % 23.52
 
 % ---- CelebA 32x32 grey --------------------------------------------------------
 % Exists already: exact, K16 / 64 patch states = 20.20 (Inception job 4287721,
 % notebook 2026-11-21). Left as \TBD until the lock-in table is final.
-\newcommand{\FIDcelebLowExact}{\TBD}
-\newcommand{\FIDcelebLowSlarge}{\TBD}   % running: 4289676, Inception 4289677
-\newcommand{\FIDcelebLowSsmall}{\TBD}
-\newcommand{\FIDcelebLowExactCorr}{\TBD}
-\newcommand{\FIDcelebLowSlargeCorr}{\TBD}
-\newcommand{\FIDcelebLowSsmallCorr}{\TBD}
+\newcommand{\FIDcelebLowExact}{20.2}        % 20.20; K16
+\newcommand{\FIDcelebLowSlarge}{21.2}       % 21.20
+\newcommand{\FIDcelebLowSsmall}{21.2}       % 21.23
+\newcommand{\FIDcelebLowExactCorr}{20.0}    % 19.95
+\newcommand{\FIDcelebLowSlargeCorr}{20.2}   % 20.23
+\newcommand{\FIDcelebLowSsmallCorr}{20.5}   % 20.49
 
 % ---- CelebA 64x64 grey --------------------------------------------------------
 \newcommand{\FIDcelebHighExact}{\TBD}
@@ -67,10 +68,10 @@
 \newcommand{\FIDcelebHighSsmallCorr}{\TBD}
 
 % ---- sampler ablation, CelebA 32x32 (Table 2) ---------------------------------
-\newcommand{\FIDablExactRaw}{\TBD}      % as sampled, no quench
-\newcommand{\FIDablSlargeRaw}{\TBD}
-\newcommand{\FIDablExactOde}{\TBD}      % probability-flow ODE + quench
-\newcommand{\FIDablSlargeOde}{\TBD}
+\newcommand{\FIDablExactRaw}{76.7}      % 76.70; as sampled, no quench
+\newcommand{\FIDablSlargeRaw}{79.6}     % 79.59
+\newcommand{\FIDablExactOde}{22.1}      % 22.14; probability-flow ODE + quench
+\newcommand{\FIDablSlargeOde}{22.9}     % 22.93
 % quench only and quench + corrector reuse \FIDcelebLow... above
 
 % ---- seed spread of the headline model (second wave) --------------------------
@@ -93,3 +94,26 @@
 % ---- compute -------------------------------------------------------------------
 \newcommand{\trainHoursExact}{\TBD}     % CelebA 32, one GPU
 \newcommand{\trainHoursSlarge}{\TBD}
+
+% ---- first wave, 2026-11-22 ----------------------------------------------------
+% All values filled above: seed 1, n = 2000, noise start, SDE + quench 1; notebook
+% "LOCK-IN RESULTS, first wave (collected 2026-11-22 10:00)". Rounded to one
+% decimal (bootstrap sd 0.2-0.6); the two-decimal value is in each comment.
+% MNIST and Fashion use the global unit with 784 states, CelebA 32x32 with 16.
+% To be replaced by the second wave (three seeds, 10,000 samples) where it runs.
+
+% ---- model ablations (seed 1, n = 2000, exact averages, SDE + quench 1) --------
+\newcommand{\FIDmnistSmallK}{14.4}      % 14.39; MNIST with K16
+\newcommand{\FIDmnistMidK}{12.0}        % 12.03; MNIST with K128
+\newcommand{\FIDfashionSmallK}{26.0}    % 26.00; Fashion with K16
+\newcommand{\FIDfashionMidK}{23.5}      % 23.53; Fashion with K128
+\newcommand{\FIDcelebLowLargeK}{19.4}   % 19.43; CelebA 32 with K784 (control)
+\newcommand{\FIDablNoSprings}{25.8}     % 25.83; CelebA 32, no visible springs
+\newcommand{\FIDablHarmonic}{27.4}      % 27.42; no springs, harmonic on-site term only
+\newcommand{\FIDablPixelsOnly}{218}     % 218.4; this paper's visible energy, no hidden units
+
+% ---- added 2026-11-22 for Sections 5-8 ------------------------------------------
+\newcommand{\FIDablHarmonicSprings}{\TBD} % CelebA 32, harmonic on-site term + springs: run 4297259
+\newcommand{\FIDknotsCelebLow}{23.7}      % 23.65; CelebA 32, S = 64 model, 5/9/9 coupling sets
+\newcommand{\FIDknotsMnist}{234}          % 234.4; MNIST K784, S = 64 model, 5/9/9 coupling sets
+\newcommand{\FIDknotsFashion}{88}         % 88.0; Fashion K784, S = 64 model, 5/9/9 coupling sets

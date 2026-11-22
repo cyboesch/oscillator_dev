@@ -5,37 +5,37 @@ The style file: icml2027.bst
 Database file #1: references.bib
 You've used 42 entries,
             2773 wiz_defined-function locations,
-            801 strings with 12295 characters,
-and the built_in function-call counts, 19113 in all, are:
-= -- 1593
-> -- 1284
-< -- 23
-+ -- 436
-- -- 393
-* -- 1493
-:= -- 3009
-add.period$ -- 140
+            802 strings with 12412 characters,
+and the built_in function-call counts, 19242 in all, are:
+= -- 1603
+> -- 1311
+< -- 22
++ -- 445
+- -- 402
+* -- 1514
+:= -- 3038
+add.period$ -- 141
 call.type$ -- 42
-change.case$ -- 256
+change.case$ -- 259
 chr.to.int$ -- 41
 cite$ -- 84
-duplicate$ -- 901
-empty$ -- 1548
-format.name$ -- 458
-if$ -- 3966
+duplicate$ -- 898
+empty$ -- 1539
+format.name$ -- 465
+if$ -- 3984
 int.to.chr$ -- 2
 int.to.str$ -- 1
 missing$ -- 42
-newline$ -- 232
+newline$ -- 233
 num.names$ -- 168
-pop$ -- 539
+pop$ -- 541
 preamble$ -- 1
-purify$ -- 214
+purify$ -- 217
 quote$ -- 0
-skip$ -- 670
+skip$ -- 671
 stack$ -- 0
 substring$ -- 348
-swap$ -- 69
+swap$ -- 68
 text.length$ -- 1
 text.prefix$ -- 0
 top$ -- 0
@@ -43,4 +43,4 @@ type$ -- 462
 warning$ -- 0
 while$ -- 146
 width$ -- 0
-write$ -- 551
+write$ -- 553

@@ -24,13 +24,6 @@ Bacvanski, M.~G., You, X., Hopfield, J., and Krotov, D.
 \newblock Dense associative memories with analog circuits.
 \newblock \emph{arXiv preprint arXiv:2512.15002}, 2025.
 
-\bibitem[Chong \& Forsyth(2020)Chong and Forsyth]{chong2020effectively}
-Chong, M.~J. and Forsyth, D.
-\newblock Effectively unbiased {FID} and {I}nception {S}core and where to find
-  them.
-\newblock In \emph{IEEE/CVF Conference on Computer Vision and Pattern
-  Recognition}, 2020.
-
 \bibitem[De(2026)]{de2026symmetric}
 De, A.
 \newblock Symmetric equilibrium propagation for thermodynamic diffusion
@@ -147,6 +140,14 @@ LeCun, Y., Bottou, L., Bengio, Y., and Haffner, P.
 \newblock Gradient-based learning applied to document recognition.
 \newblock \emph{Proceedings of the IEEE}, 86\penalty0 (11):\penalty0
   2278--2324, 1998.
+
+\bibitem[Liao et~al.(2022)Liao, Kornblith, Ren, Fleet, and
+  Hinton]{liao2022gaussian}
+Liao, R., Kornblith, S., Ren, M., Fleet, D.~J., and Hinton, G.
+\newblock {G}aussian-{B}ernoulli {RBM}s without tears.
+\newblock \emph{arXiv preprint arXiv:2210.10318}, 2022.
+\newblock read 2026-11-22 (PDF v1): MNIST FID 17.49 in their Table 1; no FID
+  for Fashion-MNIST or CelebA; check for a published version.
 
 \bibitem[Liu et~al.(2015)Liu, Luo, Wang, and Tang]{liu2015deep}
 Liu, Z., Luo, P., Wang, X., and Tang, X.

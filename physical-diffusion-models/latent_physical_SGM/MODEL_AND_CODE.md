@@ -106,8 +106,12 @@ on device, add: --hidden-norm occupancy --patch-occupancy --hidden-samples S --h
   (S = 64 or 16)
 ```
 PROBLEM: `mnist28_d0123456789`, `fashion28_c0123456789`, `celeba32g`, `celeba64g`. SAMPLE_ARGS: `--quench 1` (64x64:
-`--chunk 100 --quench 1`; 64x64 jobs with `--mem 160G`). Corrector set:
-`sample_latent.py --run RUN --n 2000 --chunk 250 --corrector 2:0.16 --quench 1`.
+`--chunk 25 --quench 1` with `XLA_PYTHON_CLIENT_ALLOCATOR=platform` exported before sbatch and `--mem 160G`; the
+first 64x64 run with `--chunk 100` and the default allocator sampled, but ran out of GPU memory in the quench, 2026-11-21). Corrector set:
+`sample_latent.py --run RUN --n 2000 --chunk 250 --corrector 2:0.16 --quench 1` (64x64: `--chunk 25`, same
+allocator, 160 G; K784 models: `--mem 64G`).
+MNIST / Fashion also with `--K 784` (the user, 2026-11-21: on-device runs for both K16 and K784), since the global unit
+carries the class identity there (K784: MNIST 10.01 vs 14.39, Fashion 21.32 vs 26.00).
 
 ### Best models and command lines (seed 1)
 
@@ -121,11 +125,17 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 |---|---|---|---|
 | MNIST, ten digits | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22, 64 patch states, noise start** (locked patches with a larger global unit; `--K 784 --patch 16:4:64 --patch-on-slice 10 --patch2 8:2:64 --patch2-on-slice 55`; 2026-11-21) | 10.01 (4.44); **with `--corrector 2:0.16`: 9.19 (3.57), best** | 6.23; corrector 5.06 |
 | MNIST, ten digits | locked recipe K16 + the same patches, noise start (2026-11-21) | 14.39 (8.13); corrector 12.00 (4.83) | 14.23; corrector 12.27 |
+| MNIST, ten digits | K784 + the same patches, **on device** S = 64 / S = 16 (2026-11-22; Inception 4290780) | 11.37 (5.64) / 11.80 (6.33); corrector 9.79 (3.85) / 10.17 (4.08) | 6.60 / 7.86; corrector 6.46 / 6.55 |
+| MNIST, ten digits | K16 + the same patches, **on device** S = 64 / S = 16 (2026-11-22) | 15.22 / 15.38; corrector 12.56 / 12.79 | 13.72 / 13.80 |
 | MNIST, ten digits | K6144 + 7x7 every 3 px, equil start (previous best) | 18.8 (FID_inf 15.9) | 3.87 |
 | Fashion, ten classes | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22, 64 patch states, noise start** (2026-11-21) | **21.32 (9.78), best**; corrector 21.82 (9.79) | 2.77; corrector 2.32 |
 | Fashion, ten classes | locked recipe K16 + the same patches, noise start (2026-11-21) | 26.00 (15.66); corrector 25.80 (14.62) | 5.97; corrector 4.88 |
+| Fashion, ten classes | K784 + the same patches, **on device** S = 64 / S = 16 (2026-11-22; Inception 4290789) | 23.44 (11.92) / 22.93 (11.51); corrector 23.50 / 23.52 | 3.54 / 3.51; corrector 3.01 / 2.97 |
+| Fashion, ten classes | K16 + the same patches, **on device** S = 64 / S = 16 (2026-11-22) | 28.29 / 27.54; corrector 27.44 / 26.08 | 6.45 / 6.08 |
 | Fashion, ten classes | K1536 + 8x8 every 2 px, equil start, 3 seeds (previous best) | 25.9 +- 0.04 (21.3) | 2.71 +- 0.07 |
 | CelebA 32x32 grey | **locked recipe: K16 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22, 64 patch states**, noise start (2026-11-20; Inception 4287721) | **20.20 (12.3), best single model without label** | - |
+| CelebA 32x32 grey | locked recipe, **on device** S = 64 / S = 16 (2026-11-21/22; Inception 4290856) | 21.20 (13.55) / 21.23 (13.45); corrector 20.23 (11.83) / 20.49 (11.93); ODE + quench (S = 64) 22.93; knots 5/9/9 (S = 64) 23.65 | - |
+| CelebA 32x32 grey | K784 + the locked patches, exact (control, 2026-11-21; Inception 4290734) | 19.43 (11.59); corrector 19.52 (10.71) | - |
 | CelebA 32x32 grey | **K784 + 16x16 every 4 px from t = 4.49 + 8x8 every 2 px from t = 2.22 + 8-cluster label** (`--patch 16:4:32 --patch-on-slice 10 --patch2 8:2:32 --patch2-on-slice 55 --cond 8 --cond-on global,patch`; 2026-11-19) | 21.06 (17.3); with `--corrector 2:0.16`: 20.57 (16.8) (2026-11-20) | - |
 | CelebA 32x32 grey | K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, `--corrector 2:0.16` (1.23 M couplings per slice; 2026-11-20) | 20.73 (17.1) | - |
 | CelebA 32x32 grey | K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, 3 seeds (1.23 M couplings per slice) | 21.86 ± 0.15 | - |
@@ -160,6 +170,11 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 The global unit can shrink 12-25x for about 2-2.5 FID; at small K the patch units are almost the whole budget.
 
 ### Parameter reduction (CelebA-32, 2026-11-19/20; notebook "Overnight 2026-11-19/20" and "Time-basis compression")
+
+**2026-11-22: the post-hoc knots 5/9/9 recipe does not transfer to MNIST / Fashion.** On the on-device S = 64
+models it gives Inception 234 (MNIST, K16 and K784) and 88-98 (Fashion), vs +2.5 on CelebA-32 (23.65 vs 21.20).
+Relative error of the visible group at 5 knots: 0.35 on MNIST vs 0.12 on CelebA-32; global W / b / Q 0.30-0.55 vs
+0.22-0.30. The visible and global parameters of the ten-class models change too much in time for 5 knots.
 
 Starting point: K64 + 16x16 from t = 4.49 + 8x8 from t = 2.22, 1.23 M couplings per slice, 21.72. Stored over the
 100 slices: **83.2 M** (the patch sets exist only from their switch-on slice). For scale: Wang & Achour 326 k in
@@ -252,7 +267,7 @@ sbatch --mem 64G --time 02:00:00 jobs/run_gpu_neuronic.sh sample_latent.py --run
 | `sample_latent.py --oracle-start K --quench 1` | the reverse process started at slice K from exactly noised training images, then quenched (the oracle-start scan) | GPU; sampling and quench in one job (an existing oracle file is not quenched again) |
 | `oracle_source_check.py --run R --slices ... --out DIR` | what the end of the reverse process and the quench do to real images: the oracle sets and the quenched source images against their sources (RMS change, contrast, power in three frequency bands), example and spectrum figures | GPU (the quench); 2026-11-18 |
 | `forward_marginal_check.py [--snapshots]` | how much of a face is left at time t (PCA SNR, kurtosis, posterior effective number of training faces; Part B: the model's reverse trajectory against the forward marginal per PC group) | CPU / GPU; 2026-11-19 |
-| `compress_history.py --run R --mode knots:B [--group-modes g=mode,...] [--knot-share group\|set\|all] [--dry-run]` | post-hoc compression of a run's 100-slice parameter history in time (knots, knotsarc, knotsopt, hat, cheb, svd:R); writes `<run>_time-<tag>` that the sampler reads unchanged, with report.txt | CPU; 2026-11-19/20; best recipe: `--mode knots:9 --group-modes theta=knots:5,W=knots:5,b=knots:5,Q=knots:5,wl=svd:0,bl=svd:0` |
+| `compress_history.py --run R --mode knots:B [--group-modes g=mode,...] [--knot-share group\|set\|all] [--dry-run]` | post-hoc compression of a run's 100-slice parameter history in time (knots, knotsarc, knotsopt, hat, cheb, svd:R); writes `<run>_time-<tag>` that the sampler reads unchanged, with report.txt | CPU; 2026-11-19/20; best recipe (CelebA): `--mode knots:9 --group-modes theta=knots:5,W=knots:5,b=knots:5,Q=knots:5,wl=svd:0,bl=svd:0`; it fails on MNIST / Fashion (FID 234 / 88-98, 2026-11-22) |
 
 Sample specs `PATH+PATH` concatenate files; `latent_model.split_set_spec` keeps run names that contain a '+'.
 
@@ -313,6 +328,8 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 - **GPU memory for K >= 3072 (sampling).** The default sampler holds the float64 parameter history several times
   (K3072 on CelebA-32: 5.0-5.6 GB constants). Use `XLA_PYTHON_CLIENT_ALLOCATOR=platform`, `--chunk 25`, 160 GB host
   memory (MNIST K6144, CelebA K3072). `XLA_PYTHON_CLIENT_MEM_FRACTION=0.95` alone was not enough.
+  The same applies to the locked 64x64 recipe with 64 patch states (hidden history 7.2 GB; job 4289731 sampled with
+  `--chunk 100` but its quench failed allocating 7.2 GB with the default allocator, 2026-11-21).
   CelebA-64: K1536 needs the same (12 GB per copy); K3072 (22 GB per copy) additionally needs
   `--history-dtype float32`. Quench-only no longer builds a second copy (11-17).
 - **Parameter histories above 2^31 elements.** One array of 2^31 or more elements crashes XLA with a segmentation

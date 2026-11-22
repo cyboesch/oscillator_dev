@@ -34,24 +34,24 @@
 \newlabel{fig:concept}{{1}{2}{\textbf {A physical diffusion model with fast hidden units.} (a)~Pixel oscillators, coupled to their neighbours by springs, interact with a thermal bath at temperature $T$. Hidden Potts units (rounded boxes; the filled dot is the active state) are coupled to all pixels (global unit, purple) or to the pixels of one patch, at a coarse (red) and a fine (yellow) scale. They equilibrate fast and are never controlled directly. (b)~Learning at one noise level. The pixels are clamped to a noised image $\x _t$ and the hidden units settle. Each coupling is updated from quantities at its two ends: the clamp force on its pixel and $S$ sampled states of its hidden unit. No free-running phase is needed. Repeating this over images and noise levels gives the schedule $\bm {\theta }^{*}(t)$. (c)~Generation. Starting from noise, an external controller replays $\bm {\theta }^{*}(\tau -s)$ in reverse time $s$. The bars, in the colours of (a), show when each hidden unit acts: the global unit throughout, the coarse patch units from $s\approx 0.5$, the fine ones from $s\approx 2.8$. A final quench with the bath switched off removes the thermal noise. The images are one generated $32\times 32$ face; the network drawings are schematic. \todo {the frames are from the K64 model with 32 patch states: re-render from the locked model, and add the frame after the quench.}\relax }{figure.caption.1}{}}
 \newlabel{sec:background}{{2}{2}{}{section.2}{}}
 \newlabel{eq:forward}{{1}{2}{}{equation.2.1}{}}
+\newlabel{eq:reverse}{{2}{2}{}{equation.2.2}{}}
 \citation{hyvarinen2005estimation}
 \citation{firstpaper2025}
 \citation{firstpaper2025}
 \citation{krotov2016dense,demircigil2017model,ramsauer2021hopfield}
 \citation{krotov2021large}
-\citation{hoover2023memory}
-\citation{ambrogioni2024search}
-\citation{pham2026emergence}
-\newlabel{eq:reverse}{{2}{3}{}{equation.2.2}{}}
 \newlabel{eq:loss}{{3}{3}{}{equation.2.3}{}}
 \newlabel{sec:model}{{3}{3}{}{section.3}{}}
 \newlabel{eq:field}{{4}{3}{}{equation.3.4}{}}
 \newlabel{eq:visible}{{5}{3}{}{equation.3.5}{}}
 \newlabel{eq:free-energy}{{6}{3}{}{equation.3.6}{}}
 \newlabel{eq:mean-force}{{7}{3}{}{equation.3.7}{}}
-\newlabel{eq:stored}{{8}{3}{}{equation.3.8}{}}
+\citation{hoover2023memory}
+\citation{ambrogioni2024search}
+\citation{pham2026emergence}
 \citation{song2021score}
 \citation{hinton2002training,hyvarinen2007connections}
+\newlabel{eq:stored}{{8}{4}{}{equation.3.8}{}}
 \newlabel{sec:learning}{{4}{4}{}{section.4}{}}
 \newlabel{eq:generator}{{9}{4}{}{equation.4.9}{}}
 \newlabel{eq:response}{{10}{4}{}{equation.4.10}{}}
@@ -70,68 +70,79 @@
 \citation{lecun1998gradient}
 \citation{xiao2017fashion}
 \citation{liu2015deep}
+\citation{kingma2015adam}
 \citation{heusel2017gans}
-\citation{chong2020effectively}
-\citation{wangachour2026}
-\citation{rooke2026stochastic}
 \newlabel{sec:experiments}{{5}{6}{}{section.5}{}}
 \newlabel{sec:setup}{{5.1}{6}{}{subsection.5.1}{}}
-\newlabel{fig:ondevice}{{2}{6}{\textbf {Training from sampled hidden states matches training with exact hidden averages.} \todo {caption: what is plotted, the protocol in one line, the take-away.}\relax }{figure.caption.2}{}}
-\newlabel{tab:results}{{1}{6}{\textbf {FID on four data sets} (\nSamples {} samples, quench). Top: this work with exact hidden averages and with $S$ sampled hidden states. Middle: earlier generative models for analog hardware \todo {their sample counts are not stated; say so}. Bottom: real test images.\relax }{table.caption.3}{}}
+\newlabel{tab:results}{{1}{6}{\textbf {FID with exact hidden averages and with $S$ sampled hidden states per clamped image} (\nSamples {} samples, reverse process and quench; one seed). $K=\KglobalClasses $ for MNIST and Fashion-MNIST, $K=\Kglobal $ for CelebA. Bottom: real test images at the same sample count, the floor of this protocol.\relax }{table.caption.2}{}}
+\citation{firstpaper2025}
+\citation{wangachour2026}
+\citation{liao2022gaussian}
+\citation{jelincic2025dtm,wangachour2026}
+\citation{song2021score}
+\citation{rooke2026stochastic}
+\newlabel{tab:ablation}{{2}{7}{\textbf {Ablations} (FID, exact hidden averages, one seed). Top: the visible energy on CelebA $32\times 32$ with the hidden units unchanged, and the visible energy alone. Bottom: the size $K$ of the global unit with the patch units unchanged.\relax }{table.caption.4}{}}
+\newlabel{sec:quality}{{5.3}{7}{}{subsection.5.3}{}}
+\newlabel{tab:sampler}{{3}{7}{\textbf {Sampler ablation} on CelebA $32\times 32$ (FID, one seed).\relax }{table.caption.6}{}}
 \citation{bacvanski2025dense}
+\newlabel{fig:ondevice}{{2}{8}{\textbf {Sampled training learns the same model as exact training.} CelebA $32\times 32$. Top row: real images. Below: samples of the models trained with exact hidden averages, with $S=\Slarge $ and with $S=\Ssmall $ sampled hidden states. Each column uses the same initial noise and the same noise path in all three models, which were trained from the same initial templates. \todo {provisional: a gallery image with its own labels. Redraw without the title, with the row labels of this caption, and add MNIST and Fashion-MNIST rows if space allows.}\relax }{figure.caption.3}{}}
+\newlabel{fig:samples}{{3}{8}{\textbf {Uncurated samples of the models trained from $S=\Slarge $ sampled hidden states:} MNIST, Fashion-MNIST and CelebA $32\times 32$, the first 100 of \nSamples {} samples each. \todo {provisional: gallery images with their own titles. Redraw without titles, with a column of real images, and add CelebA $64\times 64$.}\relax }{figure.caption.5}{}}
+\newlabel{sec:smaller}{{5.5}{8}{}{subsection.5.5}{}}
+\newlabel{sec:hardware}{{6}{8}{}{section.6}{}}
 \citation{wan2022neurram}
 \citation{elfadel1993softmax}
+\citation{liao2022gaussian}
 \citation{jelincic2025dtm}
 \citation{wangachour2026}
 \citation{whitelam2025generative}
 \citation{wangdeng2026online}
+\citation{firstpaper2025}
 \citation{scellier2017equilibrium}
 \citation{de2026symmetric}
 \citation{gower2026potentialep}
 \citation{gower2026floweqprop}
-\newlabel{fig:samples}{{3}{7}{\textbf {Generated images on the three data sets,} from the model trained with $S=\Slarge $ sampled hidden states. \todo {caption: uncurated; which rows are real; protocol in one line.}\relax }{figure.caption.4}{}}
-\newlabel{tab:sampler}{{2}{7}{\textbf {Sampler ablation} on CelebA $32\times 32$ (FID).\relax }{table.caption.5}{}}
-\newlabel{sec:hardware}{{6}{7}{}{section.6}{}}
-\newlabel{sec:related}{{7}{7}{}{section.7}{}}
-\citation{hinton2002training}
 \citation{welling2004exponential}
-\citation{hyvarinen2005estimation,hyvarinen2007connections,swersky2011autoencoders,vincent2011connection}
+\citation{hinton2002training}
+\citation{liao2022gaussian}
+\citation{hyvarinen2005estimation,hyvarinen2007connections}
+\citation{swersky2011autoencoders,vincent2011connection}
 \citation{hoover2023memory,ambrogioni2024search}
 \citation{pham2026emergence}
 \citation{krotov2016dense}
+\citation{bacvanski2025dense}
+\citation{rooke2026stochastic}
 \citation{shah2023learning}
 \citation{zach2024product}
 \citation{zoran2011learning}
 \citation{kamb2025analytic}
-\citation{bacvanski2025dense}
-\citation{rooke2026stochastic}
-\citation{song2019generative,ho2020denoising}
+\newlabel{sec:related}{{7}{9}{}{section.7}{}}
+\citation{song2019generative,ho2020denoising,song2021score}
 \citation{stern2021supervised,dillavou2026imperfection}
 \citation{rooke2026stochastic}
 \bibdata{references}
 \bibcite{ambrogioni2024search}{{1}{2024}{{Ambrogioni}}{{}}}
 \bibcite{firstpaper2025}{{2}{2025}{{[authors to fill in]}}{{}}}
-\newlabel{sec:conclusion}{{8}{8}{}{section.8}{}}
 \bibcite{bacvanski2025dense}{{3}{2025}{{Bacvanski et~al.}}{{Bacvanski, You, Hopfield, and Krotov}}}
-\bibcite{chong2020effectively}{{4}{2020}{{Chong \& Forsyth}}{{Chong and Forsyth}}}
-\bibcite{de2026symmetric}{{5}{2026}{{De}}{{}}}
-\bibcite{demircigil2017model}{{6}{2017}{{Demircigil et~al.}}{{Demircigil, Heusel, L{\"o}we, Upgang, and Vermet}}}
-\bibcite{dillavou2026imperfection}{{7}{2026}{{Dillavou et~al.}}{{Dillavou, Guzman, Liu, and Durian}}}
-\bibcite{elfadel1993softmax}{{8}{1993}{{Elfadel \& Wyatt}}{{Elfadel and Wyatt}}}
-\bibcite{gower2026floweqprop}{{9}{2026{a}}{{Gower}}{{}}}
-\bibcite{gower2026potentialep}{{10}{2026{b}}{{Gower}}{{}}}
-\bibcite{heusel2017gans}{{11}{2017}{{Heusel et~al.}}{{Heusel, Ramsauer, Unterthiner, Nessler, and Hochreiter}}}
-\bibcite{hinton2002training}{{12}{2002}{{Hinton}}{{}}}
-\bibcite{ho2020denoising}{{13}{2020}{{Ho et~al.}}{{Ho, Jain, and Abbeel}}}
-\bibcite{hoover2023memory}{{14}{2023}{{Hoover et~al.}}{{Hoover, Strobelt, Krotov, Hoffman, Kira, and Chau}}}
-\bibcite{hyvarinen2005estimation}{{15}{2005}{{Hyv{\"a}rinen}}{{}}}
-\bibcite{hyvarinen2007connections}{{16}{2007}{{Hyv{\"a}rinen}}{{}}}
-\bibcite{jelincic2025dtm}{{17}{2025}{{Jelin{\v {c}}i{\v {c}} et~al.}}{{Jelin{\v {c}}i{\v {c}}, Lockwood, Garlapati, Schillinger, Chuang, Verdon, and McCourt}}}
-\bibcite{kamb2025analytic}{{18}{2024}{{Kamb \& Ganguli}}{{Kamb and Ganguli}}}
-\bibcite{kingma2015adam}{{19}{2015}{{Kingma \& Ba}}{{Kingma and Ba}}}
-\bibcite{krotov2016dense}{{20}{2016}{{Krotov \& Hopfield}}{{Krotov and Hopfield}}}
-\bibcite{krotov2021large}{{21}{2021}{{Krotov \& Hopfield}}{{Krotov and Hopfield}}}
-\bibcite{lecun1998gradient}{{22}{1998}{{LeCun et~al.}}{{LeCun, Bottou, Bengio, and Haffner}}}
+\bibcite{de2026symmetric}{{4}{2026}{{De}}{{}}}
+\bibcite{demircigil2017model}{{5}{2017}{{Demircigil et~al.}}{{Demircigil, Heusel, L{\"o}we, Upgang, and Vermet}}}
+\bibcite{dillavou2026imperfection}{{6}{2026}{{Dillavou et~al.}}{{Dillavou, Guzman, Liu, and Durian}}}
+\newlabel{sec:conclusion}{{8}{10}{}{section.8}{}}
+\bibcite{elfadel1993softmax}{{7}{1993}{{Elfadel \& Wyatt}}{{Elfadel and Wyatt}}}
+\bibcite{gower2026floweqprop}{{8}{2026{a}}{{Gower}}{{}}}
+\bibcite{gower2026potentialep}{{9}{2026{b}}{{Gower}}{{}}}
+\bibcite{heusel2017gans}{{10}{2017}{{Heusel et~al.}}{{Heusel, Ramsauer, Unterthiner, Nessler, and Hochreiter}}}
+\bibcite{hinton2002training}{{11}{2002}{{Hinton}}{{}}}
+\bibcite{ho2020denoising}{{12}{2020}{{Ho et~al.}}{{Ho, Jain, and Abbeel}}}
+\bibcite{hoover2023memory}{{13}{2023}{{Hoover et~al.}}{{Hoover, Strobelt, Krotov, Hoffman, Kira, and Chau}}}
+\bibcite{hyvarinen2005estimation}{{14}{2005}{{Hyv{\"a}rinen}}{{}}}
+\bibcite{hyvarinen2007connections}{{15}{2007}{{Hyv{\"a}rinen}}{{}}}
+\bibcite{jelincic2025dtm}{{16}{2025}{{Jelin{\v {c}}i{\v {c}} et~al.}}{{Jelin{\v {c}}i{\v {c}}, Lockwood, Garlapati, Schillinger, Chuang, Verdon, and McCourt}}}
+\bibcite{kamb2025analytic}{{17}{2024}{{Kamb \& Ganguli}}{{Kamb and Ganguli}}}
+\bibcite{kingma2015adam}{{18}{2015}{{Kingma \& Ba}}{{Kingma and Ba}}}
+\bibcite{krotov2016dense}{{19}{2016}{{Krotov \& Hopfield}}{{Krotov and Hopfield}}}
+\bibcite{krotov2021large}{{20}{2021}{{Krotov \& Hopfield}}{{Krotov and Hopfield}}}
+\bibcite{lecun1998gradient}{{21}{1998}{{LeCun et~al.}}{{LeCun, Bottou, Bengio, and Haffner}}}
+\bibcite{liao2022gaussian}{{22}{2022}{{Liao et~al.}}{{Liao, Kornblith, Ren, Fleet, and Hinton}}}
 \bibcite{liu2015deep}{{23}{2015}{{Liu et~al.}}{{Liu, Luo, Wang, and Tang}}}
 \bibcite{pham2026emergence}{{24}{2026}{{Pham et~al.}}{{Pham, Raya, Negri, Zaki, Ambrogioni, and Krotov}}}
 \bibcite{ramsauer2021hopfield}{{25}{2021}{{Ramsauer et~al.}}{{Ramsauer, Sch{\"a}fl, Lehner, Seidl, Widrich, Gruber, Holzleitner, Adler, Kreil, Kopp, Klambauer, Brandstetter, and Hochreiter}}}
@@ -153,10 +164,10 @@
 \bibcite{zach2024product}{{41}{2024}{{Zach et~al.}}{{Zach, Kobler, Chambolle, and Pock}}}
 \bibcite{zoran2011learning}{{42}{2011}{{Zoran \& Weiss}}{{Zoran and Weiss}}}
 \bibstyle{icml2027}
-\newlabel{app:derivation}{{A}{11}{Impact Statement}{appendix.A}{}}
-\newlabel{app:sampled}{{B}{11}{Impact Statement}{appendix.B}{}}
-\newlabel{app:details}{{C}{11}{Impact Statement}{appendix.C}{}}
-\newlabel{app:more-results}{{D}{11}{Impact Statement}{appendix.D}{}}
-\newlabel{app:model-search}{{E}{11}{Impact Statement}{appendix.E}{}}
-\newlabel{app:hardware}{{F}{11}{Impact Statement}{appendix.F}{}}
-\gdef \@abspage@last{11}
+\newlabel{app:derivation}{{A}{13}{Impact Statement}{appendix.A}{}}
+\newlabel{app:sampled}{{B}{13}{Impact Statement}{appendix.B}{}}
+\newlabel{app:details}{{C}{13}{Impact Statement}{appendix.C}{}}
+\newlabel{app:more-results}{{D}{13}{Impact Statement}{appendix.D}{}}
+\newlabel{app:model-search}{{E}{13}{Impact Statement}{appendix.E}{}}
+\newlabel{app:hardware}{{F}{13}{Impact Statement}{appendix.F}{}}
+\gdef \@abspage@last{13}
