@@ -62,6 +62,14 @@ the SDE, 1 for the PF-ODE), Wp, bp, Qp interpolated like every other parameter (
 --quench and --init-dist equil:S alike. load_params refuses such a run unless its caller takes the units
 (with_patch=True); --fast refuses them. The manifest records 'patch_units': the run's spec (runs without them get no
 new key).
+
+--corrector dwell:TAU (opt-in, 2026-11-23; the physical corrector): the segmented sampler of --corrector M:SNR (same
+predictor segments and keys), but at every interior knot the device's own overdamped Langevin dynamics with the
+parameters frozen at that slice, dx = -grad F(x; theta_k) ds + sqrt(2T) dW, for a fixed time TAU, the same for every
+sample and knot (sample_corrector; no per-sample step size, which a device cannot compute). --corrector-log (with
+M:SNR) records the dwell time each SNR step is equivalent to (eps / T) without changing the samples. --stem-suffix
+now also works without --fast. Without these options nothing changes (backup:
+../latent_physical_SGM_pre_ising_patch/sample_latent_pre_dwell.py).
 """
 
 import argparse
@@ -777,7 +785,8 @@ def main():
     ap.add_argument("--brownian", default="tree", choices=["tree", "cached"],
                     help="(--fast) cached: the same Brownian tree, evaluated once per step instead of twice")
     ap.add_argument("--stem-suffix", default="",
-                    help="(--fast) appended to the samples file name, e.g. _fast to keep them next to existing ones")
+                    help="appended to the samples file name, e.g. _fast to keep them next to existing ones (--fast; "
+                         "since 2026-11-23 also the default sampler, e.g. for tests)")
     ap.add_argument("--history-dtype", choices=["float64", "float32"], default="float64",
                     help="default sampler (2026-11-17): dtype of the parameter history on the device. float32 halves its "
                          "memory (CelebA-64 K3072: 22 GB per copy in float64 does not fit the 46 GB L40); the samples get "
@@ -805,7 +814,15 @@ def main():
                          "segment by segment between the slice knots (Brownian key fold_in(key, segment)), and after each "
                          "segment M unadjusted Langevin steps at that slice: x += eps s + sqrt(2 eps) z, s = -LAMBDA grad F / T, "
                          "eps = 2 (SNR |z| / |s|)^2 per sample (Song et al. 2021). M = 0: the segmented sampler without "
-                         "corrector (the baseline). Samples get the suffix _corr<M>x<SNR>")
+                         "corrector (the baseline). Samples get the suffix _corr<M>x<SNR>. "
+                         "dwell:TAU (2026-11-23, the physical corrector): instead of the M steps, the device's own "
+                         "overdamped Langevin dynamics dx = -grad F(x; theta_k) ds + sqrt(2T) dW for a fixed time TAU at "
+                         "every interior knot, parameters frozen at that slice (no per-sample step size); suffix "
+                         "_dwell<TAU>")
+    ap.add_argument("--corrector-log", action="store_true",
+                    help="(--corrector M:SNR) also record eps / T of every step, the device dwell time each step is "
+                         "equivalent to, in <stem>_epsT.npy (n, knots, M) with a summary in the .json; the samples are "
+                         "unchanged")
     ap.add_argument("--thin-knots", default="",
                     help="test of the knot spacing (default sampler only; thin_knot_keep): 'LO:HI' drops every slice "
                          "with an odd index whose time lies strictly between LO and HI, so the knot spacing there "
@@ -868,15 +885,15 @@ def main():
     if args.fast:
         return main_fast(args, quench)
     if (args.brownian_tol is not None or args.precision != "f64" or args.visible_impl != "auto"
-            or args.brownian != "tree" or args.stem_suffix):
-        ap.error("--brownian-tol, --brownian, --precision, --visible-impl and --stem-suffix need --fast")
+            or args.brownian != "tree"):
+        ap.error("--brownian-tol, --brownian, --precision and --visible-impl need --fast")
 
     theta_hist, W_hist, b_hist, run_dir, prov, problem = load_params(args.run, with_harmonic=True, with_patch=True,
                                                                      with_cond=True)
     taus = slice_times(prov)                  # the run's knots ('uniform': lm.forward_time_pts(), as before)
     out_dir = os.path.join(run_dir, "samples")
     os.makedirs(out_dir, exist_ok=True)
-    stem = os.path.join(out_dir, f"{args.sampler}_{args.set}_n{args.n}")
+    stem = os.path.join(out_dir, f"{args.sampler}_{args.set}_n{args.n}{args.stem_suffix}")
     if args.history_dtype == "float32":       # --history-dtype float32: every make_drift of this job, own file names
         global HISTORY_DTYPE
         HISTORY_DTYPE = np.float32
@@ -889,15 +906,26 @@ def main():
         SDE_TOL_SCALE = float(args.sde_tol_scale)
         stem += f"_tol{args.sde_tol_scale:g}"
         prov["sde_tol_scale"] = float(args.sde_tol_scale)
-    corr = None                               # --corrector M:SNR / --force-scale (2026-11-17)
-    if args.corrector:
+    corr = None                               # --corrector M:SNR / dwell:TAU / --force-scale (2026-11-17, 11-23)
+    if args.corrector.startswith("dwell:"):   # (0, 0.0, TAU): the segmented sampler + a fixed Langevin dwell per knot
+        try:
+            tau = float(args.corrector[len("dwell:"):])
+        except ValueError:
+            tau = float("nan")
+        if not (math.isfinite(tau) and tau > 0.0):
+            raise SystemExit(f"--corrector {args.corrector!r}: expected dwell:TAU with a finite TAU > 0 (e.g. dwell:0.01)")
+        corr = (0, 0.0, tau)
+    elif args.corrector:
         try:
             m_s, snr_s = args.corrector.split(":")
-            corr = (int(m_s), float(snr_s))
+            corr = (int(m_s), float(snr_s), None)
         except ValueError:
             corr = None
         if corr is None or corr[0] < 0 or not (math.isfinite(corr[1]) and corr[1] > 0.0):
-            raise SystemExit(f"--corrector {args.corrector!r}: expected M:SNR with M >= 0 and SNR > 0 (e.g. 2:0.16)")
+            raise SystemExit(f"--corrector {args.corrector!r}: expected M:SNR with M >= 0 and SNR > 0 (e.g. 2:0.16) "
+                             f"or dwell:TAU")
+    if args.corrector_log and (corr is None or corr[2] is not None or corr[0] < 1):
+        raise SystemExit("--corrector-log: with --corrector M:SNR, M >= 1, only")
     if corr is not None and args.sampler != "sde":
         raise SystemExit("--corrector: default SDE sampler only (no --sampler ode)")
     if args.noise_scale != 1.0:               # --noise-scale (2026-11-20): the reduced-noise reverse SDE
@@ -916,7 +944,13 @@ def main():
         if args.force_scale != 1.0:
             stem += f"_fs{args.force_scale:g}"
             prov["force_scale"] = float(args.force_scale)
-        if corr is not None:
+        if corr is not None and corr[2] is not None:
+            stem += f"_dwell{corr[2]:g}"
+            prov["corrector"] = {"dwell": corr[2], "kind": "fixed dwell: overdamped Langevin dynamics dx = -grad "
+                                 "F(x; theta_k) ds + sqrt(2T) dW for the time dwell at every interior slice knot, "
+                                 "parameters frozen at that slice (solve_SDE, the predictor's tolerances)",
+                                 "brownian_key": f"fold_in(trajectory key, {DWELL_KEY_FOLD} + knot index)"}
+        elif corr is not None:
             stem += f"_corr{corr[0]}x{corr[1]:g}"
             prov["corrector"] = {"steps": corr[0], "snr": corr[1], "kind": "unadjusted Langevin, SNR step size"}
     t_start = time.time()
@@ -1033,7 +1067,7 @@ def main():
 
             def drift(t, x, a):
                 return x - lam_f * (x - drift_base(t, x, a))
-        if corr is not None and corr[0] > 0:  # --corrector: grad F from the PF-ODE drift x - grad F
+        if corr is not None and (corr[0] > 0 or corr[2] is not None):   # --corrector: grad F from x - grad F
             grad_ode, _ = make_drift(theta_hist, W_hist, b_hist, "ode", problem, prov.get("hidden", "ising"),
                                      local_p, quad_p, prov.get("radius"), prov.get("neighbourhood", "chebyshev"), taus,
                                      harmonic=harm_p, patch=patch_p, cond=cond_p)
@@ -1134,14 +1168,29 @@ def do_quench(x_final, drift_ode, durations, stem, args, t_start):
               f"{time.time() - t_q:.0f} s; saved {name}.npy", flush=True)
 
 
-def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, lam, es=None):
+DWELL_KEY_FOLD = 200000      # --corrector dwell:TAU: the dwell at knot j has Brownian key fold_in(trajectory key, 200000 + j)
+
+
+def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, lam, es=None, dwell=None, eps_log=None):
     """Predictor-corrector sampling (--corrector M:SNR, 2026-11-17) of one padded chunk: the reverse SDE solved from
     knot to knot (segments [t0, k_1], [k_1, k_2], ..., [k_last, T_FORWARD]; Brownian key fold_in(key, segment)), and
     after every segment but the last M unadjusted Langevin steps at that knot's slice, x += eps s + sqrt(2 eps) z with
     s = -lam grad F / T (grad F = x - drift_ode) and eps = 2 (SNR |z| / |s|)^2 per sample (Song et al. 2021, the SNR
     rule); noise keys fold_in(fold_in(key, 100000 + segment), step). M = 0: the segmented sampler alone.
     es (a --cond run, 2026-11-19): the samples' one-hot labels, held in the predictor and the corrector; None
-    (default): exactly as before."""
+    (default): exactly as before.
+    dwell (--corrector dwell:TAU, 2026-11-23; the physical corrector): instead of the M steps, after every segment but
+    the last the device's own overdamped Langevin dynamics with the parameters frozen at that knot's slice,
+        dx = -lam grad F(x; theta_k) ds + sqrt(2T) dW   for a fixed time TAU (the same for every sample and knot),
+    whose stationary distribution is exp(-lam F_k / T); solved continuously as equilibrate does (solve_SDE: SRA1,
+    the predictor's tolerances, diffusion = the predictor's sqrt(2T) I), Brownian key fold_in(key, DWELL_KEY_FOLD + j).
+    The predictor's segments and keys are the same as for M:SNR, so a dwell set and an M:SNR set share their
+    predictor noise. Not for --cond runs. None (default): exactly as before.
+    eps_log (--corrector-log, M:SNR only): a list; each step's eps / T (the dwell time that step is equivalent to: the
+    step is -(eps / T) grad F + sqrt(2T (eps / T)) z) is appended per knot and step as a (chunk,) array, computed
+    from the same states and noise by a separate function, so the samples are unchanged. None (default): nothing."""
+    if (dwell is not None or eps_log is not None) and es is not None:
+        raise SystemExit("--corrector dwell:TAU and --corrector-log: not for --cond runs")
     seg_t = np.concatenate([[t0], np.asarray(knots, dtype=np.float64), [lm.T_FORWARD]])
     seg_t = seg_t[np.concatenate([[True], np.diff(seg_t) > 1e-12])]
 
@@ -1176,15 +1225,36 @@ def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, la
                                                                                       in_axes=(0, 0, 0, None)))
         seg_fn = lambda y, ks, ta, tb: seg_c(y, ks, es_d, ta, tb)       # noqa: E731
         corr_fn = lambda y, zs, tb: corr_c(y, zs, es_d, tb)             # noqa: E731
+    if dwell is not None:                         # --corrector dwell:TAU: continuous Langevin at the frozen slice
+        def dwell_solve(y, k, tb):
+            def ldrift(s, x, a):
+                return lam * (grad_ode(tb, x, a) - x)
+
+            sol = solve_SDE(ldrift, diffusion, y, k, 0.0, float(dwell), 2, lm.DT0, rtol=lm.RTOL_SDE * SDE_TOL_SCALE,
+                            atol=lm.ATOL_SDE * SDE_TOL_SCALE, brownian_tolerance=lm.BROWNIAN_TOL)
+            return sol.ys[-1]
+
+        dwell_fn = vmap(dwell_solve, in_axes=(0, 0, None))
+    if eps_log is not None:                       # --corrector-log: the SNR rule's eps / T, samples untouched
+        def eps_over_T(y, z, tb):
+            s = -lam * (y - grad_ode(tb, y, ())) / lm.TEMP
+            return 2.0 * (snr * jnp.linalg.norm(z) / (jnp.linalg.norm(s) + 1e-300)) ** 2 / lm.TEMP
+
+        eps_fn = jax.jit(vmap(eps_over_T, in_axes=(0, 0, None)))
     y = jnp.asarray(x0)
     keys = jnp.asarray(keys)
     for j in range(seg_t.size - 1):
         ks = vmap(lambda k: jr.fold_in(k, j))(keys)
         y = seg_fn(y, ks, jnp.asarray(seg_t[j]), jnp.asarray(seg_t[j + 1]))   # traced times: one compile
-        if M > 0 and j < seg_t.size - 2:
+        if dwell is not None and j < seg_t.size - 2:
+            kd = vmap(lambda k: jr.fold_in(k, DWELL_KEY_FOLD + j))(keys)
+            y = dwell_fn(y, kd, jnp.asarray(seg_t[j + 1]))
+        elif M > 0 and j < seg_t.size - 2:
             for m in range(M):
                 zs = vmap(lambda k: jr.normal(jr.fold_in(jr.fold_in(k, 100000 + j), m), (y.shape[1],),
                                               dtype=y.dtype))(keys)
+                if eps_log is not None:
+                    eps_log.append(np.asarray(eps_fn(y, zs, jnp.asarray(seg_t[j + 1]))))
                 y = corr_fn(y, zs, jnp.asarray(seg_t[j + 1]))
     return y
 
@@ -1221,14 +1291,19 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
     x_final = np.full_like(x0, np.nan)
     x_snap = np.full((x0.shape[0], n_save, x0.shape[1]), np.nan, dtype=np.float32) if args.snapshots else None
     chunk_times = []
+    eps_rows = [] if getattr(args, "corrector_log", False) else None   # --corrector-log: eps / T per sample
     for c0 in range(0, args.n, args.chunk):
         t_c = time.time()
         idx = np.arange(c0, min(c0 + args.chunk, args.n))
         pad = np.concatenate([idx, np.repeat(idx[-1:], args.chunk - idx.size)])
         if corr is not None:                  # --corrector: segmented predictor-corrector sampler
+            eps_chunk = [] if eps_rows is not None else None
             yc = sample_corrector(drift, diffusion, grad_ode, x0[pad], keys[pad], knots, t0, corr[0], corr[1],
-                                  float(args.force_scale), es=None if COND_E is None else COND_E[pad])
+                                  float(args.force_scale), es=None if COND_E is None else COND_E[pad],
+                                  dwell=corr[2], eps_log=eps_chunk)
             x_final[idx] = np.asarray(yc)[: idx.size]
+            if eps_rows is not None:
+                eps_rows.append(np.stack(eps_chunk, axis=1)[: idx.size])
         else:
             sol = (fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad])) if COND_E is None
                    else fn(jnp.asarray(x0[pad]), jnp.asarray(keys[pad]), jnp.asarray(COND_E[pad])))
@@ -1242,6 +1317,22 @@ def sample(args, drift, diffusion, problem, stem, prov, W_hist, t_start, taus=No
     if x_snap is not None:
         np.savez(stem + "_snapshots.npz", states=x_snap, t=np.linspace(0.0, lm.T_FORWARD, n_save))
     os.remove(stem + ".partial.npy")
+    if eps_rows is not None:                  # --corrector-log: (n, knots, M) eps / T, and its summary
+        epsT = np.concatenate(eps_rows, axis=0).reshape(args.n, -1, corr[0])
+        np.save(stem + "_epsT.npy", epsT)
+        per_knot = epsT.sum(axis=2)           # the equivalent dwell time per knot (all M steps)
+        prov["corrector_log"] = {
+            "file": os.path.basename(stem) + "_epsT.npy", "shape": list(epsT.shape),
+            "meaning": "eps / T of every SNR step = the time of device Langevin dynamics it is equivalent to",
+            "knot_t_reverse": [float(v) for v in knots],
+            "per_knot_total_median": [float(v) for v in np.median(per_knot, axis=0)],
+            "per_knot_total_p10": [float(v) for v in np.percentile(per_knot, 10, axis=0)],
+            "per_knot_total_p90": [float(v) for v in np.percentile(per_knot, 90, axis=0)],
+            "per_knot_total_median_all": float(np.median(per_knot)),
+            "trajectory_total_median": float(np.median(per_knot.sum(axis=1)))}
+        print(f"--corrector-log: equivalent dwell per knot (all {corr[0]} steps), median over samples and knots "
+              f"{np.median(per_knot):.3g}; per trajectory (all knots) median {np.median(per_knot.sum(axis=1)):.3g}; "
+              f"wrote {stem}_epsT.npy", flush=True)
     manifest = {
         "run": args.run, "problem": problem, "K": int(W_hist.shape[1]), "sampler": args.sampler, "set": args.set, "n": args.n,
         "chunk": args.chunk, "rtol": lm.RTOL_SDE * SDE_TOL_SCALE if args.sampler == "sde" else lm.RTOL_ODE,

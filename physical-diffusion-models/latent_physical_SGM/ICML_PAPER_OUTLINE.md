@@ -1279,4 +1279,21 @@ texts read).
   visible-energy ablation (run 4297259); coupling counts from the code; the statements about Bacvanski et al.,
   De, Gower and Wang & Deng to be checked against the full papers; the first paper's bibliography entry. Still
   bullets: Software and Data, AI Use Statement, Impact Statement, all appendices.
+- 2026-11-23: **results of 2026-11-23 (notebook, "Results 2026-11-23") in the paper.**
+  - Visible-energy 2 x 2 on CelebA-32 complete (exact, seed 1, n = 2000): quartic + springs 20.20; harmonic +
+    springs 20.98 (run 4297259); quartic, no springs 25.83; harmonic, no springs 27.42; no diverged samples.
+    Gallery `2026-11-21_celeba32_spring-ablation_..._self-term-quartic-vs-linear_x_springs-vs-none_...`: the two
+    rows with springs cannot be told apart. A visible network that is linear throughout costs 0.8 FID. My
+    recommendation to the user: keep the quartic model as the main model (no reruns; the 0.8 is outside the 0.5
+    I had proposed as "similar", and the linear model is untested for sampled training and on MNIST / Fashion) and
+    state the result in the ablation and in the hardware section. Not yet confirmed by the user.
+  - CelebA-64, K16, locked patches, seed 1, n = 2000 (floor 5.91): exact 43.15, with corrector 38.16; trained
+    from samples S = 64 46.00, S = 16 46.58 (interim Inception 4302234; the corrector rows for the sampled models
+    and the 5/9/9 row follow with 4297028). The gap to exact is 2.9 / 3.4, larger than at 32x32 (1.0). Gallery
+    `2026-11-21_celeba64_locked-recipe_..._exact-vs-on-device-S64-vs-S16_...`: the same face on nearly every
+    trajectory, the sampled models slightly softer; plausible, varied faces with smudgy backgrounds and a few
+    distorted ones. Training took 23.3 h (S = 64) and 18.7 h (S = 16).
+  - In `results.tex`: the five new numbers. In `main.tex`: Section 5.2 (64x64 gap), 5.3 (the completed ablation),
+    5.4 (corrector at 64x64), 5.5, Section 6 "Wiring", limitations; Figure 2 now has a 64x64 block (provisional).
+  - Disk: 944 G of 1 T used on 2026-11-23, 81 G free; the second wave (18 runs at about 3 G) needs about 55 G.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.

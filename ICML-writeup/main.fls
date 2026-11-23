@@ -880,6 +880,11 @@ INPUT ./figures/provisional/strip_celeba32_exact_S64_S16.png
 INPUT figures/provisional/strip_celeba32_exact_S64_S16.png
 INPUT ./figures/provisional/strip_celeba32_exact_S64_S16.png
 INPUT ./figures/provisional/strip_celeba32_exact_S64_S16.png
+INPUT ./figures/provisional/strip_celeba64_exact_S64_S16.png
+INPUT ./figures/provisional/strip_celeba64_exact_S64_S16.png
+INPUT figures/provisional/strip_celeba64_exact_S64_S16.png
+INPUT ./figures/provisional/strip_celeba64_exact_S64_S16.png
+INPUT ./figures/provisional/strip_celeba64_exact_S64_S16.png
 INPUT ./figures/provisional/grid_mnist_K784_S64.png
 INPUT ./figures/provisional/grid_mnist_K784_S64.png
 INPUT figures/provisional/grid_mnist_K784_S64.png

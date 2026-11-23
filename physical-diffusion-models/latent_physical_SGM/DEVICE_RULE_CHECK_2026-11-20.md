@@ -66,6 +66,56 @@ Per clamped image and per window of S reads:
 | per read, the sum over the unit's pixels in phi | a second sum over the unit's fan-in, or nudges (below) | no |
 | the active state's spring sum, sum_i Q_mi | from the couplings | no |
 
+### Where G_m comes from (added 2026-11-23, the user's question: "do we need to measure grad a_m = G, and how?")
+
+- **G is needed, in two roles.** Per coupler, `G_mi` enters the W and Q updates (`2 (G_mi - Gbar_i)`). Summed over
+  the unit's pixels it enters `c_m` (`|G_m - Gbar|^2`, `(G_m - Gbar) . psi`).
+- **It is a force, not a derivative to be taken.** The joint energy contains `-a_m(x)` when state m is active, so
+  `G_mi = W_mi + 2 Q_mi x_i` is the force that coupler (m, i) puts on pixel i. By reciprocity the same number is the
+  sensitivity of state m's field to pixel i.
+- **In the runs and in `check_device_rule.py` G is not measured.** It is computed from W, Q and x for the active
+  state. Only the hidden states are sampled.
+- **Three ways a device could get it:**
+  1. *From the coupler's own setting.* Local for the per-coupler role. The sums over pixels then need a summing line
+     per unit (N products per visited state). The rule then uses the coupling values, so calibration errors of W and
+     Q enter.
+  2. *From the clamp forces, resolved per read.* `Cov(1[state = m], force on clamp i) = -p_m (G_mi - Gbar_i)`, with
+     no knowledge of W or Q. Needs force sensors faster than the hidden switching. Every other hidden unit that
+     pulls on the same pixel adds noise (zero on average, because the units are independent given x): about 34
+     units per interior pixel in the CelebA-32 recipe (global, 16 + 16 patches, per-pixel). **Not tested.**
+  3. *From probe displacements with field read-out.* Gives sums `G_m . u`, never the components. Covers
+     `G_m . psi` and `G_m . Gbar`; `|G_m|^2` needs one more pair per visited state.
+- Correction of a sentence below: computing the sums digitally does save something, but little. It costs N per
+  visited state, against N per state for all fields a_m (which give the exact p_m).
+
+### Is "local, on-device" a fair name? (2026-11-23)
+
+Yes, with the couplings taken from the couplers (way 1 above), if both words are defined:
+
+- **On device:** the device supplies the hidden states at the clamped image and the clamp force. Nothing simulates
+  the dynamics, nothing is differentiated through it, and there is no free-running phase. A teacher forms the
+  products and applies the updates.
+- **Local:** a three-factor rule. Coupler (m, i) uses its own G_mi, its pixel's x_i, psi_i and Gbar_i, and its
+  state's p_m and c_m. `c_m` is a sum of local products over that state's own couplers: one extra sum along
+  connections that exist, no signal from other hidden units.
+- **Not parameter-free.** The G terms use the coupling values. Errors of the real couplings against the assumed
+  ones are absorbed in p_hat and psi (measured on the device) but not in the G terms. The outline's remark under B4
+  that on-device training absorbs static coupling errors holds only in part, unless G is read from forces (way 2).
+- **What is evaluated at the true hardware values** (the user's follow-up):
+  - the occupations p_hat and the clamp force psi, with whatever couplings the device really has;
+  - therefore the whole gradient of the **visible** couplings, `<-Lap phi_k / T + grad phi_k . psi / T^2>`: the
+    phi_k are known functions of x, so no coupling value enters. For these the rule knows the model, not the
+    parameters;
+  - in the **hidden** couplings' gradient, every factor except G (and the spring sums s_m). A mismatch dG gives an
+    error of first order in dG in those terms only.
+  - Test (not started): a run in which p_hat and psi come from couplings with a static error and the G terms from
+    the error-free values.
+- **It assumes the model.** The response `dp/da = (diag(p) - p p^T) / T` is that of an ideal Potts unit in
+  equilibrium at T. A unit with finite inhibition or other switching statistics breaks it.
+- **What a referee may ask.** Given x the hidden units are independent, so the same statistics cost a few M x N
+  products digitally. The device does not solve a hard problem in training. The case for it is that the training
+  signal comes from the real hardware and needs no model of its dynamics.
+
 - **Nudges (`DESIGN.md` 2.1).** `[a_m(x + eps u) - a_m(x - eps u)] / (2 eps) = G_m . u` holds for any eps (checked
   with eps = 0.5). It gives `G_m . psi` and `G_m . Gbar`, if the field a_m of every visited state can be read as an
   analogue value, not only which state is active.

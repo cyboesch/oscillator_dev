@@ -727,14 +727,16 @@ above on MNIST (\FIDmnistSlarge{} against \FIDmnistExact) and 2.1 above on
 Fashion-MNIST (\FIDfashionSlarge{} against \FIDfashionExact). These gaps
 exceed the bootstrap error, so sampled training comes close to exact training
 without reaching it. With the corrector the gap shrinks to 0.3 on CelebA and
-0.6 on MNIST, and stays at 1.7 on Fashion-MNIST.
-\todo{CelebA $64\times64$: \FIDcelebHighExact{} exact; the sampled runs are
+0.6 on MNIST, and stays at 1.7 on Fashion-MNIST. At $64\times64$ the gap is
+larger, 2.9 (\FIDcelebHighSlarge{} against \FIDcelebHighExact), and all FIDs
+are far above the floor.
+\todo{the $64\times64$ rows with corrector for the sampled models are still
 running.}
 
 \textbf{Sixteen reads are enough.}
-Reducing the reads from \Slarge{} to \Ssmall{} changes the FID by 0.5 or
-less, in either direction (\FIDcelebLowSsmall, \FIDmnistSsmall{} and
-\FIDfashionSsmall). The gap to exact training is therefore not set by the
+Reducing the reads from \Slarge{} to \Ssmall{} changes the FID by about 0.5
+or less, in either direction (\FIDmnistSsmall, \FIDfashionSsmall,
+\FIDcelebLowSsmall{} and \FIDcelebHighSsmall). The gap to exact training is therefore not set by the
 number of reads. We have not isolated its origin; besides the sampling, the
 two ways of training differ in the update of the hidden couplings, which
 uses the visit-count rule in place of Adam.
@@ -757,9 +759,11 @@ diverged for any other model in Table~\ref{tab:results}.
 % ---------------------------------------------------------------- Figure 2 ---
 \begin{figure*}[t]
   \centering
-  \includegraphics[width=\textwidth]{figures/provisional/strip_celeba32_exact_S64_S16.png}
+  \includegraphics[width=\textwidth]{figures/provisional/strip_celeba32_exact_S64_S16.png}\\[2pt]
+  \includegraphics[width=\textwidth]{figures/provisional/strip_celeba64_exact_S64_S16.png}
   \caption{\textbf{Sampled training learns the same model as exact training.}
-    CelebA $32\times32$. Top row: real images. Below: samples of the models
+    CelebA $32\times32$ (top block) and $64\times64$ (bottom block). In each
+    block, top row: real images. Below: samples of the models
     trained with exact hidden averages, with $S=\Slarge$ and with
     $S=\Ssmall$ sampled hidden states. Each column uses the same initial
     noise and the same noise path in all three models, which were trained
@@ -817,11 +821,12 @@ Adding the hidden units without the springs gives \FIDablNoSprings, and the
 full model \FIDcelebLowExact. On the same trajectories, the models with and
 without springs generate the same faces. Without springs the images carry
 grain from pixel to pixel, as expected: given the hidden states, the pixels
-are then independent, and nothing correlates the noise of neighbours.
-Replacing the quartic on-site term by a harmonic one as well gives
-\FIDablHarmonic. The three sets of images are hard to tell apart at a
-glance; the Inception features, however, are sensitive to such grain.
-\todo{the fourth cell, harmonic on-site term with springs, is running.}
+are then independent, and nothing correlates the noise of neighbours. The
+Inception features are sensitive to such grain, although the images are hard
+to tell apart at a glance. The on-site nonlinearity matters much less than
+the springs: with a harmonic on-site term the FID is \FIDablHarmonicSprings{}
+with springs and \FIDablHarmonic{} without. A visible network that is linear
+throughout thus costs 0.8 FID.
 
 \textbf{The global unit carries the class.}
 The size of the global unit matters on the two data sets with ten classes
@@ -899,7 +904,9 @@ Table~\ref{tab:sampler} separates the steps of the sampler. The quench has by
 far the largest effect, from \FIDablExactRaw{} to \FIDcelebLowExact: at the
 end of the reverse process the pixels still carry the thermal noise of the
 bath, to which the FID is very sensitive, and switching the bath off removes
-it. The corrector adds 0.2 for the exact model and 1.0 for the sampled one.
+it. The corrector adds 0.2 for the exact model and 1.0 for the sampled one;
+at $64\times64$ it matters more (\FIDcelebHighExactCorr{} against
+\FIDcelebHighExact{} for the exact model).
 Replacing the reverse
 process by its deterministic counterpart, the probability-flow ODE
 \citep{song2021score}, costs about 2 FID, so the noise of the bath helps.
@@ -944,7 +951,7 @@ Potts unit with 32 states, whereas a layer of global bistable units lost
 clearly to a global Potts unit (Appendix~\ref{app:model-search}). Together
 with Table~\ref{tab:ablation}: the global level needs mutually exclusive
 templates, the patch level works with independent features, and the visible
-units can be linear and uncoupled at the price of grain.
+network can be linear at a cost of 0.8 FID.
 
 % =============================================================================
 \section{Towards Hardware}
@@ -982,10 +989,11 @@ that of the active state.
 \textbf{Wiring.}
 The patch units, which hold most of the couplings when $K$ is small, are
 wired to their patch only, and the bistable units to one pixel. Only the
-global unit is wired to all pixels. The visible units can be linear and need
-no coupling among themselves (Table~\ref{tab:ablation}): the device is then
-purely bipartite, as the circuit above, and the springs between neighbouring
-pixels are an optional smoothing term.
+global unit is wired to all pixels. The visible network can be linear:
+harmonic on-site terms and springs between neighbouring pixels cost 0.8 FID
+(Table~\ref{tab:ablation}), so all nonlinearity can sit in the hidden units.
+Without the springs the device is purely bipartite, as the circuit above, at
+the price of grain in the images.
 
 \textbf{Time dependence is the main cost.}
 We store the couplings at \nSlices{} noise levels. Fewer sets suffice on
@@ -1095,7 +1103,9 @@ $64\times64$ pixels. The model stores \nSlices{} sets of couplings, and we
 can reduce this number only on faces. The numbers are for one seed and
 \nSamples{} samples, and we do not compare them with FIDs reported under
 other protocols. The samples show malformed digits and too little contrast
-in faces, and for one model a few trajectories diverged.
+in faces, and for one model a few trajectories diverged. At $64\times64$ the
+FID is far above the floor of real images, and the gap between sampled and
+exact training is larger than at $32\times32$.
 
 \textbf{Conclusion.}
 We turned a dense associative memory into a diffusion model: a physical

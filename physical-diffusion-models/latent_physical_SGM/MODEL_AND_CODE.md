@@ -73,7 +73,7 @@ Common training flags (all runs since 2026-11-13):
 | K | MNIST 6144, Fashion 1536, CelebA 1536 | MNIST gains about 3.4 FID per doubling; Fashion and CelebA saturate at 1536 (2026-11-15, 2026-11-16) |
 | start of the reverse process | `--init-dist equil:3`: the N(0, T I) states relaxed for 3 time units of Langevin dynamics under the t = 5 energy; no data needed | 2026-11-12: worth about 1.5 FID; after the quench it adds only 0-1 (CelebA, 2026-11-15) |
 | quench | `--quench 1`: after the SDE, dx/ds = -grad F(x; t = 0 params) for s = 1 (zero temperature) | 2026-11-15: the largest single gain; removes the speckle; no memorisation (nearest-neighbour check) |
-| corrector | `--corrector 2:0.16`: 2 unadjusted Langevin steps at every knot (SNR step size, Song et al.) | 2026-11-17: -1.1 Inception FID after the quench on CelebA-32 (22.64 -> 21.50), KID 14.9 -> 12.5; 4 steps no better; +4% sampling time |
+| corrector | `--corrector 2:0.16`: 2 unadjusted Langevin steps at every knot (SNR step size, Song et al.) | 2026-11-17: -1.1 Inception FID after the quench on CelebA-32 (22.64 -> 21.50), KID 14.9 -> 12.5; 4 steps no better; +4% sampling time. Physically: with s = -grad F / T a step is x <- x - (eps / T) grad F + sqrt(2 eps) z, i.e. overdamped Langevin relaxation in F(x; theta_k) at the device temperature T for a dwell time ~ eps / T with the parameters frozen at the trained slice: plain thermalisation, the most native operation of a thermal device (the predictor needs 2 grad F and the expanding +x term). It acts at the slice times, where theta is exact, and resets the error that interpolation and the predictor accumulate between slices. Caveat: the SNR rule gives each sample its own eps; a device would use one dwell time per slice (untested). Gains (2026-11-21/23): CelebA-64 -5.0 (43.15 -> 38.16), MNIST K16 -2.4, CelebA-32 -0.25 exact / -1.0 on device, Fashion K784 none. **Physical version (2026-11-23, being tested): `--corrector dwell:TAU`**, the same segmented sampler, but at every interior knot continuous Langevin dynamics dx = -grad F(x; theta_k) ds + sqrt(2T) dW for one fixed time TAU (all samples, all knots); see CODE_AND_PERFORMANCE.md, "Physical corrector" |
 
 **On-device training** (2026-11-17/18; every hidden statistic measured from sampled hidden states, every hidden
 state on the visit-count rule). Add to the common flags:
@@ -113,6 +113,12 @@ allocator, 160 G; K784 models: `--mem 64G`).
 MNIST / Fashion also with `--K 784` (the user, 2026-11-21: on-device runs for both K16 and K784), since the global unit
 carries the class identity there (K784: MNIST 10.01 vs 14.39, Fashion 21.32 vs 26.00).
 
+**Visible-model ablation (CelebA-32, exact, 2026-11-21/23; CODE_AND_PERFORMANCE.md "Results 2026-11-23"):** the
+radius-1 coupling springs c_lin (x_i - x_j)^2 carry the visible model (without them +5.6 FID, grainy images); the
+Duffing self term k_duff x^4 is nearly dispensable: a fully harmonic visible layer (`--visible harmonic
+--pair-terms lin`: linear self spring + linear coupling springs) gives 20.98 vs 20.20 and looks the same, with no
+diverging samples. Without springs: quartic self term 25.83, linear 27.42. Springs alone, no hidden units: 218.
+
 ### Best models and command lines (seed 1)
 
 Training + sampling (pipeline, from `latent_physical_SGM/`):
@@ -144,6 +150,8 @@ sbatch [--mem M --time T] jobs/run_pipeline_neuronic.sh PROBLEM TAG "EXTRA FLAGS
 | CelebA 32x32 grey | K784 + 8x8 every 2 px + 16x16 every 4 px, noise start, exact statistics, Adam | 22.85 (19.1) | - |
 | CelebA 32x32 grey | the same, **fully on-device training** (S = 64 sampled statistics, visit-count rule; 2026-11-18) | 23.59 (20.0) | - |
 | CelebA 32x32 grey | K784 + 8x8 every 2 px + 4x4 every 2 px + 16x16 every 4 px, noise start (ties the above with half the global states, 2026-11-17) | 22.3 (18.7) | - |
+| CelebA 64x64 grey | **locked recipe: K16 + 32x32 every 8 px from t = 4.49 + 16x16 every 4 px from t = 2.22, 64 patch states**, exact (2026-11-22; Inception 4297027) | 43.15 (34.34); **with `--corrector 2:0.16`: 38.16 (26.67), best** | - |
+| CelebA 64x64 grey | locked recipe, **on device** S = 64 / S = 16 (2026-11-23; Inception 4297028) | 46.00 (38.53) / 46.58 (39.84); **with `--corrector 2:0.16`: 41.30 (29.79) / 41.14 (30.15)**; S = 64 post-hoc knots 5/9/9: 47.59 (41.63) | - |
 | CelebA 64x64 grey | K1536 + 16x16 every 4 px, noise start (first run, 2026-11-17; floor 5.9) | 58.5 (55.9) | - |
 | CelebA 64x64 grey | K3072 + 16x16 every 4 px, noise start (2026-11-18): no gain over K1536 | 58.3 (55.7) | - |
 | CelebA 64x64 grey | K64 + 16x16 every 4 px + 32x32 every 8 px + clamped 8-cluster label (`--cond 8 --cond-on global,patch`; 4.98 M couplings per slice, a third of K1536 + 16x16; 2026-11-19; without the label 59.25) | 57.8 (55.0) | - |
@@ -315,6 +323,7 @@ Backups of the files before each change: `../latent_physical_SGM_pre_ising_patch
 | 11-20 | `--time-knots-sets global=B,patch1=B,patch2=B`: own even knots per parameter set; segments from the union of the knots; every open knot trains over its whole interval so far (slices behind a set's finished knots enter with that set fixed); slices written after all knots; resume retrains from slice 1; config `time_knots_sets` | `train_latent` (`train_all_knots`, `build_runner(knot="perset")`) | test 4287622: shared and plain runs bitwise; per-set crossfades 2.8e-15, step pieces exact; resume bitwise |
 | 11-20 | `compress_history.py --knot-slices LIST` (explicit kept slices for all groups) and `--mode steps:B` (piecewise constant, mean per piece) | | jobs 4285926, 4286502: full count reproduces the run exactly; synthetic pieces |
 | 11-21 | `--visible harmonic`: only the linear self spring k_lin x^2 / 2 + bias per pixel (k_duff = k_6 = 0, held at exactly zero, their gradients zeroed); k_lin starts at 1 and is not floored, so confinement against positive squared-pixel couplings Q of the hidden units is not guaranteed (watch the samples' divergence count); refused unless `--pair-terms none` or `lin` | `train_latent` | test 4290730: quartic path old vs new bitwise (3 slices, both patch sets); refusals; k_duff / k_6 / pair groups exactly 0 in all 100 slices; confinement margins; sampling. Backup `train_latent_pre_harmonic.py` |
+| 11-23 | `sample_latent --corrector dwell:TAU` (the physical corrector): the segmented predictor of `--corrector M:SNR` (same segments and keys), and at every interior knot the device's overdamped Langevin dynamics with the parameters frozen at that slice, dx = -grad F(x; theta_k) ds + sqrt(2T) dW, for a fixed time TAU, solved continuously (solve_SDE, SRA1, the predictor's tolerances; Brownian key fold_in(key, 200000 + knot)); suffix `_dwell<TAU>`. `--corrector-log` (with M:SNR): eps / T of every SNR step (its equivalent dwell time) to `<stem>_epsT.npy` + a summary in the .json, samples unchanged. `--stem-suffix` now also without `--fast` | `sample_latent` (backup `../latent_physical_SGM_pre_ising_patch/sample_latent_pre_dwell.py`) | test 4305032 (pending): refusals; M:SNR + log vs the production CelebA-32 corrector set, bitwise; dwell -> 0 limit; dwell 0.01 / 0.1 finite |
 
 ## 4. Known pitfalls
 

@@ -6591,3 +6591,90 @@ two columns)
   a few columns differ, e.g. MNIST K784 S = 16 column 11). On-device training learns essentially the same model;
   a candidate paper figure.
   + slices/ 7.2 G, which duplicate it).
+
+### Results 2026-11-23 (collected 10:10)
+
+- **Spring ablation complete, the 2x2 (CelebA-32, exact, seed 1, n = 2000, Inception 4297260, SDE + quench 1; FID_inf
+  in brackets; no diverged samples anywhere):**
+
+  | self term \ coupling | linear springs c_lin (radius 1) | no coupling |
+  |---|---|---|
+  | quartic (k_lin x^2 / 2 + k_duff x^4 / 4) | **20.20** (12.34), the locked model | 25.83 (20.45) |
+  | linear only (k_lin x^2 / 2; `--visible harmonic`) | 20.98 (12.98), run 4297259 | 27.42 (22.43) |
+  | pixels only (springs, no hidden units) | 218.38 (337) | - |
+
+  **Reading:** the coupling springs carry the visible model (about -5.6 to -6.4 FID); the Duffing self term adds
+  little (+0.8 without it when springs are present, +1.6 without springs). A fully harmonic visible model (linear
+  self spring + linear coupling springs, the user's "only linear local and coupling stiffness") costs 0.8 FID and
+  looks the same in the gallery (`galleries/2026-11-21_celeba32_spring-ablation_locked-K16-64-states_self-term-quartic-vs-linear_x_springs-vs-none_plus-pixels-only_exact_noise-start_quench1`):
+  both rows with springs are smooth, both without are grainy. No divergence even without the x^4 confinement.
+- **CelebA-64 exact, locked recipe (K16 + 32x32 every 8 px from t = 4.49 + 16x16 every 4 px from t = 2.22, 64 patch
+  states; Inception 4297027, floor 5.91, FID_inf 2.30):** SDE + quench 1 **43.15** (34.34); corrector + quench 1
+  **38.16** (26.67), the **best 64x64 result so far** (previous: K64 early + corrector 43.10; compressed 5/9/9 +
+  corrector 40.88; the 32-state K16 run 48.63). Doubling the patch states 32 -> 64 gains 5.5 at 64x64.
+- **CelebA-64 on device:** S = 64 (4297021) trained in 23.3 h, S = 16 (4297025) in 18.7 h, both sampled (exit 0,
+  `--chunk 25`, platform allocator). Corrector sets 4297022 (S = 64; waiting for a GPU) and 4297026 (S = 16; running);
+  knots compressed (4297023), sampling 4297024 waiting. Interim Inception on the samples that exist: **4302234**
+  (2026-11-23 10:10). Full table 4297028, gallery 4297029.
+  **Interim result (4302234, 10:23), SDE + quench 1:** exact 43.15 (34.34), on device S = 64 **46.00** (38.53),
+  S = 16 **46.58** (39.89): +2.9 / +3.4, a larger on-device gap than at 32x32 (+1.0), still better than the
+  32-state exact K16 run (48.63). As sampled (no quench): 109.3 / 112.9 / 114.3. Corrector sets (4297022, 4297026)
+  and knots sampling (4297024) running since 10:12; full table 4297028 after them (about 18:00).
+- **Disk 2026-11-23 10:05:** 944 G of 1 T (93%), 81 G free.
+- **CelebA-64 gallery (2026-11-23 15:45, job 4303677; replaces the chained 4297029, cancelled, since the gallery needs
+  only the SDE + quench sets):** `galleries/2026-11-21_celeba64_locked-recipe_K16_64-patch-states_exact-vs-on-device-S64-vs-S16_noise-start_quench1/`.
+  Looked at: on device S = 64 and S = 16 draw the same face as exact on nearly every trajectory (identity, pose,
+  hair, lighting), slightly softer and a little lower in contrast, which matches the +2.9 / +3.4 FID. The 100-sample
+  sheets show varied, plausible faces, with smudgy backgrounds and a few distorted faces, as for exact.
+- **CelebA-64 status 2026-11-23 15:50:** S = 16 corrector set done (4297026, 6.7 h); knots 5/9/9 of S = 64 sampled
+  (4297024, 5.1 h); S = 64 corrector set (4297022) still running (5.7 h so far, about 1-2 h left); the full table
+  (Inception 4297028: exact, S64, S16, with and without corrector, knots) follows it.
+- **CelebA-64, full lock-in table (2026-11-23 17:22, Inception 4297028; corrector sets 4297020 exact, 4297022 S = 64
+  (6.9 h), 4297026 S = 16; knots sampling 4297024; floor 5.91, FID_inf 2.30; no diverged samples anywhere):**
+
+  | model | SDE + quench 1 | corrector 2:0.16 + quench 1 | knots 5/9/9 + quench 1 | as sampled (no quench) |
+  |---|---|---|---|---|
+  | K16 exact (4289731) | 43.15 (34.34) | **38.16 (26.67)** | - | 109.30 |
+  | K16 on device S = 64 (4297021) | 46.00 (38.53) | 41.30 (29.79) | 47.59 (41.63) | 112.91 |
+  | K16 on device S = 16 (4297025) | 46.58 (39.84) | 41.14 (30.15) | - | 114.31 |
+  | previous K16 + early 32x32 / 16x16, 32 states | 48.63 (42.32) | - | - | - |
+
+  **Reading:** on device vs exact +2.9 / +3.1 (S = 64, quench / corrector) and +3.4 / +3.0 (S = 16). The corrector
+  gains about 5 in every row (exact -5.0, S = 64 -4.7, S = 16 -5.4), so at 64x64 it does **not** close the on-device
+  gap, unlike CelebA-32 (+1.0 -> +0.3). On device with the corrector (41.1-41.3) is better than exact without it
+  (43.15) and close to the old compressed exact 5/9/9 + corrector (40.88). S = 16 is as good as S = 64 again. Knots
+  5/9/9 on S = 64 cost +1.6 (at 32x32 +2.5); unlike MNIST / Fashion they work on faces. The corrector sets have more
+  faint pixels (8.7-8.9% vs 6.2-6.4%). Zeroing faint pixels (< 0.1; diagnostic rows of the same job) changes the rows
+  by 0-1 (corrector: exact 38.11, S = 64 40.28, S = 16 40.39; quench: 42.49 / 45.29 / 45.44), so the on-device gap
+  (+2.2 with the corrector after zeroing) is not a faint-pixel effect.
+- **CelebA-64 corrector gallery (2026-11-23 17:50, job 4304839):**
+  `galleries/2026-11-23_celeba64_locked-recipe_K16_64-patch-states_exact-vs-on-device-S64-vs-S16_SDE-quench1-vs-corrector2x0.16-quench1_noise-start/`
+  (exact, S = 64, S = 16, each SDE + quench 1 and corrector + quench 1; script scratchpad `gal_c64_corrector.sh`).
+  The corrector sampler integrates knot to knot with its own Brownian keys, so a corrector row shares only the start
+  with the plain rows (different faces in the same column) but shares the noise with the other corrector rows.
+  **Looked at:** the corrector rows have visibly more contrast (dark backgrounds and dark hair, sharper eyes and
+  mouths) than the plain rows, which are paler and more washed out; this fits the known 64x64 contrast deficit and the
+  -5 FID. Exact and on-device corrector rows draw the same face in almost every column, on device slightly softer.
+  The 100-sample sheets (exact and S = 64 with the corrector) look alike: varied faces, a few distorted ones and
+  smudgy backgrounds in both.
+- **Note on the corrector (discussion 2026-11-22):** physically it is thermal relaxation at frozen parameters (see
+  MODEL_AND_CODE.md, "corrector" row); untested: a fixed dwell time per slice instead of the per-sample SNR step.
+
+### Physical corrector: a fixed dwell per slice (started 2026-11-23)
+
+- **Why (the user, 2026-11-23: "we want this corrector step to be physical"):** the SNR corrector step x <- x + eps s
+  + sqrt(2 eps) z with s = -grad F / T is, in physical time dt = eps / T, one Euler step of the device's own
+  overdamped Langevin dynamics at the bath temperature, dx = -grad F(x; theta_k) dt + sqrt(2T) dW (noise and force
+  obey fluctuation-dissipation at T = 0.02; stationary state exp(-F_k / T), the model's distribution at that slice).
+  The noise is therefore already at the operating temperature. Not physical: eps = 2 (0.16 |z| / |s|)^2 is computed per
+  sample from |s|, so every sample gets its own dwell time; a device holds theta_k for one fixed time.
+- **Code (sample_latent.py, MODEL_AND_CODE.md 11-23 row):** `--corrector dwell:TAU`: the same segmented predictor
+  (same segments and Brownian keys as M:SNR, so dwell sets and SNR sets share their predictor noise), and at every
+  interior knot (98 for 100 slices) continuous Langevin dynamics for time TAU with theta frozen at that slice,
+  solved like `equilibrate` (SRA1, predictor tolerances). `--corrector-log` records the dwell time each SNR step is
+  equivalent to (eps / T), to choose TAU on the scale the SNR rule actually used.
+- **Plan:** (1) test 4305032 on the CelebA-32 locked exact run: refusals; M:SNR + log bitwise equal to the production
+  corrector set (first 250); the dwell -> 0 limit; dwell 0.01 / 0.1 finite; plus the SNR rule's equivalent dwell per
+  knot (n = 250). (2) A few TAU around that scale on CelebA-32 exact, n = 2000, quench 1, Inception against the SNR
+  corrector (19.95) and no corrector (20.20); one TAU for all data sets. (3) That TAU on the lock-in models in place
+  of the SNR corrector.
