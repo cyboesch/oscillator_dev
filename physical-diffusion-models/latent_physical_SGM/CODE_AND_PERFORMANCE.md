@@ -6565,6 +6565,8 @@ two columns)
   on CelebA-32, the global W / b / Q 0.30-0.55 vs 0.22-0.30. The recipe was tuned on CelebA; on the ten-class data the
   visible and global parameters change too much in time for 5 knots. Not tuned (lock-in rule).
 - **ODE + quench (CelebA-32):** exact 22.14, on device 22.93: about +2 over the SDE, as before.
+  Gallery (2026-11-24, job 4313242; the lock-in ODE sets had none): `galleries/2026-11-24_celeba32_locked-recipe_K16_64-patch-states_PF-ODE-vs-SDE_exact-vs-on-device-S64_noise-start_quench1`. Looked at: the ODE faces are flatter (more mid-grey, less dark/bright contrast) and more uniform (mostly frontal, smiling); the SDE rows have more varied poses, hair and accessories. Exact and on device draw the same faces for both samplers.
+  **No corrector in the ODE sets** (checked 2026-11-24): plain probability-flow ODE (provenance `sampler: ode`, rtol 1e-7, atol 1e-9), then quench 1 only. `sample_latent.py` refuses `--corrector` with `--sampler ode` by design: a Langevin corrector injects noise at T, so the sampler would no longer be deterministic and would turn into the SDE sampler with another noise schedule. Comparison (Inception 4290856, + quench 1), exact / on device S = 64: ODE 22.14 / 22.93; SDE 20.20 / 21.20; SDE + SNR corrector 19.95 / 20.23. ODE + corrector not run (would need a small code change; expected to land near the SDE + corrector numbers, since every bit of noise helps the ODE, 11-20 sweep).
 - **K784 on CelebA-32 (control):** 19.43 vs 20.20 (-0.8), with the corrector 19.52 vs 19.95 (-0.4): a small gain, far
   less than on MNIST / Fashion (-4.4 / -4.7): on faces the global unit matters little.
 - **Spring ablation, harmonic row (Inception 4290732):** no springs and only the linear self spring (--visible
@@ -6718,3 +6720,81 @@ two columns)
   2.7e-5 / 2.4e-5, the same size. So the new sampler reproduces the old one up to run-to-run noise (regression passed
   in that sense; 2.2e-4 at n = 250 in 4306626 is the same effect over more samples). Scan running since 21:52
   (0.03) / 21:54 (0.1); 0.3 waiting for a GPU.
+- **Early Inception 4306650 (2026-11-23 23:16), CelebA-32 exact, n = 2000, noise start, quench 1:** the physical
+  dwell does not reproduce the SNR corrector's (small) gain; at the SNR-equivalent dwell 0.1 it is slightly worse
+  than no corrector.
+
+  | set | FID train (sd) | FID test | FID_inf | KID x1e3 | faint % |
+  |---|---|---|---|---|---|
+  | no corrector (plain SDE) | 20.20 (0.34) | 19.59 | 16.49 | 12.39 | 9.0 |
+  | SNR corrector 2x0.16 | 19.95 (0.22) | 19.38 | 16.47 | 11.82 | 9.4 |
+  | dwell 0.03 | 20.30 (0.39) | 19.68 | 16.63 | 12.02 | 8.7 |
+  | dwell 0.1 | 20.55 (0.26) | 19.91 | 17.25 | 12.09 | 9.1 |
+  | real test images (floor) | 6.43 (0.06) | | 2.22 | | 11.8 |
+
+  Reading: all four are within about 1-2 bootstrap sd of each other (sd 0.2-0.4); dwell 0.1 is +0.35 on FID train
+  and +0.8 on FID_inf against no corrector. CelebA-32 is a weak test bench, because the SNR corrector itself only
+  gains -0.25 here (at 64x64 it gains -5). Run times n = 2000 (one L40): dwell 0.03 58 min, dwell 0.1 71 min.
+  Still to come: dwell 0.3 (4306629, running since 22:03), full Inception 4306630 and gallery 4306631 after it,
+  contrast check 4307092 (pixel std and per-image std, before and after quench, all five sets).
+- **Full scan (2026-11-24 00:14; dwell 0.3 4306629 1 h 58 min; Inception 4306630; gallery 4306631; contrast
+  4307092): the physical corrector gets monotonically worse with the dwell, and it is not a contrast effect.**
+
+  | set (CelebA-32 exact, n = 2000, quench 1) | FID train (sd) | FID_inf | faint % | FID, faint zeroed | pixel std (pre / post quench) | median image std |
+  |---|---|---|---|---|---|---|
+  | no corrector (plain SDE) | 20.20 (0.34) | 16.49 | 9.0 | 19.33 | 0.940 / 0.936 | 0.811 |
+  | SNR corrector 2x0.16 | **19.95** (0.22) | 16.47 | 9.4 | 19.44 | 0.957 / 0.954 | 0.831 |
+  | dwell 0.03 | 20.30 (0.39) | 16.63 | 8.7 | 19.73 | 0.945 / 0.941 | 0.820 |
+  | dwell 0.1 (= SNR-equivalent) | 20.55 (0.26) | 17.25 | 9.1 | 20.05 | 0.952 / 0.948 | 0.827 |
+  | dwell 0.3 | 21.52 (0.17) | 18.01 | 9.7 | 21.16 | 0.959 / 0.957 | 0.831 |
+
+  Reading: (1) FID rises with the dwell, 20.30 -> 20.55 -> 21.52; dwell 0.3 is +1.3 against no corrector (about
+  4 sd), so the trend is real. At the dwell the SNR rule takes on average (0.1), the physical version is +0.6 against
+  the SNR corrector. (2) My guess that the SNR steps win by raising contrast is refuted: the dwell raises pixel std
+  just as much (0.959 at 0.3 vs 0.957 SNR; image std 0.831 both) and still loses. (3) Gallery (looked at, 10x10 of
+  dwell 0.3 against SNR): the dwell-0.3 faces are softer, with less fine detail in hair, eyes and backgrounds; the
+  SNR faces are sharper and more varied in hair and background. Same contrast, less detail. (4) What the SNR rule
+  does differently is still open: it is a per-sample step size (small steps for samples far from equilibrium) and
+  two discrete Euler steps, not a continuous relaxation. CelebA-32 cannot settle whether a physical corrector helps
+  where the SNR one helps a lot (CelebA-64, -5); that needs a CelebA-64 dwell run (not submitted; the user to decide).
+- **CelebA-64 dwell 0.1 submitted 2026-11-24 (the user: "run CelebA-64 at dwell 0.1"):** locked exact run, n = 2000,
+  chunk 25, 160 G, quench 1: sampling **4311331** (30 h limit; expected ~10-14 h, the SNR corrector set 4297020 took
+  7.7 h); Inception **4311332** (vs no corrector 43.15 and SNR corrector 38.16, same table) and gallery **4311333**
+  (`galleries/2026-11-24_celeba64_physical-corrector_fixed-dwell-0.1_vs-SNR-corrector_vs-none_locked-K16-64-states_exact_noise-start_quench1`),
+  both after it; script scratchpad `eval_dwell64.sh`. The stale gallery folder of the failed first CelebA-32 round
+  (`..._fixed-dwell-0.003-to-0.1_...`, reference rows only) was deleted on the user's OK.
+- **2026-11-24 10:12: 4311331 FAILED after 1 min, GPU out of memory** (allocating 7.2 GB at chunk 25): I submitted it
+  without `XLA_PYTHON_CLIENT_ALLOCATOR=platform`, which every CelebA-64 sampling run needs (MODEL_AND_CODE.md
+  pitfalls). Its Inception 4311332 and gallery 4311333 ran on the reference rows only (gallery folder deleted).
+  **Resubmitted with the platform allocator, now with all three TAU (the user: "yes submit both", 0.03 and 0.3 in
+  addition to 0.1):** dwell 0.03 **4311847**, 0.1 **4311848**, 0.3 **4311849** (30 / 30 / 40 h limits; expected
+  ~8-11 / 10-14 / 18-24 h from the CelebA-32 cost ratios); Inception **4311850** and gallery **4311851** after all
+  three (`galleries/2026-11-24_celeba64_physical-corrector_fixed-dwell-0.03-0.1-0.3_vs-SNR-corrector_vs-none_locked-K16-64-states_exact_noise-start_quench1`).
+  11:04: all three running and past the first chunk without memory errors (started 10:29 / 10:41 / 10:46). Per
+  chunk of 25: 0.03 564 s then 412 s; 0.1 599 s then 477 s; 0.3 790 s (first chunk, with compilation). 80 chunks:
+  expected ends ~19:30 (0.03), ~21:30 (0.1), ~01:00-02:00 on 11-25 (0.3); Inception and gallery right after.
+  14:25: 39 / 28 / 18 of 80 chunks done (~345 / 470 / 685 s per chunk); revised ends ~18:30 / ~21:15 / ~02:00-02:30.
+- **Current understanding of the physical corrector (2026-11-24, before the CelebA-64 result):**
+  1. *What the SNR corrector is physically.* Each step x <- x + eps s + sqrt(2 eps) z with s = -grad F / T is an
+     Euler step of overdamped Langevin dynamics dx = -grad F(x; theta_k) dt + sqrt(2T) dW at the operating
+     temperature T, with the parameters frozen at slice k, for a time eps / T. The noise is already at T. Two things
+     are not physical: (a) the step size is chosen per sample from |z| / |s| (a device cannot measure |s|), and
+     (b) the relaxation is two large discrete jumps, not a continuous dwell.
+  2. *How long it relaxes.* Measured on CelebA-32: 0.104 time units per knot (two steps), nearly the same for every
+     sample and knot (0.095-0.11), 10 per trajectory against 5 for the reverse process. So in total time the SNR rule
+     is almost a fixed dwell; the per-sample variation is small.
+  3. *The physical version (fixed continuous dwell TAU, all samples, all knots) does not reproduce the gain on
+     CelebA-32* and gets worse with TAU: 20.30 / 20.55 / 21.52 at 0.03 / 0.1 / 0.3, vs 20.20 none and 19.95 SNR.
+     At the SNR-equivalent 0.1 it is +0.6 vs SNR.
+  4. *Not contrast.* The dwell raises pixel std as much as the SNR steps (0.957 at 0.3 vs 0.954), but the faces are
+     softer, with less fine detail. Longer relaxation at the frozen slice smooths images.
+  5. *Working hypothesis (untested):* a continuous dwell relaxes each sample toward the slice model's own marginal,
+     so the model's slice errors (it is smoother than the data) are imprinted more the longer it dwells; the two
+     discrete SNR jumps do something else that helps (overshoot / per-sample size), which a continuous relaxation
+     does not reproduce. Which of (a) and (b) matters is open; a fixed-step two-jump run on CelebA-32 would separate
+     them (not run; needs a small code change, not physical either).
+  6. *Open: CelebA-64*, where the SNR corrector gains -5 (43.15 -> 38.16): dwell 0.03 / 0.1 / 0.3 running
+     (4311847-49, Inception 4311850, gallery 4311851; ~02:30 on 11-25).
+  7. *Consequence for reporting, unless CelebA-64 changes it:* the physical sampler is the reverse SDE + quench; the
+     SNR corrector is a digital add-on (the analogue of Song et al.'s final denoising step), reported separately.
+     The corrector exists for the SDE only (no ODE + corrector, see the CelebA-32 lock-in ODE entry).

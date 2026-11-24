@@ -1296,4 +1296,15 @@ texts read).
   - In `results.tex`: the five new numbers. In `main.tex`: Section 5.2 (64x64 gap), 5.3 (the completed ablation),
     5.4 (corrector at 64x64), 5.5, Section 6 "Wiring", limitations; Figure 2 now has a 64x64 block (provisional).
   - Disk: 944 G of 1 T used on 2026-11-23, 81 G free; the second wave (18 runs at about 3 G) needs about 55 G.
+- 2026-11-24: **talk for the meeting with Dmitry Krotov on 2026-11-25** (the user's aim: his opinion, and him as a
+  co-author): `ICML-writeup/presentation-krotov/talk.tex` -> `talk.pdf`, 24 slides, beamer 16:9, compile with
+  `sbatch compile_talk.sh`. Order: overview figure; the model and what each term does (W, Q, b on a pixel; a table
+  "why each part is there" with its evidence); stored against learned memories; the protocol; the rule in two
+  slides; results (exact against sampled on four data sets, same-trajectory strips, samples, K, visible-energy
+  2 x 2, sampler with the probability-flow ODE samples); time dependence; hardware; what is weak; six questions.
+  Images are crops of the galleries (`img/`). New numbers used from the notebook: CelebA-64 corrector rows
+  (sampled 41.3 / 41.1), knots at 64x64 (47.6 against 46.0), fixed-dwell corrector on CelebA-32 (20.3 / 20.6 /
+  21.5 against 20.2 without and 20.0 with the standard corrector), ODE gallery of 2026-11-24. One line marked
+  preliminary comes from the review folder, not from the notebook: units on the springs, 20.2 -> about 18.4.
+  **Not yet in `main.tex` / `results.tex`:** the two CelebA-64 corrector numbers and the fixed-dwell result.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.
