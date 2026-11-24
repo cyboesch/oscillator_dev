@@ -6713,3 +6713,8 @@ two columns)
   max |diff| 2.2e-4, not bitwise. Suspected run-to-run GPU nondeterminism amplified by the SDE; check 4306691 (new
   code twice + old code once, n = 16, same node). The scan does not depend on it: dependency removed 21:52, so
   4306627-29 start without waiting.
+- **Determinism check 4306691 (21:56): GPU sampling is not bitwise reproducible run to run.** Same code, same node,
+  same inputs (CelebA-32 exact, `--corrector 2:0.16`, n = 16): run A vs run B max |diff| 2.2e-5; new vs old code
+  2.7e-5 / 2.4e-5, the same size. So the new sampler reproduces the old one up to run-to-run noise (regression passed
+  in that sense; 2.2e-4 at n = 250 in 4306626 is the same effect over more samples). Scan running since 21:52
+  (0.03) / 21:54 (0.1); 0.3 waiting for a GPU.
