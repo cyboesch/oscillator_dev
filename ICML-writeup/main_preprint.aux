@@ -31,7 +31,7 @@
 \citation{firstpaper2025}
 \citation{song2021score}
 \providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{fig:concept}{{1}{2}{\textbf {A physical diffusion model with fast hidden units.} (a)~Pixel oscillators, coupled to their neighbours by springs, interact with a thermal bath at temperature $T$. Hidden Potts units (rounded boxes; the filled dot is the active state) are coupled to all pixels (global unit, purple) or to the pixels of one patch, at a coarse (red) and a fine (yellow) scale. They equilibrate fast and are never controlled directly. (b)~Learning at one noise level. The pixels are clamped to a noised image $\x _t$ and the hidden units settle. Each coupling is updated from quantities at its two ends: the clamp force on its pixel and $S$ sampled states of its hidden unit. No free-running phase is needed. Repeating this over images and noise levels gives the schedule $\bm {\theta }^{*}(t)$. (c)~Generation. Starting from noise, an external controller replays $\bm {\theta }^{*}(\tau -s)$ in reverse time $s$. The bars, in the colours of (a), show when each hidden unit acts: the global unit throughout, the coarse patch units from $s\approx 0.5$, the fine ones from $s\approx 2.8$. A final quench with the bath switched off removes the thermal noise. The images are one generated $32\times 32$ face; the network drawings are schematic. \todo {the frames are from the K64 model with 32 patch states: re-render from the locked model, and add the frame after the quench.}\relax }{figure.caption.1}{}}
+\newlabel{fig:concept}{{1}{2}{\textbf {A physical diffusion model with fast hidden units.} (a)~Pixel oscillators, coupled to their neighbours by springs, interact with a thermal bath at temperature $T$. Hidden Potts units (rounded boxes; the filled dot is the active state) are coupled to all pixels (global unit, purple) or to the pixels of one patch, at a coarse (red) and a fine (yellow) scale. They equilibrate fast and are never controlled directly. (b)~Learning at one noise level. The pixels are clamped to a noised image $\x _t$ and the hidden units settle. Each coupling is updated from quantities at its two ends: the clamp force on its pixel and $S$ sampled states of its hidden unit. No free-running phase is needed. Repeating this over images and noise levels gives the schedule $\bm {\theta }^{*}(t)$. (c)~Generation. Starting from noise, an external controller replays $\bm {\theta }^{*}(\tau -s)$ in reverse time $s$. The bars, in the colours of (a), show when each hidden unit acts: the global unit throughout, the coarse patch units from $s\approx 0.5$, the fine ones from $s\approx 2.8$. A final quench with the bath switched off removes the thermal noise. The images are one generated $32\times 32$ face, the last one after the quench; the network drawings are schematic. \todo {the frames are from the K64 model with 32 patch states: re-render from the locked model.}\relax }{figure.caption.1}{}}
 \newlabel{sec:background}{{2}{2}{}{section.2}{}}
 \newlabel{eq:forward}{{1}{2}{}{equation.2.1}{}}
 \newlabel{eq:reverse}{{2}{2}{}{equation.2.2}{}}
@@ -40,18 +40,18 @@
 \citation{firstpaper2025}
 \citation{krotov2016dense,demircigil2017model,ramsauer2021hopfield}
 \citation{krotov2021large}
-\citation{hoover2023memory}
-\citation{ambrogioni2024search}
-\citation{pham2026emergence}
 \newlabel{eq:loss}{{3}{3}{}{equation.2.3}{}}
 \newlabel{sec:model}{{3}{3}{}{section.3}{}}
 \newlabel{eq:field}{{4}{3}{}{equation.3.4}{}}
 \newlabel{eq:visible}{{5}{3}{}{equation.3.5}{}}
 \newlabel{eq:free-energy}{{6}{3}{}{equation.3.6}{}}
 \newlabel{eq:mean-force}{{7}{3}{}{equation.3.7}{}}
-\newlabel{eq:stored}{{8}{3}{}{equation.3.8}{}}
+\citation{hoover2023memory}
+\citation{ambrogioni2024search}
+\citation{pham2026emergence}
 \citation{song2021score}
 \citation{hinton2002training,hyvarinen2007connections}
+\newlabel{eq:stored}{{8}{4}{}{equation.3.8}{}}
 \newlabel{sec:learning}{{4}{4}{}{section.4}{}}
 \newlabel{eq:generator}{{9}{4}{}{equation.4.9}{}}
 \newlabel{eq:response}{{10}{4}{}{equation.4.10}{}}
@@ -80,10 +80,10 @@
 \citation{liao2022gaussian}
 \citation{jelincic2025dtm,wangachour2026}
 \citation{song2021score}
-\citation{rooke2026stochastic}
 \newlabel{tab:ablation}{{2}{7}{\textbf {Ablations} (FID, exact hidden averages, one seed). Top: the visible energy on CelebA $32\times 32$ with the hidden units unchanged, and the visible energy alone. Bottom: the size $K$ of the global unit with the patch units unchanged.\relax }{table.caption.4}{}}
 \newlabel{sec:quality}{{5.3}{7}{}{subsection.5.3}{}}
 \newlabel{tab:sampler}{{3}{7}{\textbf {Sampler ablation} on CelebA $32\times 32$ (FID, one seed).\relax }{table.caption.6}{}}
+\citation{rooke2026stochastic}
 \citation{bacvanski2025dense}
 \newlabel{fig:ondevice}{{2}{8}{\textbf {Sampled training learns the same model as exact training.} CelebA $32\times 32$ (top block) and $64\times 64$ (bottom block). In each block, top row: real images. Below: samples of the models trained with exact hidden averages, with $S=\Slarge $ and with $S=\Ssmall $ sampled hidden states. Each column uses the same initial noise and the same noise path in all three models, which were trained from the same initial templates. \todo {provisional: a gallery image with its own labels. Redraw without the title, with the row labels of this caption, and add MNIST and Fashion-MNIST rows if space allows.}\relax }{figure.caption.3}{}}
 \newlabel{sec:smaller}{{5.5}{8}{}{subsection.5.5}{}}

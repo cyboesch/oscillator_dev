@@ -109,9 +109,9 @@ moving in a free-energy landscape.
 Seen as a dense associative memory, its memories are learned at every noise
 level instead of stored.
 The time-dependent couplings follow a local rule evaluated in a single phase,
-with the visible units clamped to data: the thermal fluctuations of the hidden
-units supply the response that other physical learning rules obtain from a
-second phase.
+with the visible units clamped to data. Its objective, score matching, has no
+partition function and therefore no free-running phase; the response of the
+hidden units that it does need is read from their thermal fluctuations.
 In simulation, training from \Slarge{} sampled hidden states per data point
 reaches an FID of \FIDcelebLowSlarge{} on $32\times32$ CelebA, against
 \FIDcelebLowExact{} with exact hidden averages, and the same architecture
@@ -146,9 +146,10 @@ crossbar hardware.
     (a), show when each hidden unit acts: the global unit throughout, the coarse
     patch units from $s\approx0.5$, the fine ones from $s\approx2.8$. A final quench with
     the bath switched off removes the thermal noise. The images are one
-    generated $32\times32$ face; the network drawings are schematic.
+    generated $32\times32$ face, the last one after the quench; the network
+    drawings are schematic.
     \todo{the frames are from the K64 model with 32 patch states: re-render
-    from the locked model, and add the frame after the quench.}}
+    from the locked model.}}
   \label{fig:concept}
 \end{figure*}
 
@@ -210,10 +211,11 @@ divided by the temperature, is the score. Our contributions are:
         the data or interpret trained neural networks.
   \item \textbf{Learning rule.} A local rule for the hidden couplings that is
         evaluated in a single phase (Section~\ref{sec:learning}). The pixels
-        are fully clamped to data. There is no free-running phase, no nudged
-        phase and no limit of small perturbation, because the thermal
-        fluctuations of the hidden units carry the response that a nudge would
-        measure. The rule follows in a few lines from the generator of the
+        are fully clamped to data. There is no free-running phase, because the
+        objective is score matching and contains no partition function. And no
+        nudge is needed for the response of the hidden units to a displacement
+        of the pixels: thermal units show it in their fluctuations.
+        The rule follows in a few lines from the generator of the
         pixel dynamics.
   \item \textbf{Results.} Trained from \Slarge{} or \Ssmall{} sampled hidden
         states per clamped image, the model reaches an FID of
@@ -533,8 +535,11 @@ read at this one configuration. There is no free-running phase as in
 Boltzmann learning \citep{hinton2002training,jelincic2025dtm}, no second,
 nudged equilibrium of the whole system as in equilibrium propagation
 \citep{scellier2017equilibrium}, and no limit of small perturbation. The clamp
-is a full clamp, as in the positive phase of a Boltzmann machine; the negative
-phase is replaced by higher moments of the hidden units in the positive phase.
+is a full clamp, as in the positive phase of a Boltzmann machine. There is no
+negative phase because the objective is a different one: score matching compares
+forces at the data points and contains no partition function. What it needs in
+addition to the mean forces is their response to a displacement of the pixels,
+that is, the curvature of the free energy.
 
 \textbf{Fluctuations take the place of the nudge.}
 Equation \eqref{eq:response} is a response of the hidden unit to a
@@ -1111,9 +1116,9 @@ exact training is larger than at $32\times32$.
 We turned a dense associative memory into a diffusion model: a physical
 system of visible units and fast hidden Potts units whose free-energy force
 is the score, with memories that are learned at every noise level. Its
-couplings follow a local rule evaluated in a single phase at clamped data, in
-which the thermal fluctuations of the hidden units take the place of the
-second phase that other physical learning rules need. Sixteen sampled states
+couplings follow a local rule evaluated in a single phase at clamped data.
+Score matching needs no free-running phase, and the thermal fluctuations of the
+hidden units supply the response that it does need. Sixteen sampled states
 per hidden unit and image are enough to learn essentially the same model as
 exact averages, on digits, garments and faces.
 

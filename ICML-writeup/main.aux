@@ -31,15 +31,15 @@
 \citation{firstpaper2025}
 \citation{song2021score}
 \providecommand*\caption@xref[2]{\@setref\relax\@undefined{#1}}
-\newlabel{fig:concept}{{1}{2}{\textbf {A physical diffusion model with fast hidden units.} (a)~Pixel oscillators, coupled to their neighbours by springs, interact with a thermal bath at temperature $T$. Hidden Potts units (rounded boxes; the filled dot is the active state) are coupled to all pixels (global unit, purple) or to the pixels of one patch, at a coarse (red) and a fine (yellow) scale. They equilibrate fast and are never controlled directly. (b)~Learning at one noise level. The pixels are clamped to a noised image $\x _t$ and the hidden units settle. Each coupling is updated from quantities at its two ends: the clamp force on its pixel and $S$ sampled states of its hidden unit. No free-running phase is needed. Repeating this over images and noise levels gives the schedule $\bm {\theta }^{*}(t)$. (c)~Generation. Starting from noise, an external controller replays $\bm {\theta }^{*}(\tau -s)$ in reverse time $s$. The bars, in the colours of (a), show when each hidden unit acts: the global unit throughout, the coarse patch units from $s\approx 0.5$, the fine ones from $s\approx 2.8$. A final quench with the bath switched off removes the thermal noise. The images are one generated $32\times 32$ face; the network drawings are schematic. \todo {the frames are from the K64 model with 32 patch states: re-render from the locked model, and add the frame after the quench.}\relax }{figure.caption.1}{}}
+\newlabel{fig:concept}{{1}{2}{\textbf {A physical diffusion model with fast hidden units.} (a)~Pixel oscillators, coupled to their neighbours by springs, interact with a thermal bath at temperature $T$. Hidden Potts units (rounded boxes; the filled dot is the active state) are coupled to all pixels (global unit, purple) or to the pixels of one patch, at a coarse (red) and a fine (yellow) scale. They equilibrate fast and are never controlled directly. (b)~Learning at one noise level. The pixels are clamped to a noised image $\x _t$ and the hidden units settle. Each coupling is updated from quantities at its two ends: the clamp force on its pixel and $S$ sampled states of its hidden unit. No free-running phase is needed. Repeating this over images and noise levels gives the schedule $\bm {\theta }^{*}(t)$. (c)~Generation. Starting from noise, an external controller replays $\bm {\theta }^{*}(\tau -s)$ in reverse time $s$. The bars, in the colours of (a), show when each hidden unit acts: the global unit throughout, the coarse patch units from $s\approx 0.5$, the fine ones from $s\approx 2.8$. A final quench with the bath switched off removes the thermal noise. The images are one generated $32\times 32$ face, the last one after the quench; the network drawings are schematic. \todo {the frames are from the K64 model with 32 patch states: re-render from the locked model.}\relax }{figure.caption.1}{}}
 \newlabel{sec:background}{{2}{2}{}{section.2}{}}
 \newlabel{eq:forward}{{1}{2}{}{equation.2.1}{}}
-\newlabel{eq:reverse}{{2}{2}{}{equation.2.2}{}}
 \citation{hyvarinen2005estimation}
 \citation{firstpaper2025}
 \citation{firstpaper2025}
 \citation{krotov2016dense,demircigil2017model,ramsauer2021hopfield}
 \citation{krotov2021large}
+\newlabel{eq:reverse}{{2}{3}{}{equation.2.2}{}}
 \newlabel{eq:loss}{{3}{3}{}{equation.2.3}{}}
 \newlabel{sec:model}{{3}{3}{}{section.3}{}}
 \newlabel{eq:field}{{4}{3}{}{equation.3.4}{}}
@@ -55,23 +55,23 @@
 \newlabel{sec:learning}{{4}{4}{}{section.4}{}}
 \newlabel{eq:generator}{{9}{4}{}{equation.4.9}{}}
 \newlabel{eq:response}{{10}{4}{}{equation.4.10}{}}
-\newlabel{eq:cm}{{11}{4}{}{equation.4.11}{}}
 \citation{firstpaper2025}
 \citation{hinton2002training,jelincic2025dtm}
 \citation{scellier2017equilibrium}
-\citation{kingma2015adam}
+\newlabel{eq:cm}{{11}{5}{}{equation.4.11}{}}
 \newlabel{eq:rule}{{12}{5}{}{equation.4.12}{}}
 \newlabel{sec:onephase}{{4.3}{5}{}{subsection.4.3}{}}
 \newlabel{eq:cov}{{13}{5}{}{equation.4.13}{}}
 \newlabel{eq:per-read}{{14}{5}{}{equation.4.14}{}}
 \newlabel{sec:sampled}{{4.4}{5}{}{subsection.4.4}{}}
 \newlabel{eq:bias}{{15}{5}{}{equation.4.15}{}}
-\newlabel{eq:jackknife}{{16}{5}{}{equation.4.16}{}}
+\citation{kingma2015adam}
 \citation{lecun1998gradient}
 \citation{xiao2017fashion}
 \citation{liu2015deep}
 \citation{kingma2015adam}
 \citation{heusel2017gans}
+\newlabel{eq:jackknife}{{16}{6}{}{equation.4.16}{}}
 \newlabel{sec:experiments}{{5}{6}{}{section.5}{}}
 \newlabel{sec:setup}{{5.1}{6}{}{subsection.5.1}{}}
 \newlabel{tab:results}{{1}{6}{\textbf {FID with exact hidden averages and with $S$ sampled hidden states per clamped image} (\nSamples {} samples, reverse process and quench; one seed). $K=\KglobalClasses $ for MNIST and Fashion-MNIST, $K=\Kglobal $ for CelebA. Bottom: real test images at the same sample count, the floor of this protocol.\relax }{table.caption.2}{}}
@@ -100,13 +100,13 @@
 \citation{de2026symmetric}
 \citation{gower2026potentialep}
 \citation{gower2026floweqprop}
+\newlabel{fig:samples}{{3}{9}{\textbf {Uncurated samples of the models trained from $S=\Slarge $ sampled hidden states:} MNIST, Fashion-MNIST and CelebA $32\times 32$, the first 100 of \nSamples {} samples each. \todo {provisional: gallery images with their own titles. Redraw without titles, with a column of real images, and add CelebA $64\times 64$.}\relax }{figure.caption.5}{}}
+\newlabel{sec:related}{{7}{9}{}{section.7}{}}
 \citation{welling2004exponential}
 \citation{hinton2002training}
 \citation{liao2022gaussian}
 \citation{hyvarinen2005estimation,hyvarinen2007connections}
 \citation{swersky2011autoencoders,vincent2011connection}
-\newlabel{fig:samples}{{3}{9}{\textbf {Uncurated samples of the models trained from $S=\Slarge $ sampled hidden states:} MNIST, Fashion-MNIST and CelebA $32\times 32$, the first 100 of \nSamples {} samples each. \todo {provisional: gallery images with their own titles. Redraw without titles, with a column of real images, and add CelebA $64\times 64$.}\relax }{figure.caption.5}{}}
-\newlabel{sec:related}{{7}{9}{}{section.7}{}}
 \citation{hoover2023memory,ambrogioni2024search}
 \citation{pham2026emergence}
 \citation{krotov2016dense}

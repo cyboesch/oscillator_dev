@@ -74,77 +74,73 @@
   \centering
   \includegraphics[width=\textwidth]{img/overview.pdf}
 
-  \vspace{0.1cm}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.32\textwidth}\footnotesize
-      \key{a}\; Pixels are oscillators in a thermal bath. Hidden Potts units couple to all
-      pixels or to one patch. They are fast and never controlled.
-    \column{0.32\textwidth}\footnotesize
-      \key{b}\; Learning: clamp the pixels to a noised image, read the hidden units,
-      update each coupling from what is at its two ends.
-    \column{0.32\textwidth}\footnotesize
-      \key{c}\; Generation: replay the learned couplings in reverse time, then switch
-      the bath off.
-  \end{columns}
+  % \vspace{0.1cm}
+  % \begin{columns}[T,onlytextwidth]
+  %   \column{0.32\textwidth}\footnotesize
+  %     \key{a}\; Pixels are oscillators in a thermal bath. Fast hidden Potts units couple to all
+  %     pixels or to one patch.
+  %   \column{0.32\textwidth}\footnotesize
+  %     \key{b}\; Learning: clamp the pixels to a noised image, read the hidden units,
+  %     update each coupling.
+  %   \column{0.32\textwidth}\footnotesize
+  %     \key{c}\; Generation: replay the learned couplings in reverse time, then switch
+  %     the bath off.
+  % \end{columns}
 \end{frame}
 
 % ------------------------------------------------------------------------------
-\begin{frame}{What I would like to show you}
+\begin{frame}{Overview}
   \begin{itemize}\setlength{\itemsep}{9pt}
-    \item \key{Model.} The energy of a dense associative memory at finite temperature, in its form with
-      fast hidden neurons, used as a diffusion model.\\
-      Where such a memory stores the training images, each hidden unit here has a few
-      \emph{trainable templates}, fitted at every noise level.
+    \item \key{Model.}  The \textit{time dependent} energy of a dense associative memory at finite temperature (bipartite graph) + slow visible units.\\
     \item \key{Learning rule.} Local, and evaluated in \emph{one phase} with the pixels
-      clamped to data.\\
-      No free-running phase and no nudged phase: the thermal fluctuations of the hidden
-      units carry the response.
+      (Voltage-) clamped to data:  Measure forces (currents) and hidden statistics\\
+      No free-running phase and no nudged phase.
     \item \key{Results.} Trained from 16 sampled hidden states per unit and image, the
-      model generates digits, garments and faces,\\ 1 to 3 FID above training with exact
+      model generates digits, garments and faces, 1 to 3 FID above training with exact
       hidden averages.
+    
+    \item \key{Generation.} Stochastic (SDE; shown) or deterministic (probability flow ODE).
   \end{itemize}
-  \vspace{0.5cm}
-  {\color{muted}\small Why I am showing it to you: the hidden layer is your softmax memory, your circuit exists
-  for it, and I would value your opinion before we write it up.}
 \end{frame}
 
 % ------------------------------------------------------------------------------
 \begin{frame}{Starting point: diffusion as physical dynamics}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.53\textwidth}
-      \textbf{Noising} = relaxation of uncoupled oscillators at temperature $T$
-      \[
-        \mathrm{d}\x=-\x\,\mathrm{d}t+\sqrt{2T}\,\mathrm{d}W ,\qquad t\in[0,\tau]
-      \]
-      \textbf{Model} = Boltzmann distribution of a physical system at the same $T$
-      \[
-        p_t(\x)\;\approx\;\frac{e^{-F_t(\x)/T}}{Z_t}
-        \quad\Rightarrow\quad \text{score}=-\frac{\nabla F_t}{T}
-      \]
-      \textbf{Generation} = Langevin dynamics while the couplings are driven
-      \[
-        \mathrm{d}\x=\bigl[\x-2\nabla F_{\tau-s}(\x)\bigr]\mathrm{d}s+\sqrt{2T}\,\mathrm{d}W
-      \]
-    \column{0.42\textwidth}
-      \vspace{0.3cm}
-      \begin{itemize}\setlength{\itemsep}{7pt}
-        \item The score is a \emph{force}. The device does not compute it; the pixels feel it.
-        \item One set of couplings per noise level. An external controller replays them.
-        \item Earlier work: $F_t$ = pairwise energy of the pixels only. Local rule, but
-          only digits 0 and 1.
-          \src{B\"osch, Roeder, Serra-Garcia, Adams, arXiv 2506.19136}
-      \end{itemize}
-  \end{columns}
+  \vspace{0.2cm}
+  \textbf{Noising} = relaxation of uncoupled oscillators at temperature $T$
+  \[
+    \mathrm{d}\x=-\x\,\mathrm{d}t+\sqrt{2T}\,\mathrm{d}W ,\qquad t\in[0,\tau]
+  \]
+  \vspace{0.1cm}
+
+  \textbf{Generation} = Langevin dynamics of the pixels while the couplings are driven
+  \[
+    \mathrm{d}\x=\bigl[\x-2\nabla F_{\tau-s}(\x)\bigr]\mathrm{d}s+\sqrt{2T}\,\mathrm{d}W
+  \]
+  \vspace{0.1cm}
+
+  $F_t(\x)$ is the \textbf{free energy} of the pixels after the fast hidden units $h$ are summed out:
+  \[
+    e^{-F_t(\x)/T}=\sum_{h}e^{-E_t(\x,h)/T}
+  \]
 \end{frame}
 
 % ------------------------------------------------------------------------------
 \begin{frame}{The model: pixels plus one layer of fast hidden units}
-  \textbf{Joint energy} (no hidden--hidden coupling; $y_u$ = active state of Potts unit $u$, $\sigma_i=\pm1$):
+  \textbf{Joint energy} ($y^{u}$: one-hot state of Potts unit $u$; $\sigma_i=\pm1$; no hidden--hidden coupling)
+  {\small
   \[
-    E_t(\x,y,\sigma)=E^{\mathrm v}_t(\x)\;-\;\sum_u a^{u}_{y_u}(\x)\;-\;\sum_i\sigma_i(\nu_i+w_ix_i),
-    \qquad
-    a^{u}_{m}(\x)=b^{u}_{m}+\sum_{i\in\mathcal P_u}\bigl(W^{u}_{mi}x_i+Q^{u}_{mi}x_i^{2}\bigr)
+    E_t(\x,y,\sigma)=E^{\mathrm v}_t(\x)-\sum_u\sum_{m=1}^{K_u} y^{u}_{m}\,a^{u}_{m}(\x,t)-\sum_i\sigma_i\bigl(\nu_i(t)+w_i(t)\,x_i\bigr),
   \]
+  \vspace{-0.3cm}
+  \[
+    a^{u}_{m}(\x,t)=b^{u}_{m}(t)+\!\sum_{i\in\mathcal P_u}\!\bigl(W^{u}_{mi}(t)\,x_i+Q^{u}_{mi}(t)\,x_i^{2}\bigr)
+  \]}
+  \vspace{-0.05cm}
+
+  {\footnotesize\color{muted} All couplings depend on the noise level $t$. From here on the $t$ is not written.}
+  \vspace{0.05cm}
+
+
   \textbf{Fast hidden units sum out exactly.} The pixels move in the free energy
   \[
     F_t(\x)=E^{\mathrm v}_t(\x)
@@ -163,7 +159,6 @@
     \column{0.49\textwidth}\small
       \begin{itemize}
         \item $E^{\mathrm v}$: on-site well per pixel, springs to the 8 neighbours
-        \item Every coupling depends on the noise level $t$
         \item The second term is your log-sum-exp energy, at temperature $T$
           \src{Krotov \& Hopfield 2021}
       \end{itemize}
@@ -192,10 +187,7 @@
     \column{0.46\textwidth}
       \vspace{0.2cm}
       \begin{itemize}\setlength{\itemsep}{8pt}
-        \item States are mutually exclusive: the unit is a \emph{mixture} of templates,
-          not a product of features.
-        \item In hardware: a $K$-way winner-take-all with noise, or your softmax stage read
-          stochastically.
+        \item States are mutually exclusive (stochastic winner-take-all).
         \item Given the image, all hidden units are independent. They talk to each other
           only through the pixels they share.
       \end{itemize}
@@ -382,20 +374,19 @@
       \vspace{0.15cm}
       \begin{itemize}\setlength{\itemsep}{7pt}
         \item \textbf{One experiment per image}: pixels held at the noised data point,
-          hidden units equilibrate, everything is read there.
-        \item No free-running phase (Boltzmann learning), no nudged second equilibrium
-          (equilibrium propagation), no small-perturbation limit.
-        \item The response a nudge would measure is in the \emph{fluctuations} of the
-          thermal hidden unit.
+          everything is read there.
+        \item No free-running phase, because it is a different objective: score matching
+          compares forces at the data and has no partition function.
+        \item It does need how the hidden unit responds when the pixels move. A thermal
+          unit shows that in its \emph{fluctuations}, so the clamp is never displaced.
         \item Price: thermal hidden units are required; a $1/S$ bias from $S$ reads,
           removed by a jackknife.
       \end{itemize}
   \end{columns}
 
   \vspace{0.15cm}
-  {\footnotesize\color{muted} Checked against automatic differentiation to rounding error. In the
-  simulations only the hidden states are sampled; clamp forces and sums over pixels are computed
-  exactly.}
+  {\footnotesize\color{muted} Checked against automatic differentiation. In the simulations only the hidden
+  states are sampled; forces and sums are exact.}
 \end{frame}
 
 % ------------------------------------------------------------------------------
@@ -645,7 +636,8 @@
           (the rule reads their fluctuations).
         \item Couplings that change in time during generation.
         \item The quadratic couplings $Q$, and couplings of both signs.
-        \item Local read-out: clamp forces, the active state, one sum per hidden state; then an
+        \item Read-out: the clamp force = the current each clamp supplies (a column read); the
+          active state; one sum per hidden state (a row read). Then an
           update of one row of the array.
         \item Two copies of each hidden unit during generation (the factor 2).
       \end{itemize}
