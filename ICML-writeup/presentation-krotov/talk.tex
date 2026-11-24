@@ -252,10 +252,10 @@
       MNIST, $K=16\to784$: $14.4\to10.0$; faces: $20.2\to19.4$ \\[3pt]
     {\color{coarsecol}Patch} {\color{finecol}Potts units} & local structure; $M^{U}$ joint states, so
       images are composed, not looked up & faces without patch units: 104; with: 22
-      \src{(earlier model)} \\[3pt]
+       \\[3pt]
     Bistable unit per pixel & an on-site double well (ink or background) & kept from the first
       models; not ablated here \\[3pt]
-    Quadratic coupling $Q$ & a stiffness per state and pixel & faces: $34\to22$ \src{(earlier model)} \\[3pt]
+    Quadratic coupling $Q$ & a stiffness per state and pixel & faces: $34\to22$  \\[3pt]
     All hidden units & the content & pixels only: 218 \\
     \bottomrule
   \end{tabular}
@@ -300,10 +300,7 @@
       \begin{itemize}\setlength{\itemsep}{5pt}
         \item Faces: 16 global templates for 163{,}000 images.
         \item Templates are \emph{initialised} from $k$-means prototypes, then learned.
-        \item Are these ``memories'' in your sense? Each noise level has its own set, and a
-          generated image is a composition, not one retrieved template.
-        \item I have not measured memorisation; samples are not copies of their nearest
-          training images.
+        \item Memorization?
       \end{itemize}
   \end{columns}
 \end{frame}
@@ -320,73 +317,73 @@
           {\color{finecol}fine} ones at $s\approx2.8$.
         \item \textbf{Quench}: switch the bath off, $\dot{\x}=-\nabla F_0(\x)$, for a short time.
       \end{enumerate}
+      \vspace{0.15cm}
+      {\color{muted}\hspace{1.6em}+ corrector? (under investigation)}
     \column{0.46\textwidth}
       \vspace{0.1cm}
       \begin{itemize}\setlength{\itemsep}{7pt}
         \item The hidden units are neither controlled nor read during generation.
         \item 100 stored coupling sets, interpolated linearly in time.
-        \item The factor 2: for the hidden units it needs two copies of each unit at
-          temperature $T$, or a gain of 2 on their force.
-        \item Deterministic variant: the probability-flow ODE (results below).
+        \item The factor 2: visible at $T/2$, two copies of hidden, or gain of factor 2 (not an issue in the probability flow ODE).
       \end{itemize}
   \end{columns}
 \end{frame}
 
 % ------------------------------------------------------------------------------
-\begin{frame}{Learning rule, part 1: the gradient is a response to release}
-  Score matching at one noise level, written with forces
-  ($\bm\psi=\nabla F_t$ is the force a clamp must supply to hold the pixels):
+\begin{frame}{Learning rule: score matching with the pixels clamped}
+  \textbf{Objective} at one noise level. The pixels are clamped to a noised image $\x$;
+  $\bm\psi=\nabla F$ is the force the clamp must supply to hold them.
   \[
-    J_t=\Bigl\langle-\frac{\Delta F_t}{T}+\frac{\lVert\nabla F_t\rVert^{2}}{2T^{2}}\Bigr\rangle_{\x\sim p_t}
+    J=\Bigl\langle\frac{\lVert\bm\psi\rVert^{2}}{2T^{2}}-\frac{\Delta F}{T}\Bigr\rangle_{\x\,\sim\,\text{noised data}}
     \qquad\Longrightarrow\qquad
-    \boxed{\;\partial_\theta J_t=-\frac{1}{T^{2}}\bigl\langle\gen\,\partial_\theta F_t\bigr\rangle,
-    \qquad \gen=T\Delta-\bm\psi\!\cdot\!\nabla\;}
+    \frac{\partial J}{\partial\theta}=\Bigl\langle\frac{\bm\psi\cdot\partial_\theta\bm\psi}{T^{2}}-\frac{\partial_\theta\Delta F}{T}\Bigr\rangle
   \]
-  \begin{itemize}\setlength{\itemsep}{6pt}
-    \item $\gen$ is the generator of the pixels' own Langevin dynamics in $F_t$.
-    \item $\partial_\theta F_t$ is the Hebbian term of a Boltzmann machine: $-p_m$ for a bias,
-      $-p_mx_i$ for a coupling.
-    \item So: \emph{learning has converged when the Hebbian terms are stationary under the model's
-      own dynamics started from data.}
-    \item One could measure this by releasing the pixels briefly (contrastive divergence with
-      one short step). That is a difference of two noisy readings. We evaluate
-      $\gen\,\partial_\theta F_t$ at the clamp instead.
-  \end{itemize}
+  \vspace{0.1cm}
+
+  Only the clamp force $\bm\psi$ and the curvature $\Delta F$ at the data point enter.
+  There is no partition function, hence \emph{no free-running phase}.
+
+  \vspace{0.5cm}
+
+  With a hidden Potts unit ($G_m=W_m+2Q_m\!\circ\!\x$ is the force of state $m$ on the pixels):
+  \[
+    \bm\psi=\nabla E^{\mathrm v}-\sum_m p_m G_m,
+    \qquad
+    \Delta F=\Delta E^{\mathrm v}-\frac{1}{T}\underbrace{\sum_m p_m\lVert G_m-\bar G\rVert^{2}}_{\text{variance of the hidden force}}-\;2\sum_m p_m\sum_i Q_{mi}
+  \]
 \end{frame}
 
 % ------------------------------------------------------------------------------
-\begin{frame}{Learning rule, part 2: one phase, read from fluctuations}
+\begin{frame}{The rule for one coupling $W_{mi}$ (hidden state $m$, pixel $i$)}
+  \[
+    \boxed{\;\frac{\partial J}{\partial W_{mi}}
+      =\Bigl\langle\,p_m\Bigl[\frac{x_i\,c_m}{T^{3}}+\frac{2\,\delta G_{mi}-\psi_i}{T^{2}}\Bigr]\Bigr\rangle\;}
+    \qquad
+    c_m=\lVert\delta G_m\rVert^{2}-V-\delta G_m\!\cdot\!\bm\psi+2T(q_m-\bar q)
+  \]
   \begin{columns}[T,onlytextwidth]
     \column{0.50\textwidth}
-      For a Potts unit, with $\delta G_k=G_k-\bar G$ the excess force of state $k$:
-      \[
-        \gen\,p_m=\frac{1}{T}\,\Cov_k\bigl(\delta_{km},\,\phi_k\bigr)
-      \]
-      \[
-        \phi_k=\delta G_k\!\cdot\!\bigl(\delta G_k-\bm\psi\bigr)+2T\textstyle\sum_iQ_{ki}
-      \]
-      \textbf{Per read} of the hidden unit (found in state $k$), only that state's couplers
-      change:
-      \[
-        \Delta W_{ki}\;\propto\;-\frac{x_i(\phi_k-\bar\phi)}{T^{3}}-\frac{2\,\delta G_{ki}-\psi_i}{T^{2}}
-      \]
+      \small
+      \begin{tabular}{@{}ll@{}}
+        $p_m$ & fraction of time the unit is in state $m$\\
+        $x_i$ & clamped value of pixel $i$\\
+        $\psi_i$ & clamp force on pixel $i$\\
+        $\delta G_{mi}$ & force of state $m$ on pixel $i$, minus the\\
+                        & unit's mean force, $G_{mi}-\bar G_i$\\
+        $c_m$ & one number per state: a sum over the\\
+              & unit's pixels\\
+        $V$, $\bar q$ & averages over the unit's states:\\
+              & $V=\sum_k p_k\lVert\delta G_k\rVert^{2}$, \; $q_m=\sum_i Q_{mi}$
+      \end{tabular}
     \column{0.46\textwidth}
-      \vspace{0.15cm}
-      \begin{itemize}\setlength{\itemsep}{7pt}
-        \item \textbf{One experiment per image}: pixels held at the noised data point,
-          everything is read there.
-        \item No free-running phase, because it is a different objective: score matching
-          compares forces at the data and has no partition function.
-        \item It does need how the hidden unit responds when the pixels move. A thermal
-          unit shows that in its \emph{fluctuations}, so the clamp is never displaced.
-        \item Price: thermal hidden units are required; a $1/S$ bias from $S$ reads,
-          removed by a jackknife.
+      \vspace{0.2cm}
+      \begin{itemize}\setlength{\itemsep}{8pt}
+        \item $p_m$ is estimated from $S$ sampled hidden states, for each clamped image $\x_t$.
+        \item All other quantities are then computed digitally. This needs the couplings to be known, but no dynamics simulation.
+        \item $S=16$ is sufficient.
       \end{itemize}
   \end{columns}
 
-  \vspace{0.15cm}
-  {\footnotesize\color{muted} Checked against automatic differentiation. In the simulations only the hidden
-  states are sampled; forces and sums are exact.}
 \end{frame}
 
 % ------------------------------------------------------------------------------

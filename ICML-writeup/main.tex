@@ -426,8 +426,12 @@ hidden unit, each at temperature $T$ and with the trained couplings, give
 $2F_t$ exactly, with the whole system at one temperature and all couplings
 reciprocal. A gain of two on the force that the hidden units exert on the
 pixels gives the same drift without reciprocity
-(Appendix~\ref{app:derivation}). Our simulations use the drift of
-\eqref{eq:reverse} directly.
+(Appendix~\ref{app:derivation}). A third reading needs neither: with time
+rescaled by two, \eqref{eq:reverse} is Langevin dynamics of the pixels in
+$F_{\tau-s}(\x)-\tfrac14\lVert\x\rVert^{2}$ at temperature $T/2$, with the
+hidden units and their couplings as trained, at temperature $T$. The pixels
+are then colder than the hidden units by a factor of two. Our simulations use
+the drift of \eqref{eq:reverse} directly.
 
 \textbf{Quench and corrector.}
 After the reverse process we switch the bath off for a short time,

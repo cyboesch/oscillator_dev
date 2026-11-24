@@ -1,6 +1,6 @@
 # Fdb version 4
-["pdflatex"] 1795558465.24399 "/n/fs/cyrills-part/oscillator_dev/ICML-writeup/presentation-krotov/talk.tex" "talk.pdf" "talk" 1795558468.15214 0
-  "/n/fs/cyrills-part/oscillator_dev/ICML-writeup/presentation-krotov/talk.tex" 1795558464.70334 31302 ee29c0e1276f32ea9813cc01cdd0b745 ""
+["pdflatex"] 1795562495.65854 "/n/fs/cyrills-part/oscillator_dev/ICML-writeup/presentation-krotov/talk.tex" "talk.pdf" "talk" 1795562498.62198 0
+  "/n/fs/cyrills-part/oscillator_dev/ICML-writeup/presentation-krotov/talk.tex" 1795562495.21959 30766 41e47a67f6921db37809bc249a806e26 ""
   "/usr/share/texlive/texmf-dist/fonts/enc/dvips/base/8r.enc" 1685185333 4850 80dc9bab7f31fb78a000ccfed0e27cab ""
   "/usr/share/texlive/texmf-dist/fonts/enc/dvips/cm-super/cm-super-t1.enc" 1685185637 2971 def0b6c1f0b107b3b936def894055589 ""
   "/usr/share/texlive/texmf-dist/fonts/map/pdftex/updmap/pdftex.map" 1685185636 4887201 b2e37e43fd1e9ced8365e67a4993c3f7 ""
@@ -283,10 +283,10 @@
   "img/strip_mnist_K10.png" 1795550293.04906 25588 0d34eae1a2e68874d7202a7d0f9c9e2f ""
   "img/strip_ode10.png" 1795550292.9593 57520 7e466e0526834a82f22330e8c41568ed ""
   "img/strip_springs10.png" 1795550292.76613 70655 b2dfb94141c2bb1f7528d23dd6387908 ""
-  "talk.aux" 1795558467.99773 4052 29fc84e0c5128159dcc982978a02e0b3 "pdflatex"
-  "talk.nav" 1795558468.00003 2411 8c6bbe43bf923ac88764b8cf06f7ccff "pdflatex"
-  "talk.out" 1795558466.32565 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
-  "talk.tex" 1795558464.70334 31302 ee29c0e1276f32ea9813cc01cdd0b745 ""
+  "talk.aux" 1795562498.46021 4052 29fc84e0c5128159dcc982978a02e0b3 "pdflatex"
+  "talk.nav" 1795562498.46297 2411 8c6bbe43bf923ac88764b8cf06f7ccff "pdflatex"
+  "talk.out" 1795562496.8572 0 d41d8cd98f00b204e9800998ecf8427e "pdflatex"
+  "talk.tex" 1795562495.21959 30766 41e47a67f6921db37809bc249a806e26 ""
   (generated)
   "talk.aux"
   "talk.log"

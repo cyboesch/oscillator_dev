@@ -6774,6 +6774,7 @@ two columns)
   chunk of 25: 0.03 564 s then 412 s; 0.1 599 s then 477 s; 0.3 790 s (first chunk, with compilation). 80 chunks:
   expected ends ~19:30 (0.03), ~21:30 (0.1), ~01:00-02:00 on 11-25 (0.3); Inception and gallery right after.
   14:25: 39 / 28 / 18 of 80 chunks done (~345 / 470 / 685 s per chunk); revised ends ~18:30 / ~21:15 / ~02:00-02:30.
+  17:26: 69 / 51 / 34 of 80 chunks; ends ~18:30 / ~21:15 / ~02:15 (11-25). Early Inception on 0.03 and 0.1 (same table as 4311850 minus 0.3): **4313707**, after 4311847 / 4311848, expected ~21:30.
 - **Current understanding of the physical corrector (2026-11-24, before the CelebA-64 result):**
   1. *What the SNR corrector is physically.* Each step x <- x + eps s + sqrt(2 eps) z with s = -grad F / T is an
      Euler step of overdamped Langevin dynamics dx = -grad F(x; theta_k) dt + sqrt(2T) dW at the operating
