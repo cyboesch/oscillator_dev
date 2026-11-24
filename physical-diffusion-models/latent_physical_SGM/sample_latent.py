@@ -1226,15 +1226,22 @@ def sample_corrector(drift, diffusion, grad_ode, x0, keys, knots, t0, M, snr, la
         seg_fn = lambda y, ks, ta, tb: seg_c(y, ks, es_d, ta, tb)       # noqa: E731
         corr_fn = lambda y, zs, tb: corr_c(y, zs, es_d, tb)             # noqa: E731
     if dwell is not None:                         # --corrector dwell:TAU: continuous Langevin at the frozen slice
-        def dwell_solve(y, k, tb):
-            def ldrift(s, x, a):
-                return lam * (grad_ode(tb, x, a) - x)
+        import diffrax                            # noqa: E402  (as solve_SDE, but the knot time goes in as args)
 
-            sol = solve_SDE(ldrift, diffusion, y, k, 0.0, float(dwell), 2, lm.DT0, rtol=lm.RTOL_SDE * SDE_TOL_SCALE,
-                            atol=lm.ATOL_SDE * SDE_TOL_SCALE, brownian_tolerance=lm.BROWNIAN_TOL)
+        def ldrift(s, x, tb):                     # one function object for every knot: compiled once (11-23:
+            return lam * (grad_ode(tb, x, ()) - x)   # a closure over tb recompiled per knot and ran out of memory)
+
+        def dwell_solve(y, k, tb):
+            bm = diffrax.VirtualBrownianTree(0.0, float(dwell), lm.BROWNIAN_TOL, (y.shape[0],), k,
+                                             diffrax.SpaceTimeLevyArea)
+            sol = diffrax.diffeqsolve(
+                diffrax.MultiTerm(diffrax.ODETerm(ldrift), diffrax.ControlTerm(diffusion, bm)), solver=diffrax.SRA1(),
+                t0=0.0, t1=float(dwell), dt0=lm.DT0, y0=y, args=tb, saveat=diffrax.SaveAt(t1=True),
+                max_steps=1000000000, stepsize_controller=diffrax.PIDController(
+                    rtol=lm.RTOL_SDE * SDE_TOL_SCALE, atol=lm.ATOL_SDE * SDE_TOL_SCALE))
             return sol.ys[-1]
 
-        dwell_fn = vmap(dwell_solve, in_axes=(0, 0, None))
+        dwell_fn = jax.jit(vmap(dwell_solve, in_axes=(0, 0, None)))
     if eps_log is not None:                       # --corrector-log: the SNR rule's eps / T, samples untouched
         def eps_over_T(y, z, tb):
             s = -lam * (y - grad_ode(tb, y, ())) / lm.TEMP

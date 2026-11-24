@@ -6678,3 +6678,38 @@ two columns)
   knot (n = 250). (2) A few TAU around that scale on CelebA-32 exact, n = 2000, quench 1, Inception against the SNR
   corrector (19.95) and no corrector (20.20); one TAU for all data sets. (3) That TAU on the lock-in models in place
   of the SNR corrector.
+- **Submitted 2026-11-23 ~18:45 (step 2, before the test result, at the user's request):** CelebA-32 exact, n = 2000,
+  chunk 250, `--corrector dwell:TAU --quench 1` for TAU = 0.003 / 0.01 / 0.03 / 0.1: jobs 4305059 / 4305060 /
+  4305061 / 4305062 (12 h limit, 48 G). Inception 4305063 and gallery 4305064 after them (afterany; logs
+  `slurm-<id>.out` in latent_physical_SGM/), with the SNR corrector (19.95) and no corrector (20.20) as reference rows.
+  TAU grid chosen on the expected scale: two SNR steps ~ 0.1 / (mean curvature of F per pixel), i.e. ~0.1 at
+  t = 5 down to ~0.01 near t = 0; test 4305032 measures the actual value. Scratchpad `eval_dwell.sh`,
+  `dwell_scan_ids.txt`.
+- **2026-11-23 21:40: first attempt FAILED, all out of host memory** (test 4305032 and the four scan jobs 4305059-62,
+  50 GB > 48 G within 5-7 min; Inception 4305063 / gallery 4305064 then ran with the reference rows only; the gallery
+  folder `..._fixed-dwell-0.003-to-0.1_...` has no dwell rows). Cause, in my dwell code: the Langevin drift captured
+  the knot time in a closure, so the solver saw a new function at each of the 98 knots and recompiled every time
+  (JAX "Attempting to hash a tracer" warnings) until memory ran out. Fix: the dwell calls diffrax directly with the
+  knot time as the solver's `args` (same SRA1, tolerances, Brownian tree; one function object, compiled once).
+  `solve_SDE` itself is unchanged.
+- **The regression check of 4305032 was invalid, not the code:** for CelebA the start states and keys are drawn for the
+  whole set (`jr.normal(k, (n, dim))`, `jr.split(k, n)`), so the first 250 of an n = 2000 set are different
+  trajectories from an n = 250 set (max difference 4.06). New check 4306626: old sampler vs new at the same n = 250.
+- **Measured (4305032, n = 250, CelebA-32 exact): the SNR rule is already almost a fixed dwell.** The two SNR steps at
+  a knot are equivalent to a device dwell sum(eps) / T = **0.104** (median over samples and knots), 0.095-0.11
+  (10-90%) at every knot up to forward t ~ 0.4, falling to 0.057 at the last knot; 10.0 time units per trajectory
+  in all (the reverse process itself is 5). So a fixed dwell of 0.1 is the physical counterpart.
+- **Resubmitted 2026-11-23 21:41:** dwell test 4306625 (dwell -> 0 limit, dwell 0.1 finite incl. quench, vs SNR at
+  n = 16), regression 4306626; scan TAU = 0.03 / 0.1 / 0.3 (around the measured 0.1): 4306627 / 4306628 / 4306629
+  (after 4306625 passes; 12 / 12 / 24 h limits); Inception 4306630, gallery 4306631
+  (`galleries/2026-11-23_celeba32_physical-corrector_fixed-dwell-0.03-0.1-0.3_vs-SNR-corrector_vs-none_locked-K16-64-states_exact_noise-start_quench1`).
+  Cost: the dwell adds 10-30 time units of Langevin dynamics per trajectory against 5 for the reverse process.
+  Early Inception on TAU = 0.03 and 0.1 only: 4306650 (after 4306627 / 4306628).
+- **Tests 2026-11-23 21:49 (both "FAILED" on my own thresholds, not on bugs):** dwell test 4306625: the dwell ran
+  without the memory problem (MaxRSS 33 GB; n = 16: dwell 0.1 126 s vs SNR 80 s per chunk); dwell 1e-6 vs no
+  corrector max |diff| 0.053 (median rms 0.004), just above my arbitrary 0.05 cut: noise sqrt(2T tau) = 2e-4 per knot,
+  98 knots, amplified by the reverse process; dwell 0.1 finite, quench finite. n = 16 (weak): pixel std none 0.895,
+  SNR 0.959, dwell 0.1 0.889. Regression 4306626 (old vs new M:SNR, same n = 250, same GPU type L40, different nodes):
+  max |diff| 2.2e-4, not bitwise. Suspected run-to-run GPU nondeterminism amplified by the SDE; check 4306691 (new
+  code twice + old code once, n = 16, same node). The scan does not depend on it: dependency removed 21:52, so
+  4306627-29 start without waiting.
