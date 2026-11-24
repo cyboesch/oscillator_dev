@@ -1,0 +1,5 @@
+4307244 celeba32g_K16_exact_locked-patches-64states_plus-spring-units-4states-from-t2.22_2x-learning-rate_seed1
+4307245 celeba32g_K16_exact_locked-patches-64states_4x-learning-rate_seed1
+4307246 celeba32g_K16_exact_locked-patches-64states_2x-learning-rate_4x-training-steps-in-slices-85-to-99_seed1
+4307247 celeba32g_K16_exact_coarse16x16-every4px-128states-from-t4.49_fine8x8-every2px-128states-from-t2.22_plus-4x4-every2px-64states-from-t1.21_plus-spring-units-4states-from-t2.22_2x-learning-rate_seed1
+4307248 celeba32g_K16_exact_locked-patches-64states_plus-spring-units-8states-from-t2.22_seed1

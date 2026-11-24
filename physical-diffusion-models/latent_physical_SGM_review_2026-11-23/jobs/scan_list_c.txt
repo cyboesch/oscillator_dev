@@ -1,0 +1,2 @@
+sample_latent.py --run celeba32g_K16_exact_coarse16x16-every4px-128states-from-t4.49_fine8x8-every2px-128states-from-t2.22_seed1 --n 2000 --chunk 250 --quench=0.7
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_2x-learning-rate_4x-training-steps-in-slices-85-to-99_seed1 --n 2000 --chunk 250 --quench=0.5,0.7

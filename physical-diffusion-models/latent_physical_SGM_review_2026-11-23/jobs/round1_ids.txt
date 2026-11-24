@@ -1,0 +1,12 @@
+4306827 celeba32g_K16_exact_coarse16x16-every4px-128states-from-t4.49_fine8x8-every2px-128states-from-t2.22_seed1
+4306828 celeba32g_K16_exact_locked-patches-64states_2x-training-steps_seed1
+4306829 celeba32g_K16_exact_locked-patches-64states_plus-second-unit-per-8x8-patch-64states-from-t2.22_seed1
+4306830 celeba32g_K16_exact_locked-patches-64states_plus-second-unit-per-16x16-patch-64states-from-t4.49_seed1
+4306831 celeba32g_K16_exact_locked-patches-64states_trained-on-clean-images_seed1
+4306832 celeba32g_K16_exact_coarse16x16-every4px-64states-from-t4.49_fine8x8-every1px-64states-from-t2.22_seed1
+4306833 celeba32g_K16_exact_coarse16x16-every2px-64states-from-t4.49_fine8x8-every2px-64states-from-t2.22_seed1
+4306834 celeba32g_K16_exact_locked-patches-64states_plus-4x4-every2px-64states-from-t1.21_seed1
+4306835 celeba32g_K16_exact_locked-patches-64states_2x-learning-rate_seed1
+4306836 celeba32g_K16_exact_coarse16x16-every4px-64states-from-t4.49_fine8x8-every2px-128states-from-t2.22_seed1
+4306837 celeba32g_K16_exact_locked-patches-64states_plus-12x12-every4px-64states-from-t4.49_seed1
+4306838 celeba32g_K784_exact_coarse16x16-every4px-128states-from-t4.49_fine8x8-every2px-128states-from-t2.22_seed1

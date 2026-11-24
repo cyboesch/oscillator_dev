@@ -1,0 +1,4 @@
+4306934 celeba32g_K16_exact_locked-patches-64states_plus-spring-units-4states-from-t2.22_seed1
+4306935 celeba32g_K16_exact_locked-patches-64states_4x-training-steps-in-slices-85-to-99_seed1
+4306936 celeba32g_K16_exact_locked-patches-64states_plus-spring-units-2states-from-t2.22_seed1
+4306937 celeba32g_K16_exact_locked-patches-64states_plus-spring-units-4states-from-t3.99_seed1

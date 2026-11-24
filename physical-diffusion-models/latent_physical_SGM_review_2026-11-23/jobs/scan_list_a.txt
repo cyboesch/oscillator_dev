@@ -1,0 +1,6 @@
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_plus-spring-units-4states-from-t2.22_2x-learning-rate_seed1 --n 2000 --chunk 250 --quench=0.2,0.3,0.4,0.5,0.7
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_plus-spring-units-8states-from-t2.22_seed1 --n 2000 --chunk 250 --quench=0.2,0.3,0.4,0.5,0.7
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_4x-training-steps-in-slices-85-to-99_seed1 --n 2000 --chunk 250 --quench=0.4,0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_2x-training-steps_seed1 --n 2000 --chunk 250 --quench=0.4,0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_plus-4x4-every2px-64states-from-t1.21_seed1 --n 2000 --chunk 250 --quench=0.4,0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_4x-learning-rate_seed1 --n 2000 --chunk 250 --quench=0.4,0.5,0.7,1.5,2

@@ -1,0 +1,7 @@
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_plus-second-unit-per-8x8-patch-64states-from-t2.22_seed1 --n 1750 --chunk 250 --quench=0.5,0.7,1,1.5,2
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_2x-learning-rate_seed1 --n 2000 --chunk 250 --quench=0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_plus-second-unit-per-16x16-patch-64states-from-t4.49_seed1 --n 2000 --chunk 250 --quench=0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_plus-12x12-every4px-64states-from-t4.49_seed1 --n 2000 --chunk 250 --quench=0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_coarse16x16-every2px-64states-from-t4.49_fine8x8-every2px-64states-from-t2.22_seed1 --n 2000 --chunk 250 --quench=0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_coarse16x16-every4px-64states-from-t4.49_fine8x8-every2px-128states-from-t2.22_seed1 --n 2000 --chunk 250 --quench=0.5,0.7,1.5,2
+sample_latent.py --run celeba32g_K16_exact_locked-patches-64states_trained-on-clean-images_seed1 --n 2000 --chunk 250 --quench=0.5,0.7,1.5,2

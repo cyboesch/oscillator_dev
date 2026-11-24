@@ -1,0 +1,3 @@
+sample_latent.py --run celeba32g_K16_exact_coarse16x16-every4px-128states-from-t4.49_fine8x8-every2px-128states-from-t2.22_plus-4x4-every2px-64states-from-t1.21_plus-spring-units-4states-from-t2.22_2x-learning-rate_seed1 --n 2000 --chunk 125 --quench=0.4
+sample_latent.py --run celeba32g_K16_exact_coarse16x16-every4px-128states-from-t4.49_fine8x8-every2px-128states-from-t2.22_plus-4x4-every2px-64states-from-t1.21_plus-spring-units-4states-from-t2.22_2x-learning-rate_seed1 --n 2000 --chunk 125 --quench=0.3
+sample_latent.py --run celeba32g_K16_exact_coarse16x16-every4px-128states-from-t4.49_fine8x8-every2px-128states-from-t2.22_plus-4x4-every2px-64states-from-t1.21_plus-spring-units-4states-from-t2.22_2x-learning-rate_seed1 --n 2000 --chunk 125 --quench=0.5
