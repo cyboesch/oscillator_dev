@@ -53,7 +53,7 @@ for SEL in ${SELS}; do for K in ${KS}; do
   [ "${K}" != 0 ] && [[ " ${KS} " == *" 0 "* ]] && PAIRS+=(--pair "K${K}_${SEL}${TAG},K0_${SEL}${TAG}")   # only if K = 0 is in this job
 done; done
 EVAL=evaluate_samples.py; [[ "${P}" =~ ^mnist(14|28)_d[0-9]{3,}$ || "${P}" =~ ^fashion28_c[0-9]{2,}$ ]] && EVAL=evaluate_multiclass.py   # three or more classes; Fashion-MNIST
-if [[ "${P}" =~ ^celeba ]]; then echo "CelebA: no class-based evaluation (use inception_fid.py)"; else
+if [[ "${P}" =~ ^(celeba|cifar) ]]; then echo "CelebA / CIFAR: no class-based evaluation (use inception_fid.py)"; else
   run ${D}/${EVAL} --problem ${P} "${SETS[@]}" "${PAIRS[@]}" || rc=$((rc | 4)); fi
 run ${D}/summarize_training.py "${RUNS[@]}" --ref ${RUNS[0]} || rc=$((rc | 8))
 set +x

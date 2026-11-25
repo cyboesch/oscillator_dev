@@ -64,6 +64,10 @@ def load_mnist(split, grid, dataset="mnist"):
         if grid != g:
             raise SystemExit(f"dataset {dataset} is {g}x{g}, asked for {grid}x{grid}")
         return lm.load_celeba_raw(split, g)
+    if dataset == "cifar":                 # CIFAR-10 grey 32x32 (2026-11-25): 'train' 50,000, 'test' 10,000 (official)
+        if grid != 32:
+            raise SystemExit(f"dataset cifar is 32x32, asked for {grid}x{grid}")
+        return lm.load_cifar_raw(split)
     if dataset == "fashion":
         if grid != 28:
             raise SystemExit("Fashion-MNIST is used at 28x28 only")

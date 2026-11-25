@@ -222,6 +222,13 @@ The user's question: is there a deterministic version of the rule, as the flow O
   thermal unit keeps one advantage: the clamp force of each read contains G of the active state as the device
   realises it (route 2). A deterministic unit shows only the mean `sum_m p_m G_m` in its clamp force, so for it
   the displacement is the only measurement of `G_m . e`.
+
+  What a nominal G costs (argument of 2026-11-25, not tested). With true couplings `G_true = G_nom + dG`: psi, f_m
+  and so e are measured, hence those of the true device; the terms `f_m e_i / T^2` and `2 f_m x_i e_i / T^2` of the
+  W and Q updates contain no G at all. Only the factor `(G_m - Gbar) . e` is off, by `(dG_m - dGbar) . e`. This
+  factor depends on x_t only, so wherever the device can reach `E[e | x_t] = 0` the update still vanishes there:
+  the true error drives the learning and the nominal G only weights it. For a model that cannot reach it, the
+  stationary point shifts by an amount of order dG.
 - **e is not the drawn noise** (the user's question, 2026-11-25). With `x_t = e^(-t) x_0 + sigma_t xi`,
   `sigma_t^2 = T (1 - e^(-2t))`, the target is the drawn noise rescaled, `psi* = T xi / sigma_t`. e is the model's
   clamp force minus that: `e = (T / sigma_t) (xi_predicted - xi)` with `xi_predicted = sigma_t psi / T`. At the

@@ -478,6 +478,11 @@ FASHION_CLASSES = ("T-shirt/top", "Trouser", "Pullover", "Dress", "Coat", "Sanda
 _CELEBA_PROBLEM = re.compile(r"celeba(32|64)g")
 CELEBA_RAW_DIR = os.path.join(PKG, "data", "CelebA")
 CELEBA_GRID = 32          # celeba32g; celeba64g (2026-11-15 evening) is the same crop at 64x64 (4096 visible units)
+# CIFAR-10 (2026-11-25): cifar32g = the 50,000 train images in grey (PIL convert('L')), 32x32, radius 16, one class (no
+# labels used; the true labels are in the files), the same pixel noise and normalisation as CelebA; data from
+# make_cifar_data.py (cifar_gray32_<split>.npz in CIFAR_RAW_DIR, uint8; split 'train' 50,000, 'test' 10,000)
+_CIFAR_PROBLEM = re.compile(r"cifar32g")
+CIFAR_RAW_DIR = os.path.join(PKG, "data", "CIFAR10")
 
 
 def celeba_grid(name):
@@ -490,6 +495,14 @@ def load_celeba_raw(split, grid=CELEBA_GRID):
     """A CelebA grid x grid grey split ('train' 162,770, 'valid' 19,867, 'test' 19,962) from CELEBA_RAW_DIR: images
     (n, grid^2) float32 in [0, 1] (/255) and labels (n,) int64, all 0 (one class)."""
     z = np.load(os.path.join(CELEBA_RAW_DIR, f"celeba_gray{int(grid)}_{split}.npz"))
+    X = z["images"]
+    return X.astype(np.float32) / 255.0, np.zeros(X.shape[0], np.int64)
+
+
+def load_cifar_raw(split):
+    """A CIFAR-10 32x32 grey split ('train' 50,000, 'test' 10,000) from CIFAR_RAW_DIR: images (n, 1024) float32 in
+    [0, 1] (/255) and labels (n,) int64, all 0 (one class, as CelebA; the true labels are not used)."""
+    z = np.load(os.path.join(CIFAR_RAW_DIR, f"cifar_gray32_{split}.npz"))
     X = z["images"]
     return X.astype(np.float32) / 255.0, np.zeros(X.shape[0], np.int64)
 
@@ -508,7 +521,9 @@ def load_fashion_raw(split):
 
 def problem_dataset(name):
     """'fashion' for the Fashion-MNIST problems (fashion28_c...), 'celeba' for celeba32g, 'celeba64' for celeba64g (its
-    own cached Inception statistics), 'mnist' otherwise."""
+    own cached Inception statistics), 'cifar' for cifar32g, 'mnist' otherwise."""
+    if _CIFAR_PROBLEM.fullmatch(name):
+        return "cifar"
     if _CELEBA_PROBLEM.fullmatch(name):
         return "celeba" if celeba_grid(name) == 32 else f"celeba{celeba_grid(name)}"
     return "fashion" if _FASHION_PROBLEM.fullmatch(name) else "mnist"
@@ -523,6 +538,8 @@ def problem_geometry(name):
         return GRID, N_NEIGHBOUR_COUPLINGS
     if _CELEBA_PROBLEM.fullmatch(name):
         return celeba_grid(name), celeba_grid(name) // 2
+    if _CIFAR_PROBLEM.fullmatch(name):
+        return 32, 16
     m = _DIGIT_PROBLEM.fullmatch(name)
     if m is None:
         raise ValueError(f"unknown problem {name!r}")
@@ -531,7 +548,7 @@ def problem_geometry(name):
 
 def problem_classes(name):
     """Number of classes of a problem (2 for mnist28 / mnist14 / gauss2_8)."""
-    if _CELEBA_PROBLEM.fullmatch(name):
+    if _CELEBA_PROBLEM.fullmatch(name) or _CIFAR_PROBLEM.fullmatch(name):
         return 1
     mf = _FASHION_PROBLEM.fullmatch(name)
     if mf is not None:
@@ -546,6 +563,8 @@ def problem_data_path(name):
     the Fashion-MNIST problems."""
     if _CELEBA_PROBLEM.fullmatch(name):
         return os.path.join(CELEBA_RAW_DIR, f"celeba_gray{celeba_grid(name)}_train.npz")
+    if _CIFAR_PROBLEM.fullmatch(name):
+        return os.path.join(CIFAR_RAW_DIR, "cifar_gray32_train.npz")
     mf = _FASHION_PROBLEM.fullmatch(name)
     if mf is not None:
         return os.path.join(DIGITS_DIR, f"fashion_{mf.group(1)}_28.npz")
@@ -601,6 +620,10 @@ def make_problem(name, radius=None, neighbourhood="chebyshev", data_noise=None):
     mf = _FASHION_PROBLEM.fullmatch(name)
     if _CELEBA_PROBLEM.fullmatch(name):     # CelebA 32x32 grey: one class, the digit subsets' noise and normalisation
         raw, labels = load_celeba_raw("train", celeba_grid(name))
+        digits = [0]
+        data, mean, std = _normalise_like_paper(raw, data_noise)
+    elif _CIFAR_PROBLEM.fullmatch(name):     # CIFAR-10 32x32 grey (2026-11-25): one class, CelebA's noise and normalisation
+        raw, labels = load_cifar_raw("train")
         digits = [0]
         data, mean, std = _normalise_like_paper(raw, data_noise)
     elif mf is not None:                     # Fashion-MNIST classes: the digit subsets' noise and normalisation

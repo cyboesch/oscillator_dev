@@ -6,7 +6,7 @@ features, cheap, sensitive to stroke shape); this script gives the number papers
 Network: the original TTUR graph (inception-2015-12-05.tgz, classify_image_graph_def.pb; sha256 below), downloaded once
 to out/latent_physical_SGM/fid/inception/. pytorch-fid and clean-fid reproduce these weights. The graph is imported
 with its input 'ExpandDims:0' remapped to a placeholder of free batch size, and features are read from 'pool_3:0'
-(2048-d). Images go in as TTUR feeds them: grey 28x28 (CelebA: 32x32) replicated to 3 channels, values 0..255 (float), and the graph's own
+(2048-d). Images go in as TTUR feeds them: grey 28x28 (CelebA, CIFAR-10 grey: 32x32) replicated to 3 channels, values 0..255 (float), and the graph's own
 ResizeBilinear to 299x299 and (x - 128) / 128. Generated samples are mapped to pixel units (x * std + mean of the
 problem), clipped to [0, 1] and quantised to 8 bit (as a saved PNG would be); rows that diverged (max |x| > 15 in
 normalised units or not finite, as fid_score.py) are left out and counted.
@@ -170,7 +170,7 @@ def main():
     prob = lm.make_problem(args.problem)
     grid = prob["grid"]
     if grid not in (28, 32, 64):
-        raise SystemExit("Inception FID is set up for 28x28 (MNIST, Fashion) and 32x32 / 64x64 (CelebA) problems")
+        raise SystemExit("Inception FID is set up for 28x28 (MNIST, Fashion) and 32x32 / 64x64 (CelebA, CIFAR grey) problems")
     mean, std = prob["mean"], prob["std"]
     dataset = lm.problem_dataset(args.problem)
     feats, gpus = make_inception()

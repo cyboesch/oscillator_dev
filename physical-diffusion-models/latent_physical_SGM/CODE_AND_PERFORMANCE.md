@@ -6841,3 +6841,21 @@ two columns)
   corrector; none at t = 5 or t = 0 (the quench follows). Unlike Song et al. (one corrector step per predictor step on a
   fixed grid of ~1000). On a device: 98 holds of length TAU per trajectory, adding 98 TAU = 3 / 10 / 29 time units at
   TAU = 0.03 / 0.1 / 0.3 to the 5 of the reverse process.
+
+### Grey CIFAR-10 with the locked recipe (started 2026-11-25)
+
+- **Why:** after the meeting with Dmitry Krotov (2026-11-25) the user and I agreed on grey CIFAR-10 first, with the
+  locked recipe unchanged, before colour and before his hierarchical (HAM-like) coupling between the global unit and
+  the patch units: it separates "unaligned natural images" from "colour". Expectation (mine, a guess): much worse
+  than CelebA, because our global unit stores whole-image templates and every patch unit has one dictionary for its
+  position, which fits aligned faces and centred digits, not CIFAR objects.
+- **Data (job 4317510, 12 min):** official binary archive, md5 = the published one; 50,000 train / 10,000 test, grey
+  by PIL convert('L') (as CelebA); grey mean 0.481, std 0.239. RGB copies kept for the colour step. Preview looked
+  at: `data/CIFAR10/preview_gray32.png`.
+- **Code:** problem `cifar32g` (MODEL_AND_CODE.md, 11-25 row). Check 4317511: all passed, existing problems unchanged.
+- **Runs (exact, seed 1, the locked CelebA-32 command line with PROBLEM `cifar32g`):** K16 pipeline **4317514**
+  (8 h limit, 64 G) and K784 **4317515** (12 h, 80 G), each n = 2000 + quench 1; SNR corrector sets 4317516 / 4317517;
+  Inception FID (vs CIFAR-10 train 50,000, with FID_inf; the cifar reference statistics are computed in this job)
+  **4317518**; gallery 4317519
+  (`galleries/2026-11-25_cifar10-grey_locked-recipe_K16-vs-K784_64-patch-states_exact_SDE-quench1-vs-SNR-corrector-quench1_noise-start`).
+  Expected from the CelebA-32 runs: K16 about 2-3 h, K784 about 4 h after start. Script scratchpad `eval_cifar.sh`.
