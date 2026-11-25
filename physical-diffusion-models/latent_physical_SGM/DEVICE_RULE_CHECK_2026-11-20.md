@@ -214,6 +214,35 @@ The user's question: is there a deterministic version of the rule, as the flow O
 
   The pair is finite and exact only if the fields a_m can be read. With the outputs p_m only, it must be small
   (a nudge in the sense of Equilibrium Propagation).
+
+  The table is for measured `G_m . e` (the user's point, 2026-11-25). If G is taken from the coupler settings, as
+  route 1 of "Where G_m comes from" does for the present rule, deterministic units need no displacement either:
+  read p_m and psi at the one clamp, compute `(G_m - Gbar) . e` digitally (a sum over pixels for every state with
+  non-negligible p_m; at gain 1/T = 50 these are few). Price: these terms are then at the nominal couplings. The
+  thermal unit keeps one advantage: the clamp force of each read contains G of the active state as the device
+  realises it (route 2). A deterministic unit shows only the mean `sum_m p_m G_m` in its clamp force, so for it
+  the displacement is the only measurement of `G_m . e`.
+- **e is not the drawn noise** (the user's question, 2026-11-25). With `x_t = e^(-t) x_0 + sigma_t xi`,
+  `sigma_t^2 = T (1 - e^(-2t))`, the target is the drawn noise rescaled, `psi* = T xi / sigma_t`. e is the model's
+  clamp force minus that: `e = (T / sigma_t) (xi_predicted - xi)` with `xi_predicted = sigma_t psi / T`. At the
+  optimum `psi = E[psi* | x_t]`, so e averages to zero given x_t but is not zero for one draw.
+- **Deterministic hidden units, spelled out** (2026-11-25). One unit = M analogue neurons with
+  `tau_h dh_m/dt = a_m(x) - h_m`, outputs `f = softmax(h / T)`, force on pixel i `sum_m f_m G_mi`. For fast hidden
+  neurons the pixels move in the same F as with a thermal Potts unit. This is the hidden layer of Krotov & Hopfield
+  (2021) with the log-sum-exp Lagrangian, T = 1/beta, plus the Q terms. The exact-statistics runs and the generation
+  code compute exactly this; the thermal Potts unit is the other physical realisation of the same F.
+  - Every coupler carries its state's force scaled by f_m all the time (thermal: one state at a time, at full force).
+  - No barrier, so no conflict between bistable and fast; the settling time of the softmax circuit replaces it.
+  - Generation with the SDE needs 2F: double the couplers' output, or two copies. The flow ODE needs F once.
+  - No fluctuations to read: the covariance read-out of the present rule is not available, the denoising rule is.
+    (The present gradient could still be computed from the read outputs f_m, the clamp force and the nominal G, with
+    arithmetic over all M states and N pixels. Then every G term is a calculation from the coupler settings, not a
+    measurement.)
+  - The thermal Potts unit needs its noise at all times, in training and in generation (the user's question,
+    2026-11-25). The noise is what makes it hop; without it the unit locks into the state of largest a_m, which is
+    the T -> 0 model (max instead of log-sum-exp), a different F. So thermal and deterministic are two builds of
+    the same F, not a training mode and a generation mode. What the present rule adds on top of the noise is the
+    time-resolved read-out: S reads of the active state, each with its clamp force.
 - **Price.** The teacher must know x_0 next to x_t (it prepares the clamp, so it does). The target psi* adds
   variance, most at small t. Equal to the present rule only in expectation over the noise. Not implemented here:
   `latent_model.py` has the implicit loss and CD-1 only.

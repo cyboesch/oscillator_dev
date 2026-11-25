@@ -478,6 +478,15 @@ read, the displacement must be small,
 $p_m(\vx_t+\varepsilon\bm e)-p_m(\vx_t-\varepsilon\bm e)=2\varepsilon\,p_m(\bm G_m-\bar{\bm G})\cdot\bm e/T+O(\varepsilon^3)$:
 a nudge in the sense of Equilibrium Propagation, with its cost in dynamic range.
 
+The table is for the case that $\bm G_m\cdot\bm e$ is measured. If the teacher takes $\bm G_m=\bm W_m+2\bm
+Q_m\circ\vx_t$ from the coupler settings, as the measured rule of Section~\ref{sec:measured} may also do, no
+displacement is needed with deterministic units either: it reads $p_m$ and $\bm\psi$ at the one clamped
+configuration and computes $(\bm G_m-\bar{\bm G})\cdot\bm e$, a sum over the pixels for every state with
+non-negligible $p_m$. The cost is that these terms are then evaluated at the nominal couplings, not at the
+couplings the device has. A thermal unit has a third way, the clamp force of each read, which contains $\bm G$ of
+the active state as the device realises it; a deterministic unit shows only the mean $\sum_mp_m\bm G_m$ in its
+clamp force, so for it the displacement is the only measurement of $\bm G_m\cdot\bm e$.
+
 \paragraph{Price.}
 \begin{itemize}
 \item The teacher must know $\vx_0$ next to $\vx_t$. It does if it prepares the noised clamp itself.

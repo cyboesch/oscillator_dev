@@ -38,15 +38,15 @@
 \contentsline {paragraph}{On a device.}{9}{section*.20}%
 \contentsline {paragraph}{Which combination needs a displacement.}{10}{section*.21}%
 \contentsline {paragraph}{Price.}{10}{section*.22}%
-\contentsline {paragraph}{Status (20 November 2026).}{10}{section*.23}%
-\contentsline {section}{\numberline {7}A clamped per-image label: conditioning and guidance}{10}{section.7}%
+\contentsline {paragraph}{Status (20 November 2026).}{11}{section*.23}%
+\contentsline {section}{\numberline {7}A clamped per-image label: conditioning and guidance}{11}{section.7}%
 \contentsline {paragraph}{The label.}{11}{section*.24}%
 \contentsline {paragraph}{Conditional free energy.}{11}{section*.25}%
 \contentsline {paragraph}{Training.}{11}{section*.26}%
-\contentsline {paragraph}{Generation.}{11}{section*.27}%
+\contentsline {paragraph}{Generation.}{12}{section*.27}%
 \contentsline {paragraph}{Guidance.}{12}{section*.28}%
 \contentsline {paragraph}{Related work.}{12}{section*.29}%
-\contentsline {paragraph}{Status (18 November 2026).}{12}{section*.30}%
+\contentsline {paragraph}{Status (18 November 2026).}{13}{section*.30}%
 \contentsline {section}{\numberline {8}When the idealisation holds}{13}{section.8}%
 \contentsline {section}{\numberline {9}Evaluation}{13}{section.9}%
 \contentsline {section}{\numberline {10}Results so far}{13}{section.10}%

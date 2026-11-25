@@ -1307,4 +1307,34 @@ texts read).
   21.5 against 20.2 without and 20.0 with the standard corrector), ODE gallery of 2026-11-24. One line marked
   preliminary comes from the review folder, not from the notebook: units on the springs, 20.2 -> about 18.4.
   **Not yet in `main.tex` / `results.tex`:** the two CelebA-64 corrector numbers and the fixed-dwell result.
+- 2026-11-25: talk for the Krotov meeting revised with the user (their edits and mine): overview and
+  diffusion slides simplified; the joint energy written with one-hot hidden states and explicit time dependence;
+  the learning rule shown without the generator (objective, then the rule for one coupling W); "learned
+  memories" replaced by "trained templates"; the claim that hidden fluctuations replace the second phase removed
+  (also from `main.tex`: abstract, contribution 2, Section 4.3, conclusion; the absence of a free phase is a
+  property of the score-matching objective). Results in the main flow: the table, two sample slides (MNIST and
+  Fashion; CelebA 32 and 64) and one slide "the quench and the corrector matter" with a new strip
+  (`presentation-krotov/make_sampler_strip.py`); the other result slides are in a backup section. New numbers
+  from the notebook: fixed-dwell corrector at 64x64, 43.15 -> 40.46 / 38.23 / 36.46 for dwell 0.03 / 0.1 / 0.3
+  (standard corrector 38.16). Figure 1 now has the frame after the quench
+  (`Conceptual-fig/make_quench_frame.py`). **Open for the paper:** `main.tex` Section 4.1-4.2 still uses the
+  generator form, which the user is not familiar with; the fixed-dwell result and the CelebA-64 corrector rows
+  for the sampled models are not yet in `main.tex` / `results.tex`.
+- 2026-11-25: **Gower, "PotentialEP", arXiv 2610.14409v2, read** (main text myself, appendices through a
+  summary). A single time-independent potential (Energy Matching, Balcerak et al. 2025) given by a deep network
+  (UNet with a ViT head, 27 block nodes, 50 M weights; a variant without normalisation and attention, 78 M,
+  trained by backpropagation only). A predictive-coding network built from the same layers relaxes so that the
+  visible layer carries the gradient of the potential, up to O(gamma), gamma = 1e-4. Training: flow matching with
+  optimal-transport couplings (phase 1), then a contrastive phase with Langevin negatives (phase 2, negatives from
+  a feedforward twin); gradients by centred equilibrium propagation, one free and two nudged relaxations, with a
+  linearised nudge; EP update against backpropagation: cosine 0.9998. CIFAR-10 FID 3.64 against 3.54 with
+  backpropagation (50,000 samples; single runs); an EP step costs about 16 backpropagation steps. Stated limits:
+  everything simulated; the nodes are architecture blocks, not single weight matrices; feedback must mirror the
+  forward weights; float64 needed at small beta x gamma; noise, bit depth and mismatch untested. It cites our
+  first paper as zeros and ones "on an energy with no hidden units". Other physical generators it lists, trained
+  by backpropagation and not yet in our bibliography: Kuramoto oscillators (Unconventional AI 2026,
+  class-conditional CIFAR-10 FID 8.76), continuous spins (Sun et al. 2026, 9.71). **In `main.tex`:** the related
+  work now describes it and the contrast (deep, deterministic, three relaxations, signals of relative size 1e-4,
+  against one layer, thermal, one phase); the sentence "none reports faces" is replaced by a plain statement that
+  our image quality is far below it.
 - 2026-11-20: independent check of the Potts learning rule (`DEVICE_RULE_CHECK_2026-11-20.md`, job 4287868). Theory and code are correct; the rule for the patch units is written and checked against autodiff in `check_device_rule.py` on a toy model (A6: done in substance, not yet inside `force_matching_local_grad` or on trained slices). The runs simulate the hidden-state sampling only; B6 should also put noise on the per-read sums over pixels, not only on the clamp force.

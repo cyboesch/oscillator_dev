@@ -8,6 +8,8 @@
 \usepackage{helvet}
 \usepackage{amsmath,amssymb,bm}
 \usepackage{booktabs}
+\usepackage{array}
+\newcolumntype{L}[1]{>{\raggedright\arraybackslash}p{#1}}
 \usepackage{tikz}
 \usetikzlibrary{calc}
 
@@ -62,7 +64,7 @@
   \vspace{0.35cm}
   {\large trained templates, fast hidden units,\\ and a local learning rule with a single phase\par}
   \vspace{1.0cm}
-  {Cyrill B\"osch, Ryan Adams\par}
+  {Cyrill B\"osch, Vedansh Mannem, Ryan Adams\par}
   \vspace{0.15cm}
   {\color{muted}\small Discussion with Dmitry Krotov, 25 November 2026\par}
   \vspace{0.9cm}
@@ -101,6 +103,40 @@
     
     \item \key{Generation.} Stochastic (SDE; shown) or deterministic (probability flow ODE).
   \end{itemize}
+\end{frame}
+
+% ------------------------------------------------------------------------------
+\begin{frame}{Generative models for physical hardware:}
+  \scriptsize
+  \setlength{\tabcolsep}{3pt}
+  \renewcommand{\arraystretch}{1.25}
+  \begin{tabular}{@{}L{2.0cm}L{3.3cm}L{3.3cm}L{2.3cm}L{1.35cm}L{1.3cm}@{}}
+    \toprule
+    Work & System & Training & Data & FID & Size \\
+    \midrule
+    Wang \& Achour 2026 & oscillator network with hidden states; simulation &
+      adversarial, backpropagation through the solver & MNIST, Fashion & 27.6, 80.8 & 0.3\,M \\
+    Gower 2026 & deep predictive-coding network, one potential; simulation &
+      equilibrium propagation: a free and two nudged relaxations & CIFAR-10 & 3.6 & 50\,M \\
+    Whitelam 2025 & Langevin units, 512 hidden; simulation &
+      likelihood of reversed noising trajectories, trained digitally & MNIST, 3 digits & none & 0.5\,M \\
+    Oguz et al.\ 2024 & optical: passive phase layers; experiment &
+      backpropagation through a digital twin & MNIST, Fashion (3 classes), Quick Draw; $20\times20$ &
+      207, 228, 131 & 3.6\,M \\
+    Extropic 2025 & chain of sparse Boltzmann machines; simulation &
+      clamped minus free phase, Gibbs sampling & Fashion, binarised & 28 & 50k nodes \\
+    Normal Computing 2026 & digital thermodynamic chip; hardware &
+      trained digitally, inference on chip & MNIST; CIFAR-10 (10 images) & none & -- \\
+    \midrule
+    \textbf{This work} & pixels + one layer of thermal Potts units; simulation &
+      one clamped phase, local, 16 reads & MNIST, Fashion, faces $32^2$, $64^2$ (grey) &
+      11.4, 23.4, 21.2, 46.0 & 2--4\,M per noise level \\
+    \bottomrule
+  \end{tabular}
+
+  \vspace{0.15cm}
+  {\color{muted} FIDs as reported. Sample counts and protocols differ and are mostly not stated, so the
+  numbers are not directly comparable.}
 \end{frame}
 
 % ------------------------------------------------------------------------------
@@ -312,13 +348,12 @@
       \begin{enumerate}\setlength{\itemsep}{7pt}
         \item \textbf{Start} from the thermal state $\mathcal N(0,TI)$.
         \item \textbf{Drive}: replay the couplings $\theta_{\tau-s}$ while the bath supplies the
-          noise. The pixels move in $2F_{\tau-s}-\tfrac12\lVert\x\rVert^{2}$.
+          noise. The pixels move in $2F_{\tau-s}-\tfrac12\lVert\x\rVert^{2}$.\\[2pt]
+          {\color{muted}+ corrector? (under investigation)}
         \item {\color{coarsecol}Coarse} patches switch on at $s\approx0.5$,
           {\color{finecol}fine} ones at $s\approx2.8$.
         \item \textbf{Quench}: switch the bath off, $\dot{\x}=-\nabla F_0(\x)$, for a short time.
       \end{enumerate}
-      \vspace{0.15cm}
-      {\color{muted}\hspace{1.6em}+ corrector? (under investigation)}
     \column{0.46\textwidth}
       \vspace{0.1cm}
       \begin{itemize}\setlength{\itemsep}{7pt}
@@ -388,39 +423,111 @@
 
 % ------------------------------------------------------------------------------
 \begin{frame}{Result 1: training from sampled hidden states}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.60\textwidth}
-      \footnotesize
-      \setlength{\tabcolsep}{4pt}
-      \begin{tabular}{@{}lcccc@{}}
-        \toprule
-        FID & MNIST & Fashion & Faces\,32 & Faces\,64 \\
-        \midrule
-        exact hidden averages & 10.0 & 21.3 & 20.2 & 43.2 \\
-        sampled, $S=64$ reads & 11.4 & 23.4 & 21.2 & 46.0 \\
-        sampled, $S=16$ reads & 11.8 & 22.9 & 21.2 & 46.6 \\
-        \midrule
-        \multicolumn{5}{@{}l}{\emph{with two corrector steps per noise level}} \\
-        exact hidden averages & 9.2 & 21.8 & 20.0 & 38.2 \\
-        sampled, $S=64$ reads & 9.8 & 23.5 & 20.2 & 41.3 \\
-        sampled, $S=16$ reads & 10.2 & 23.5 & 20.5 & 41.1 \\
-        \midrule
-        real test images (floor) & 3.7 & 7.2 & 6.4 & 5.9 \\
-        \bottomrule
-      \end{tabular}
+  \centering
+  \vspace{0.2cm}
+  \setlength{\tabcolsep}{9pt}
+  \begin{tabular}{@{}lcccc@{}}
+    \toprule
+    FID & MNIST & Fashion & Faces\,32 & Faces\,64 \\
+    \midrule
+    exact hidden averages & 10.0 & 21.3 & 20.2 & 43.2 \\
+    sampled, $S=64$ reads & 11.4 & 23.4 & 21.2 & 46.0 \\
+    sampled, $S=16$ reads & 11.8 & 22.9 & 21.2 & 46.6 \\
+    \midrule
+    \multicolumn{5}{@{}l}{\emph{with two corrector steps per noise level}} \\
+    exact hidden averages & 9.2 & 21.8 & 20.0 & 38.2 \\
+    sampled, $S=64$ reads & 9.8 & 23.5 & 20.2 & 41.3 \\
+    sampled, $S=16$ reads & 10.2 & 23.5 & 20.5 & 41.1 \\
+    \midrule
+    real test images (floor) & 3.7 & 7.2 & 6.4 & 5.9 \\
+    \bottomrule
+  \end{tabular}
 
-      \vspace{0.15cm}
-      {\scriptsize\color{muted} Global unit: $K=784$ for MNIST and Fashion-MNIST, $K=16$ for faces (CelebA, grey).}
-    \column{0.37\textwidth}
-      \small
-      \begin{itemize}\setlength{\itemsep}{7pt}
-        \item Sampled training is \textbf{1 to 3 FID above exact}. Close, not equal.
-        \item \textbf{16 reads are as good as 64.} The gap is not set by the number of reads;
-          its origin is not isolated.
-        \item The gap grows with resolution: 1.0 at $32\times32$, about 3 at $64\times64$.
-        \item $64\times64$ is far from the floor.
-      \end{itemize}
+  \vspace{0.3cm}
+  {\footnotesize\color{muted} Global unit: $K=784$ for MNIST and Fashion-MNIST, $K=16$ for faces (CelebA, grey).}
+\end{frame}
+
+% ------------------------------------------------------------------------------
+\begin{frame}{Samples: MNIST and Fashion-MNIST}
+  \centering
+  \begin{columns}[c,onlytextwidth]
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.1cm]{img/grid_mnist.png}\\[2pt]
+      {\footnotesize MNIST, FID 11.4}
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.1cm]{img/grid_fashion.png}\\[2pt]
+      {\footnotesize Fashion-MNIST, FID 23.4}
   \end{columns}
+
+  \vspace{0.1cm}
+  {\footnotesize\color{muted} Uncurated, first 100 samples. Models trained from $S=64$ sampled hidden states.}
+\end{frame}
+
+% ------------------------------------------------------------------------------
+\begin{frame}{Samples: faces at $32\times32$ and $64\times64$}
+  \centering
+  \begin{columns}[c,onlytextwidth]
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.1cm]{img/grid_c32.png}\\[2pt]
+      {\footnotesize CelebA $32\times32$, FID 21.2}
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.1cm]{img/grid_c64.png}\\[2pt]
+      {\footnotesize CelebA $64\times64$, FID 46.0}
+  \end{columns}
+
+  \vspace{0.1cm}
+  {\footnotesize\color{muted} Uncurated, first 100 samples. Models trained from $S=64$ sampled hidden states.}
+\end{frame}
+
+% ------------------------------------------------------------------------------
+\begin{frame}{The quench and the corrector matter}
+  \centering
+  \vspace{-0.25cm}
+  \begin{tikzpicture}
+    \node[inner sep=0,anchor=south west] (img) at (0,0) {\includegraphics[height=7.25cm]{img/strip_c64_sampler8.png}};
+    \foreach \lab [count=\i] in {{real\\FID 5.9},{as sampled\\FID 109.3},{+ quench\\FID 43.2},{+ corrector\\FID 38.2},{+ dwell corrector\\FID 36.5}} {
+      \pgfmathsetmacro{\f}{(\i-0.5)/5}
+      \node[anchor=east,font=\scriptsize,text=ink,align=right] at ($(img.north west)!\f!(img.south west)+(-0.12,0)$) {\lab};
+    }
+  \end{tikzpicture}
+\end{frame}
+
+
+% ------------------------------------------------------------------------------
+\begin{frame}{Limitations}
+  \begin{itemize}\setlength{\itemsep}{7pt}
+    \item \textbf{Idealized simulations:} immediate hidden equilibration; forces and sums exact (no read noise); perfect knowledge of params for update rule 
+    \item \textbf{One seed, 2{,}000 samples.} 
+    \item \textbf{FID has weird sensitivity.} 
+    \item \textbf{Size}: 2 to 4 million couplings per noise level, times 100 noise levels. (Can potentially be reduced.)
+    \item \textbf{Scale.} Ok for physical computing; still small; unclear projection; Further improvements will require even more complicated systems.
+  \end{itemize}
+\end{frame}
+
+% ------------------------------------------------------------------------------
+\begin{frame}{Discussion:}
+  \begin{enumerate}\setlength{\itemsep}{6pt}
+    \item \textbf{Framing.} Is this ``a thermal, time-dependent dense associative memory with trained
+      templates''?
+    \item \textbf{Memorisation and generalisation.} With $K\ll N$ trained templates per noise
+      level, where does this sit in your picture? Image quality maybe not good enough to test memorization...? 
+    \item \textbf{Global memories and classes.} $K$ matters for ten classes and not for faces.
+      Is there a capacity argument behind this?
+    \item \textbf{Hardware.} Do you think this can ever be built?
+    \item \textbf{Probability Flow ODE.}
+    \item \textbf{Thermodynamics.} The work and entropy production of the generation protocol.
+  \end{enumerate}
+  \vspace{0.25cm}
+\end{frame}
+
+% ==============================================================================
+\begin{frame}[plain]
+  \vspace{3cm}
+  {\color{cyan}\LARGE\bfseries Backup\par}
 \end{frame}
 
 % ------------------------------------------------------------------------------
@@ -434,34 +541,6 @@
   \vspace{0.1cm}
   {\footnotesize CelebA $32\times32$ (top) and $64\times64$ (bottom). Each column: the same initial noise
   and noise path. The three models start training from the same initial templates.}
-\end{frame}
-
-% ------------------------------------------------------------------------------
-\begin{frame}{Uncurated samples, models trained from $S=64$ sampled states}
-  \centering
-  \includegraphics[width=0.325\textwidth]{img/grid_mnist.png}\hfill
-  \includegraphics[width=0.325\textwidth]{img/grid_fashion.png}\hfill
-  \includegraphics[width=0.325\textwidth]{img/grid_c32.png}
-
-  \vspace{0.15cm}
-  {\footnotesize MNIST (FID 11.4), Fashion-MNIST (23.4), CelebA $32\times32$ (21.2). First 100 of 2{,}000
-  samples. Defects: some malformed digits; faces have less contrast than the data.}
-\end{frame}
-
-% ------------------------------------------------------------------------------
-\begin{frame}{CelebA $64\times64$}
-  \begin{columns}[c,onlytextwidth]
-    \column{0.46\textwidth}
-      \centering
-      \includegraphics[height=6.3cm]{img/grid_c64.png}
-    \column{0.50\textwidth}
-      \begin{itemize}\setlength{\itemsep}{8pt}
-        \item Same architecture, patch sizes doubled; $K=16$.
-        \item Trained from $S=64$ sampled states: FID 46.0 (exact 43.2; with corrector 41.3 and 38.2).
-        \item Plausible, varied faces; smudgy backgrounds, a few distorted faces, low contrast.
-        \item Sampled training took 19 to 23 hours on one GPU.
-      \end{itemize}
-  \end{columns}
 \end{frame}
 
 % ------------------------------------------------------------------------------
@@ -490,13 +569,7 @@
       \centering
       \strip{strip_mnist_K10.png}{3.2cm}{5}{real,earlier model,$K=16$,$K=128$,$K=784$}
 
-      \vspace{0.2cm}
-      \raggedright\small
-      \textbf{My reading.} Patch units agree only through shared pixels, hence locally.
-      Which of ten classes an image is, is a global decision and needs mutually exclusive
-      templates per class. Aligned faces are one class with a fixed layout.\\[3pt]
-      \emph{The number of global memories follows the number of global modes of the data,
-      not the number of images.}
+
   \end{columns}
 \end{frame}
 
@@ -584,101 +657,35 @@
 \end{frame}
 
 % ------------------------------------------------------------------------------
-\begin{frame}{Time dependence: needed, and the main cost}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.48\textwidth}
-      \textbf{One landscape is not enough.}
-      \begin{itemize}\setlength{\itemsep}{5pt}
-        \item Langevin dynamics under the final energy $F_0$ alone, from noise, up to 5 times the
-          protocol's duration: every chain ends in an almost blank image
-          \src{(earlier MNIST model)}.
-        \item The final landscape has no path from noise to data. The sequence of landscapes
-          provides it.
-        \item Parallel to your finite-temperature result: higher-order memories fail to
-          retrieve far from every memory?
-          \src{Rooke, Krotov, Balasubramanian, Wolpert 2026}
-      \end{itemize}
-    \column{0.48\textwidth}
-      \textbf{100 coupling sets is a lot.}
-      \begin{itemize}\setlength{\itemsep}{5pt}
-        \item Replacing them after training by 5 (global) and 9 (per patch set), interpolated:
-          faces $21.2\to23.7$ at $32\times32$, $46.0\to47.6$ at $64\times64$.
-        \item On MNIST and Fashion-MNIST the same reduction fails (FID 234 and 88).
-        \item A ``physical'' corrector, a fixed dwell at each noise level, does not help
-          (20.3 to 21.5 against 20.2 without).
-        \item Alternative: one energy, trained with a negative phase
-          \src{Liao, Kornblith, Ren, Fleet, Hinton 2022}.
-      \end{itemize}
+
+% ------------------------------------------------------------------------------
+\begin{frame}{Backup: digital corrector against dwell 0.1 (CelebA $64\times64$)}
+  \centering
+  \begin{columns}[c,onlytextwidth]
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.6cm]{img/grid_c64_corrector.png}\\[2pt]
+      {\footnotesize digital corrector, FID 38.2}
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.6cm]{img/grid_c64_dwell0.1.png}\\[2pt]
+      {\footnotesize physical dwell 0.1, FID 38.2}
   \end{columns}
 \end{frame}
 
 % ------------------------------------------------------------------------------
-\begin{frame}{Towards hardware: your circuit, and what this model adds}
-  \begin{columns}[T,onlytextwidth]
-    \column{0.48\textwidth}
-      \textbf{What exists} \src{Bacvanski, You, Hopfield, Krotov, arXiv 2512.15002}
-      \begin{itemize}\setlength{\itemsep}{5pt}
-        \item Visible and hidden neurons joined by one resistive crossbar, used in both
-          directions.
-        \item Softmax over the hidden neurons; hidden neurons about ten times faster.
-        \item The visible neurons then move in the log-sum-exp energy: one of our Potts units in
-          the deterministic limit, with stored weights.
-      \end{itemize}
-      \vspace{0.1cm}
-      {\footnotesize\color{muted} My reading of your paper; please correct me.}
-    \column{0.48\textwidth}
-      \textbf{What this model needs beyond it}
-      \begin{itemize}\setlength{\itemsep}{5pt}
-        \item Noise: a bath for the pixels, and hidden units that \emph{fluctuate}
-          (the rule reads their fluctuations).
-        \item Couplings that change in time during generation.
-        \item The quadratic couplings $Q$, and couplings of both signs.
-        \item Read-out: the clamp force = the current each clamp supplies (a column read); the
-          active state; one sum per hidden state (a row read). Then an
-          update of one row of the array.
-        \item Two copies of each hidden unit during generation (the factor 2).
-      \end{itemize}
+\begin{frame}{Backup: digital corrector against dwell 0.3 (CelebA $64\times64$)}
+  \centering
+  \begin{columns}[c,onlytextwidth]
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.6cm]{img/grid_c64_corrector.png}\\[2pt]
+      {\footnotesize digital corrector, FID 38.2}
+    \column{0.49\textwidth}
+      \centering
+      \includegraphics[height=6.6cm]{img/grid_c64_dwell0.3.png}\\[2pt]
+      {\footnotesize physical dwell 0.3, FID 36.5}
   \end{columns}
-\end{frame}
-
-% ------------------------------------------------------------------------------
-\begin{frame}{What is not shown, and what is weak}
-  \begin{itemize}\setlength{\itemsep}{7pt}
-    \item \textbf{Simulation only}, in the limit of fast hidden units. Only the hidden states are
-      sampled; forces and sums are exact, without read noise. No finite switching rate, no
-      coupling precision.
-    \item \textbf{One seed, 2{,}000 samples.} Seeds and larger sample sets are next.
-    \item \textbf{FID is a coarse instrument here.} On MNIST it follows stroke texture more than
-      digit identity. I do not rank against FIDs from other papers (protocols not stated).
-    \item \textbf{Size}: 2 to 4 million couplings per noise level, times 100 noise levels. Per
-      noise level this is the size of a Gaussian--Bernoulli RBM that generates MNIST.
-    \item \textbf{Grey images}, at most $64\times64$; contrast too low; quality at $64\times64$ far
-      from the floor.
-    \item \textbf{The gap} between sampled and exact training (1 to 3 FID) is not explained.
-    \item Preliminary, not in the tables: bistable units on the springs between pixels improve
-      faces from 20.2 to about 18.4.
-  \end{itemize}
-\end{frame}
-
-% ------------------------------------------------------------------------------
-\begin{frame}{Where I would value your opinion}
-  \begin{enumerate}\setlength{\itemsep}{6pt}
-    \item \textbf{Framing.} Is ``a thermal, time-dependent dense associative memory with trained
-      templates'' the right way to describe this? What would you want to see before calling it
-      that?
-    \item \textbf{Memorisation and generalisation.} With $K\ll N$ trained templates per noise
-      level, where does this sit in your picture? Which diagnostic would you trust?
-    \item \textbf{Global memories and classes.} $K$ matters for ten classes and not for faces.
-      Is there a capacity argument behind this?
-    \item \textbf{One energy or many.} Can the time dependence be reduced, for example to a
-      schedule acting on one set of memories?
-    \item \textbf{Hardware.} What would your circuit need for stochastic hidden units, signed and
-      time-dependent couplings, and $Q$?
-    \item \textbf{Thermodynamics.} The work and entropy production of the generation protocol.
-  \end{enumerate}
-  \vspace{0.25cm}
-  {\color{cyan}\bfseries Plan:} a short paper for ICML (deadline 22 January 2027), on arXiv before.
-  {\bfseries I would be glad to have you as a co-author.}
 \end{frame}
 
 \end{document}

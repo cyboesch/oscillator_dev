@@ -871,9 +871,11 @@ backpropagation through the solver, and \citet{liao2022gaussian} report 17.5
 on MNIST for a restricted Boltzmann machine with Gaussian visible units.
 Neither paper states the number of samples or the reference set, and in our
 protocol the sample count alone moves the FID of real MNIST test images from
-\floorMnist{} at 2{,}000 samples to 11.1 at 1{,}000. Among the models
-proposed for analog hardware \citep{jelincic2025dtm,wangachour2026}, none
-reports faces.
+\floorMnist{} at 2{,}000 samples to 11.1 at 1{,}000. In image quality our
+model is far below the best training without backpropagation:
+\citet{gower2026potentialep} reach an FID of 3.6 on colour CIFAR-10 with a
+deep convolutional potential of 50 million weights, trained in simulation by
+equilibrium propagation (Section~\ref{sec:related}).
 
 % ---------------------------------------------------------------- Figure 3 ---
 \begin{figure*}[t]
@@ -1043,10 +1045,23 @@ a free and a weakly nudged equilibrium of the whole system. This has been
 applied to denoising score matching on synthetic data
 \citep{de2026symmetric}, to energy matching at the scale of CIFAR-10
 \citep{gower2026potentialep} and to flow matching on small digit images
-\citep{gower2026floweqprop}, all in simulation. Our rule has one phase at
-full clamp and is exact there; the response that a nudge measures comes from
-the fluctuations of thermal hidden units; and the score is the force of the
-system itself.
+\citep{gower2026floweqprop}, all in simulation.
+\citet{gower2026potentialep} is the strongest result of this kind: a single,
+time-independent potential defined by a deep convolutional network (27
+blocks, 50 million weights) is turned into a predictive-coding network whose
+relaxation carries the gradient of the potential to the visible layer, and
+its weights are trained with a free and two nudged relaxations per example,
+reaching an FID of 3.6 on CIFAR-10 against 3.5 with backpropagation. The
+price is a system that is deep and deterministic: error signals travel back
+through every block along feedback paths that mirror the forward weights, the
+quantity that is read is a displacement of relative size $10^{-4}$, the
+negative samples of its contrastive phase come from a digital copy of the
+network, and noise, precision and mismatch are untested. Ours is the opposite
+corner: one layer of hidden units, no backward path, one phase at full clamp,
+and statistics that are read at the noise level of the device, at the cost of
+expressivity and of couplings that change in time.
+\todo{checked against the main text of the paper (v2); the appendices only
+through a summary.}
 
 \textbf{Energy-based models with hidden units.}
 Without the springs, our model at one noise level is a restricted Boltzmann

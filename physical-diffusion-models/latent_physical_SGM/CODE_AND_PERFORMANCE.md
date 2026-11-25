@@ -6794,8 +6794,50 @@ two columns)
      discrete SNR jumps do something else that helps (overshoot / per-sample size), which a continuous relaxation
      does not reproduce. Which of (a) and (b) matters is open; a fixed-step two-jump run on CelebA-32 would separate
      them (not run; needs a small code change, not physical either).
-  6. *Open: CelebA-64*, where the SNR corrector gains -5 (43.15 -> 38.16): dwell 0.03 / 0.1 / 0.3 running
-     (4311847-49, Inception 4311850, gallery 4311851; ~02:30 on 11-25).
-  7. *Consequence for reporting, unless CelebA-64 changes it:* the physical sampler is the reverse SDE + quench; the
-     SNR corrector is a digital add-on (the analogue of Song et al.'s final denoising step), reported separately.
-     The corrector exists for the SDE only (no ODE + corrector, see the CelebA-32 lock-in ODE entry).
+  6. *CelebA-64 (result 2026-11-25, below): the physical corrector works there,* and beats the SNR corrector at
+     dwell 0.3 (36.46 vs 38.16). So point 5 and the old point 7 ("corrector = digital add-on") are superseded; see
+     the updated understanding after the CelebA-64 table.
+  7. The corrector exists for the SDE only (no ODE + corrector, see the CelebA-32 lock-in ODE entry).
+- **CelebA-64 result (2026-11-25; sampling 4311847 / 4311848 / 4311849 took 7.9 / 10.4 / 15.2 h; early Inception
+  4313707 at 21:10, full Inception 4311850 at 02:08, gallery 4311851): the physical corrector closes the gap the SNR
+  corrector closes at dwell 0.1, and goes further at 0.3.** Locked exact run, n = 2000, noise start, quench 1:
+
+  | set (CelebA-64 exact) | FID train (sd) | FID test | FID_inf | KID x1e3 | faint % | FID, faint zeroed |
+  |---|---|---|---|---|---|---|
+  | no corrector (plain SDE) | 43.15 (0.48) | 41.95 | 39.93 | 34.26 | 6.3 | 42.49 |
+  | SNR corrector 2x0.16 | 38.16 (0.44) | 36.95 | 35.34 | 26.69 | 8.9 | 38.11 |
+  | dwell 0.03 | 40.46 (0.31) | 39.29 | 37.97 | 30.33 | 7.2 | 40.05 |
+  | dwell 0.1 (= SNR-equivalent on CelebA-32) | 38.23 (0.40) | 37.05 | 35.28 | 26.23 | 8.8 | 38.07 |
+  | **dwell 0.3** | **36.46** (0.34) | **35.36** | **33.80** | **23.72** | 11.0 | 37.13 |
+  | real test images (floor) | 5.91 (0.10) | | 2.30 | | 12.6 | |
+
+  Reading:
+  1. Monotone improvement with the dwell, the opposite of CelebA-32: 43.15 -> 40.46 -> 38.23 -> 36.46 (sd 0.3-0.5).
+     Dwell 0.1 equals the SNR corrector (38.23 vs 38.16, also on FID_inf and KID); dwell 0.3 is -1.7 below it and
+     -6.7 below no corrector; FID_inf 33.80, KID 23.7 (SNR 26.7). The curve has not flattened at 0.3.
+  2. The faint-pixel share rises toward the real 12.6% (6.3 -> 11.0), and zeroing the faint pixels makes dwell 0.3
+     worse (36.46 -> 37.13), unlike the other rows: its faint pixels look like real ones.
+  3. Gallery (looked at): the three dwell rows draw the same face in each column (they share the predictor and dwell
+     keys), and the features get more defined with the dwell (eyes, mouths, hair edges). Many dwell-0.3 faces are
+     still smeared or asymmetric; no new artefacts.
+- **Updated understanding (2026-11-25):** a fixed continuous dwell at the frozen slice, i.e. plain thermal relaxation
+  of the device, is a working physical corrector, and the per-sample SNR step size is not needed. Whether it helps
+  depends on how much error the reverse process leaves at the slices: at 64x64 (no corrector 43 against a floor of
+  6) it removes accumulated error and helps a lot; at 32x32 (20 against 6) there is little to remove and the
+  relaxation only smooths (+0.1 to +1.3). Hypothesis, not tested: the dwell pulls samples toward the slice model's
+  own marginal; that helps when the trajectory has drifted further from it than the model's own error. Open: (a) the
+  best dwell at 64x64 (beyond 0.3); (b) the on-device 64x64 models; (c) the lock-in rule "one setting for every data
+  set" against CelebA-32 preferring no dwell (or 0.03). Not run; for the user to decide.
+- **Visual comparison, CelebA-64 (2026-11-25, the user and I, gallery 4311851):** no clear winner by eye. The user
+  "might find the SNR a tad better but not sure"; something differs between the physical and the digital corrector
+  that is hard to name. My read of the 10x10 panels at equal FID (SNR 38.16 vs dwell 0.1 38.23): the SNR faces look
+  more "drawn" (crisper edges, more local contrast around eyes, mouth, hairline); the dwell faces softer and more
+  washed (smoother gradients, more pale or half-formed faces), possibly more varied in lighting and pose. Hypothesis:
+  the SNR rule (small steps for samples far off, large for nearly-right ones) favours per-sample quality, the fixed
+  dwell favours coverage; FID mixes both. Proposed, not run: precision / recall in Inception features, radial power
+  spectrum and edge / pixel histograms against real, a blind A/B page for the user.
+- **Where the corrector acts (both versions):** only at the 98 interior slice knots, with theta frozen at the trained
+  slice; between knots the adaptive predictor (SRA1, interpolated parameters, many steps per segment) has no
+  corrector; none at t = 5 or t = 0 (the quench follows). Unlike Song et al. (one corrector step per predictor step on a
+  fixed grid of ~1000). On a device: 98 holds of length TAU per trajectory, adding 98 TAU = 3 / 10 / 29 time units at
+  TAU = 0.03 / 0.1 / 0.3 to the 5 of the reverse process.
