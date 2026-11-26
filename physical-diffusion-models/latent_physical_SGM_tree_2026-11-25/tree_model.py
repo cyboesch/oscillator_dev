@@ -129,6 +129,71 @@ def tree_terms(W, Q, b, sets, X, T, with_lap=True):
     return -mbar, lap, pi, qs, pcs
 
 
+def tree_force_direct(W, Q, b, sets, X, T):
+    """grad F of the tree alone, (B, N), from the (P, B, K, S) joint fields directly (logsumexp and softmax of
+    (a_ps + J_p[g, s]) / T): safe for any J. The reference for tree_force."""
+    X2 = X * X
+    Phi = (X @ W.T + b) / T
+    if Q is not None:
+        Phi = Phi + (X2 @ Q.T) / T
+    work = []
+    for Wp, Qp, bp, J in sets:
+        geom = lm.patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
+        Xp = geom.unfold(X)
+        AJ = (_patch_fields(Wp, Qp, bp, Xp)[:, :, None, :] + J[:, None, :, :]) / T          # (P, B, K, S)
+        Phi = Phi + jnp.sum(logsumexp(AJ, axis=-1), axis=0)
+        work.append((geom, Xp, AJ))
+    pi = jax.nn.softmax(Phi, axis=1)
+    g = pi @ W
+    if Q is not None:
+        g = g + 2.0 * X * (pi @ Q)
+    for (Wp, Qp, bp, J), (geom, Xp, AJ) in zip(sets, work):
+        q = jnp.einsum("bk,pbks->pbs", pi, jax.nn.softmax(AJ, axis=-1))
+        gbar = lm._pdot_t(q, Wp)
+        if Qp is not None:
+            gbar = gbar + 2.0 * Xp * lm._pdot_t(q, Qp)
+        g = g + geom.fold(gbar)
+    return -g
+
+
+def tree_force(W, Q, b, sets, X, T):
+    """grad F of the tree alone, (B, N), at about the cost of today's force (for the sampler). The force needs only
+    pi and the patch marginals q = sum_g pi_g p(s | g), not the mean force per global state (which only the Laplacian
+    needs): grad F = -[sum_g pi_g G_g + fold(sum_s q_ps G_ps)]. With p_ps = softmax_s(a_ps / T) (today's posterior) and
+    E_p[g, s] = exp((J_p[g, s] - max_s J_p[g, s]) / T):
+        log Z_p(g) = logsumexp_s(a_ps / T) + max_s J_p[g, s] / T + log (p_p . E_p[g]),
+        q_ps = p_ps sum_g [pi_g / (p_p . E_p[g])] E_p[g, s],
+    two small products per set instead of (P, B, K, S) exponentials. Valid while p_p . E_p[g] does not underflow, i.e.
+    J differences of at most a few hundred T in float64 (tree_force_direct has no such limit)."""
+    X2 = X * X
+    Phi = (X @ W.T + b) / T
+    if Q is not None:
+        Phi = Phi + (X2 @ Q.T) / T
+    work = []
+    tiny = jnp.finfo(X.dtype).tiny
+    for Wp, Qp, bp, J in sets:
+        geom = lm.patch_geometry(X.shape[1], Wp.shape[0], Wp.shape[2])
+        Xp = geom.unfold(X)
+        A = _patch_fields(Wp, Qp, bp, Xp) / T                                              # (P, B, S)
+        p = jax.nn.softmax(A, axis=-1)
+        Jm = jnp.max(J, axis=-1, keepdims=True)                                            # (P, K, 1)
+        E = jnp.exp((J - Jm) / T)                                                          # (P, K, S), in (0, 1]
+        pe = jnp.maximum(lm._pdot(p, E), tiny)                                             # (P, B, K)
+        Phi = Phi + jnp.sum(logsumexp(A, axis=-1)[:, :, None] + Jm[:, None, :, 0] / T + jnp.log(pe), axis=0)
+        work.append((geom, Xp, p, E, pe))
+    pi = jax.nn.softmax(Phi, axis=1)
+    g = pi @ W
+    if Q is not None:
+        g = g + 2.0 * X * (pi @ Q)
+    for (Wp, Qp, bp, J), (geom, Xp, p, E, pe) in zip(sets, work):
+        q = p * lm._pdot_t(pi[None, :, :] / pe, E)                                         # (P, B, S)
+        gbar = lm._pdot_t(q, Wp)
+        if Qp is not None:
+            gbar = gbar + 2.0 * Xp * lm._pdot_t(q, Qp)
+        g = g + geom.fold(gbar)
+    return -g
+
+
 def make_tree_loss_per_sample(vis, T, local=True, compute_dtype=None):
     """The per-sample implicit score-matching loss of lm.make_loss_per_sample (-lap F / T + |grad F|^2 / (2 T^2)) with
     the global Potts unit and the patch units coupled by params[J_KEYS] (tree_terms); exact statistics only. Without
@@ -154,7 +219,7 @@ def make_tree_force(vis, T, local=True):
     """grad F (B, N) of the tree model (visible part + tree + per-pixel units), as lm.make_force."""
     def force(params, X):
         g, _ = vis.grad_lap(params["theta"], X)
-        g = g + tree_terms(params["W"], params.get("Q"), params["b"], tree_sets(params), X, T, with_lap=False)[0]
+        g = g + tree_force(params["W"], params.get("Q"), params["b"], tree_sets(params), X, T)
         if local:
             g = g + lm.local_terms(params["wl"], params["bl"], X, T)[0]
         return g

@@ -87,6 +87,7 @@ def main():
     ap.add_argument("--batch", type=int, default=lm.BATCH_SIZE)
     ap.add_argument("--probe-steps", type=int, default=1500)
     ap.add_argument("--probe-lr-scale", type=float, default=1.0)
+    ap.add_argument("--probe-lr", type=float, default=0.0, help="absolute Adam step for J (0: the slice's learning rate x --probe-lr-scale)")
     ap.add_argument("--val-n", type=int, default=4096)
     ap.add_argument("--seed", type=int, default=0)
     args = ap.parse_args()
@@ -181,7 +182,7 @@ def main():
         m.update(ms_force_locked=tf_b * 1e3, ms_force_tree=tf_t * 1e3)
 
         # 4. J-only probe
-        lr = float(lr_v[k]) * args.probe_lr_scale
+        lr = args.probe_lr if args.probe_lr > 0 else float(lr_v[k]) * args.probe_lr_scale
         opt = optax.adam(lr)
 
         @jax.jit

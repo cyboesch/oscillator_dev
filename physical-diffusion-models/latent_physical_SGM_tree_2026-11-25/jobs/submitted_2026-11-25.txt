@@ -1,1 +1,14 @@
 test 4317600 bench32 4317601 bench64 4317602 cooc32 4317603 cooc64 4317604
+test 4317618 cooc32 4317619 cooc64 4317620 probe lr2e-4 4317621 probe lr6e-4 4317622
+test 4317648; inception 4317653; diagnostic 4317654
+trainer test 4317678
+trainer test 4317680
+FULL TREE c32: train 4317684 sample 4317685 inception 4317686 diagnostic 4317687
+trainer test 4317692
+TREE 4x late steps: train 4317700 sample 4317701 inception 4317702; convergence reports: after tree 4317703, after 4x 4317704
+replaced: inception 4317706 (with the review's locked 4x baseline), convergence report 4317707
+1. J on top, CelebA-64: train 4318124 sample 4318125 inception 4318126 diagnostic 4318127
+2. J on top, CelebA-32 seed 2: train 4318128 sample 4318129; 4x-late-steps model: train 4318130 sample 4318131; inception 4318132
+3. J on top + correctors, CelebA-32: SNR 4318133 dwell0.1 4318134 inception 4318135
+4. J on top, grey CIFAR K16: train 4318136 sample 4318137 inception 4318138
+5. FULL TREE CelebA-64: train 4318139 (5-day limit; about 3.5 days expected)

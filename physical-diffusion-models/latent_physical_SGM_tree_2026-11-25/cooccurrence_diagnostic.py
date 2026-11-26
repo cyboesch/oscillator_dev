@@ -112,6 +112,12 @@ def mi_plugin(E, n):
     return np.sum(term, axis=(-1, -2))
 
 
+def unseen_mass(E, n, R, thresh=0.5):
+    """Per unit: the share of a set's posterior mass in cells that the reference images (R) never occupy (soft count
+    below `thresh` image): state combinations that real images do not show."""
+    return np.sum(np.where(R < thresh, E, 0.0), axis=(-1, -2)) / n
+
+
 def kl(p, q, eps=1e-9):
     p, q = p / p.sum(-1, keepdims=True), q / q.sum(-1, keepdims=True)
     return np.sum(np.where(p > 0, p * (np.log(p + eps) - np.log(q + eps)), 0.0), axis=-1)
@@ -216,7 +222,17 @@ def main():
                 line += f"  {c:14.4f} / {p:8.4f} / {pct:6.1f}%" + " " * 9
                 mm[lab] = {"cross": c, "plugin": p, "pct_of_real_cross": pct}
             report(line)
+            ub = np.array([np.mean(unseen_mass(b[tk], n_gen, R[tk])) for b in B])
+            line = f"  {'   share in combinations unseen in real train (%)':58s} {'':5s} {100 * ub.mean():9.2f} +- {100 * ub.std():6.2f} {'':17s}  "
+            mm["real_unseen_pct"] = [float(100 * ub.mean()), float(100 * ub.std())]
+            for lab in G:
+                u = float(100 * np.mean(unseen_mass(G[lab][tk], nG[lab], R[tk])))
+                line += f"  {u:14.2f} %" + " " * 37
+                mm[lab]["unseen_pct"] = u
+            report(line)
     report()
+    report("'Share in combinations unseen in real train': the part of a set's (state, state) pairs that none of the "
+           "reference images shows; for real held-out images it is the novelty expected at this sample size.")
     report("Reading: 'cross gain' of the real blocks = the real data's mutual information between the two states (how much "
            "one tells about the other). A generated set at 100% follows the real images' rule as closely as held-out real "
            "images do; clearly below 100% = the model's samples coordinate these states less than real images (or "

@@ -99,6 +99,15 @@ def main():
               f"B. ({label}) posteriors normalised; effective global states {float(jnp.mean(jnp.exp(-jnp.sum(pi * jnp.log(pi + 1e-300), 1)))):.2f}")
         g2 = tm.tree_terms(p["W"], p.get("Q"), p["b"], sets, X, T, with_lap=False)[0]
         check(bool(jnp.all(g2 == g)), f"B. ({label}) with_lap=False gives the same gradient")
+        g3 = tm.tree_force(p["W"], p.get("Q"), p["b"], sets, X, T)
+        e3 = float(jnp.max(jnp.abs(g3 - g_ad)) / jnp.max(jnp.abs(g_ad)))
+        check(e3 < 1e-10, f"B. ({label}) tree_force (the cheap force for the sampler) against autodiff, rel. err {e3:.1e}")
+        g4 = tm.tree_force_direct(p["W"], p.get("Q"), p["b"], sets, X, T)
+        e4 = float(jnp.max(jnp.abs(g4 - g_ad)) / jnp.max(jnp.abs(g_ad)))
+        pbig = [(a, b_, c, 40.0 * d) for a, b_, c, d in sets]                 # J of rms 40 T: sharp, still no underflow
+        e5 = float(jnp.max(jnp.abs(tm.tree_force(p["W"], p.get("Q"), p["b"], pbig, X, T)
+                                   - tm.tree_force_direct(p["W"], p.get("Q"), p["b"], pbig, X, T))))
+        check(e4 < 1e-10 and e5 < 1e-9, f"B. ({label}) tree_force_direct against autodiff {e4:.1e}; tree_force = direct at J of rms 40 T (max diff {e5:.1e})")
 
     # C. J = 0 = today's model
     grid, K = 8, 3
